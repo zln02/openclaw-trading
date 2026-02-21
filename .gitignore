@@ -1,0 +1,13 @@
+.env
+openclaw.json
+*.key
+*token*.json
+logs/
+*.log
+__pycache__/
+*.pyc
+.venv/
+node_modules/
+brain/
+memory/
+*.tmp

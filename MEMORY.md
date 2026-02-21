@@ -1,0 +1,1 @@
+JINYOUNG Park가 데이터 보안 검사 요청에 대해 Doctor를 실행할 수 없음을 기록.
