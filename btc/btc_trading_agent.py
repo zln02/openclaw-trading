@@ -42,6 +42,10 @@ RISK = {
 # ── 텔레그램 ──────────────────────────────────────
 def send_telegram(msg: str):
     if not TG_TOKEN or not TG_CHAT:
+        if not TG_TOKEN:
+            print("⚠️ TELEGRAM_BOT_TOKEN 없음 — 텔레그램 미발송", file=sys.stderr)
+        else:
+            print("⚠️ TELEGRAM_CHAT_ID 없음 — .openclaw/.env 에 TELEGRAM_CHAT_ID=채팅ID 추가 후 cron 재실행", file=sys.stderr)
         return
     try:
         requests.post(
@@ -428,9 +432,45 @@ def run_trading_cycle():
     save_log(indicators, signal, result)
     return result
 
+def build_hourly_summary() -> str:
+    """매시 요약 텍스트 생성 (가격·포지션·오늘 손익·F&G·1시간봉 추세)."""
+    try:
+        df = get_market_data()
+        ind = calculate_indicators(df)
+        price = int(ind["price"])
+        rsi = ind["rsi"]
+        fg = get_fear_greed()
+        htf = get_hourly_trend()
+        pos = get_open_position()
+
+        today = datetime.now().date().isoformat()
+        try:
+            res = supabase.table("btc_position").select("pnl").eq("status", "CLOSED").gte("exit_time", today).execute()
+            today_pnl = sum(float(r["pnl"] or 0) for r in (res.data or []))
+        except Exception:
+            today_pnl = 0
+
+        pos_line = "포지션 없음"
+        if pos:
+            entry = int(float(pos["entry_price"]))
+            pos_line = f"포지션 있음 @ {entry:,}원"
+
+        msg = (
+            f"⏰ <b>BTC 매시 요약</b> {datetime.now().strftime('%m/%d %H:%M')}\n"
+            f"💰 가격: {price:,}원 | RSI: {rsi}\n"
+            f"📊 {pos_line}\n"
+            f"📈 1시간봉: {htf['trend']} | F&G: {fg['label']}({fg['value']})\n"
+            f"📉 오늘 손익: {today_pnl:+,.0f}원"
+        )
+        return msg
+    except Exception as e:
+        return f"⏰ BTC 매시 요약 생성 실패: {e}"
+
 def send_hourly_report():
-    """매시 정각 리포트 (cron report 호출용). 현재는 매매 사이클 실행."""
-    run_trading_cycle()
+    """매시 정각 요약 리포트 — 텔레그램으로 발송 (cron 'report' 호출용)."""
+    msg = build_hourly_summary()
+    send_telegram(msg)
+    print(f"[매시 요약 발송] {(msg[:80] + '...') if len(msg) > 80 else msg}")
 
 
 if __name__ == "__main__":
