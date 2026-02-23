@@ -7,10 +7,37 @@ BTC 자동매매 에이전트 — 최종 완성본
 
 import os, json, sys, requests
 from datetime import datetime
+from pathlib import Path
 import pyupbit
 from openai import OpenAI
 from supabase import create_client
 from btc_news_collector import get_news_summary
+
+# ── 실행 시 .env / openclaw.json 로드 (cron·쉘에서 바로 실행해도 동작) ──
+_OPENCLAW_ROOT = Path(__file__).resolve().parents[2]  # .openclaw
+if _OPENCLAW_ROOT.joinpath("openclaw.json").exists():
+    try:
+        with open(_OPENCLAW_ROOT / "openclaw.json", encoding="utf-8") as f:
+            data = json.load(f)
+        for k, v in (data.get("env") or {}).items():
+            if k != "shellEnv" and isinstance(v, str):
+                os.environ.setdefault(k, v)
+    except Exception:
+        pass
+for _env_path in [_OPENCLAW_ROOT / ".env", _OPENCLAW_ROOT / "workspace" / ".env"]:
+    if not _env_path.exists():
+        continue
+    try:
+        with open(_env_path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, _, v = line.partition("=")
+                    k, v = k.strip(), v.strip().strip("'\"").replace("\\n", "\n")
+                    if k:
+                        os.environ.setdefault(k, v)
+    except Exception as e:
+        print(f"[WARN] .env 로드 실패 {_env_path}: {e}", file=sys.stderr)
 
 # ── 환경변수 ──────────────────────────────────────
 UPBIT_ACCESS  = os.environ.get("UPBIT_ACCESS_KEY", "")
@@ -153,6 +180,29 @@ def get_hourly_trend() -> dict:
     except Exception as e:
         print(f"1시간봉 조회 실패: {e}")
         return {"trend": "UNKNOWN", "ema20": 0, "ema50": 0, "rsi_1h": 50}
+
+def get_kimchi_premium():
+    try:
+        import requests as req
+        binance = req.get(
+            "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT",
+            timeout=3
+        ).json()
+        binance_price = float(binance["price"])
+        usdt = req.get(
+            "https://api.upbit.com/v1/ticker?markets=KRW-USDT",
+            timeout=3
+        ).json()
+        usd_krw = float(usdt[0]["trade_price"])
+        binance_krw = binance_price * usd_krw
+        upbit_price = pyupbit.get_current_price("KRW-BTC")
+        if upbit_price is None:
+            return None
+        premium = (float(upbit_price) - binance_krw) / binance_krw * 100
+        return round(premium, 2)
+    except Exception as e:
+        print(f"[ERROR] 김치 프리미엄: {e}")
+        return None
 
 # ── 포지션 관리 ───────────────────────────────────
 def get_open_position():
@@ -423,8 +473,43 @@ def run_trading_cycle():
     print(f"1시간봉 추세: {htf['trend']}")
     print(f"거래량: {volume['label']} (평균比 {volume['ratio']}배)")
     print(f"포지션: {'있음 @ {:,}원'.format(int(pos['entry_price'])) if pos else '없음 (대기 중)'}")
+    kimchi = get_kimchi_premium()
+    print(f"김치 프리미엄: {kimchi:+.2f}%" if kimchi is not None else "김치 프리미엄: 조회 실패")
 
     signal = analyze_with_ai(indicators, news, fg, htf, volume)
+
+    # 공포 극복: F&G 10 이하 + RSI 25 이하
+    fg_value, rsi = fg["value"], indicators["rsi"]
+    if fg_value <= 10 and rsi <= 25:
+        print("🚨 극도 공포 + 과매도 감지 → 신뢰도 강제 상향")
+        if signal["action"] == "BUY":
+            signal["confidence"] = max(signal["confidence"], 80)
+        elif signal["action"] == "HOLD":
+            signal["action"] = "BUY"
+            signal["confidence"] = 75
+            signal["reason"] = signal.get("reason", "") + " [공포극복 전략 발동]"
+
+    # 변동성 폭발: 거래량 평균의 3배 이상
+    volume_ratio = volume["ratio"]
+    if volume_ratio >= 3.0:
+        print(f"💥 거래량 폭발 감지 ({volume_ratio:.1f}배) → 공격적 진입")
+        if signal["action"] == "BUY":
+            signal["confidence"] = max(signal["confidence"], 75)
+        elif signal["action"] == "HOLD" and indicators["macd"] > 0 and rsi < 60:
+            signal["action"] = "BUY"
+            signal["confidence"] = 70
+            signal["reason"] = signal.get("reason", "") + " [변동성 폭발 전략 발동]"
+
+    # 김치 프리미엄 활용
+    if kimchi is not None:
+        print(f"🇰🇷 김치 프리미엄: {kimchi:+.2f}%")
+        if kimchi <= -2.0 and signal["action"] == "HOLD" and rsi < 50:
+            signal["action"] = "BUY"
+            signal["confidence"] = max(signal.get("confidence", 0), 70)
+            signal["reason"] = signal.get("reason", "") + f" [김치 저평가 {kimchi:+.2f}%]"
+        elif kimchi >= 5.0 and signal["action"] == "HOLD":
+            signal["reason"] = signal.get("reason", "") + f" [김치 과열 {kimchi:+.2f}% 주의]"
+
     result = execute_trade(signal, indicators, fg, volume)
 
     print(f"신호: {signal['action']} (신뢰도: {signal['confidence']}%) → {result['result']}")
