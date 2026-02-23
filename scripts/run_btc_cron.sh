@@ -20,4 +20,5 @@ if not os.environ.get('TELEGRAM_BOT_TOKEN'):
 " 2>/dev/null)
 # export DRY_RUN=1   # 실거래 시 주석 처리 유지
 cd "$WORKSPACE"
+echo "[CRON] $(date -Iseconds) USER=$(whoami) ARGS=$@ TG=$([ -n "$TELEGRAM_BOT_TOKEN" ] && echo SET || echo MISSING)" >> /home/wlsdud5035/.openclaw/logs/btc_trading.log
 exec /usr/bin/python3 btc/btc_trading_agent.py "$@"

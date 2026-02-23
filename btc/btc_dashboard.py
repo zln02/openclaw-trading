@@ -4,14 +4,86 @@ BTC 자동매매 대시보드 — 업비트 스타일 프로 버전
 포트: 8080
 """
 
-import os, json, subprocess
+import os, json, subprocess, requests, time
 from datetime import datetime, timedelta
 from pathlib import Path
-from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
+from urllib.parse import quote
+from fastapi import FastAPI, Query
+from fastapi.responses import HTMLResponse, JSONResponse
 import uvicorn
 from supabase import create_client
 import psutil
+
+# Upbit API 60초 캐시 (KRW 잔고, upbit_ok)
+_upbit_cache = {"time": 0, "krw": None, "ok": False}
+
+# Cryptopanic 뉴스 5분 캐시 (429 한도 회피)
+_news_cache = {"data": [], "ts": 0}
+NEWS_CACHE_TTL = 300
+
+# 1시간봉 추세 5분 캐시
+_trend_cache = {"value": "SIDEWAYS", "time": 0}
+
+
+def _refresh_upbit_cache():
+    global _upbit_cache
+    if time.time() - _upbit_cache["time"] <= 60:
+        return
+    _upbit_cache["time"] = time.time()
+    _upbit_cache["krw"] = None
+    _upbit_cache["ok"] = False
+    try:
+        upbit_key = os.environ.get("UPBIT_ACCESS_KEY", "")
+        upbit_secret = os.environ.get("UPBIT_SECRET_KEY", "")
+        if upbit_key and upbit_secret:
+            import pyupbit
+            upbit = pyupbit.Upbit(upbit_key, upbit_secret)
+            bal = upbit.get_balance("KRW")
+            _upbit_cache["krw"] = float(bal) if bal is not None else None
+            _upbit_cache["ok"] = True
+    except Exception as e:
+        print(f"[ERROR] {e}")
+
+
+def _get_hourly_trend():
+    """1시간봉 추세 (btc_trading_agent 로직 동일). 실패 시 SIDEWAYS."""
+    global _trend_cache
+    if time.time() - _trend_cache["time"] < 300:
+        return _trend_cache["value"]
+    try:
+        import pyupbit
+        df = pyupbit.get_ohlcv("KRW-BTC", interval="minute60", count=50)
+        if df is None or df.empty:
+            result = "SIDEWAYS"
+            _trend_cache["value"] = result
+            _trend_cache["time"] = time.time()
+            return result
+        from ta.trend import EMAIndicator
+        from ta.momentum import RSIIndicator
+        close = df["close"]
+        ema20 = EMAIndicator(close, window=20).ema_indicator().iloc[-1]
+        ema50 = EMAIndicator(close, window=50).ema_indicator().iloc[-1]
+        price = close.iloc[-1]
+        if ema20 > ema50 and price > ema20:
+            result = "UPTREND"
+            _trend_cache["value"] = result
+            _trend_cache["time"] = time.time()
+            return result
+        if ema20 < ema50 and price < ema20:
+            result = "DOWNTREND"
+            _trend_cache["value"] = result
+            _trend_cache["time"] = time.time()
+            return result
+        result = "SIDEWAYS"
+        _trend_cache["value"] = result
+        _trend_cache["time"] = time.time()
+        return result
+    except Exception as e:
+        print(f"[ERROR] {e}")
+        result = "SIDEWAYS"
+        _trend_cache["value"] = result
+        _trend_cache["time"] = time.time()
+        return result
 
 # sudo 등으로 실행 시 env가 비어있을 수 있음 → openclaw.json에서 로드
 _OPENCLAW_JSON = Path(__file__).resolve().parents[2] / "openclaw.json"
@@ -25,6 +97,27 @@ if not os.environ.get("SUPABASE_URL") and _OPENCLAW_JSON.exists():
                 os.environ.setdefault(k, v)
     except Exception:
         pass
+
+# .openclaw/.env 또는 workspace/.env 로드 (CRYPTOPANIC_API_KEY, TELEGRAM_CHAT_ID 등)
+def _load_dotenv():
+    base = Path(__file__).resolve().parents[2]  # .openclaw
+    for env_path in [base / ".env", base / "workspace" / ".env"]:
+        if not env_path.exists():
+            continue
+        try:
+            with open(env_path, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, _, v = line.partition("=")
+                        k = k.strip()
+                        v = v.strip().strip("'\"").replace("\\n", "\n")
+                        if k:
+                            os.environ.setdefault(k, v)
+        except Exception as e:
+            print(f"[ERROR] .env load {env_path}: {e}")
+
+_load_dotenv()
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_KEY = os.environ.get("SUPABASE_SECRET_KEY", "")
@@ -45,7 +138,6 @@ HTML = """<!DOCTYPE html>
 <title>OpenClaw Trading</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 <style>
   :root {
     --bg:       #0a0e17;
@@ -578,6 +670,11 @@ HTML = """<!DOCTYPE html>
   .trend-chip.up   { background: rgba(0,230,118,0.1); color: var(--green); }
   .trend-chip.down { background: rgba(255,61,87,0.1); color: var(--red); }
   .trend-chip.side { background: rgba(255,214,0,0.1); color: var(--yellow); }
+  .log-line.log-buy   { color: var(--green); }
+  .log-line.log-sell  { color: var(--red); }
+  .log-line.log-error { color: var(--red); }
+  .log-line.log-cycle { color: var(--accent); }
+  .log-line.log-hold  { color: var(--muted); }
 </style>
 </head>
 <body>
@@ -678,16 +775,16 @@ HTML = """<!DOCTYPE html>
     <div class="content-grid">
       <div class="card">
         <div class="card-header">
-          <span class="card-title">가격 추이</span>
+          <span class="card-title">BTC/KRW 차트</span>
           <div style="display:flex;gap:8px;">
-            <button class="refresh-btn" onclick="setChartMode('price')" id="btn-price">가격</button>
-            <button class="refresh-btn" onclick="setChartMode('pnl')" id="btn-pnl">손익</button>
-            <button class="refresh-btn" onclick="setChartMode('rsi')" id="btn-rsi">RSI</button>
+            <button class="refresh-btn" onclick="setCandleInterval('minute1')" id="btn-1m">1분</button>
+            <button class="refresh-btn" onclick="setCandleInterval('minute5')" id="btn-5m">5분</button>
+            <button class="refresh-btn" onclick="setCandleInterval('minute15')" id="btn-15m">15분</button>
+            <button class="refresh-btn" onclick="setCandleInterval('minute60')" id="btn-1h">1시간</button>
           </div>
         </div>
-        <div class="card-body">
-          <canvas id="mainChart"></canvas>
-        </div>
+        <div id="candle-chart" style="width:100%;height:300px"></div>
+        <div id="volume-chart" style="width:100%;height:80px"></div>
       </div>
 
       <div class="card">
@@ -740,12 +837,23 @@ HTML = """<!DOCTYPE html>
       </div>
     </div>
 
+    <!-- 뉴스 카드 섹션 -->
+    <div class="card" style="margin-bottom:20px">
+      <div class="card-header">
+        <span class="card-title">📰 BTC 실시간 뉴스</span>
+        <span class="stat-sub" id="news-time"></span>
+      </div>
+      <div style="padding:16px;display:grid;grid-template-columns:repeat(2,1fr);gap:12px" id="news-grid">
+        <div class="loading"><div class="spinner"></div> 뉴스 로딩 중...</div>
+      </div>
+    </div>
+
     <!-- 실시간 로그 + 시스템/Brain -->
-    <div class="content-grid" style="margin-top:20px">
+    <div style="display:grid;grid-template-columns:1fr 400px;gap:16px;margin-top:20px">
       <div class="card">
         <div class="card-header"><span class="card-title">실시간 로그 (btc_trading)</span></div>
-        <div class="card-body" style="max-height:220px;overflow:auto">
-          <pre id="log-viewer" style="margin:0;font-size:11px;color:var(--muted);white-space:pre-wrap;word-break:break-all"></pre>
+        <div class="card-body" style="height:400px;overflow:auto">
+          <pre id="log-viewer" style="margin:0;font-size:13px;line-height:1.8;color:var(--text);white-space:pre-wrap;word-break:break-all"></pre>
         </div>
       </div>
       <div class="card">
@@ -761,10 +869,127 @@ HTML = """<!DOCTYPE html>
 </div>
 
 <script>
-let chartInstance = null;
 let allTrades = [];
 let tradeLimit = 10;
 let tradeSignalFilter = '';
+
+// lightweight-charts 로드
+const lwScript = document.createElement('script');
+lwScript.src = 'https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js';
+document.head.appendChild(lwScript);
+
+let candleChart = null;
+let candleSeries = null;
+let volumeSeries = null;
+let currentInterval = 'minute5';
+
+lwScript.onload = function() {
+  const container = document.getElementById('candle-chart');
+  candleChart = LightweightCharts.createChart(container, {
+    width: container.clientWidth,
+    height: 300,
+    layout: {
+      background: { color: '#0f1422' },
+      textColor: '#4a5068',
+    },
+    grid: {
+      vertLines: { color: '#1e2537' },
+      horzLines: { color: '#1e2537' },
+    },
+    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+    rightPriceScale: {
+      borderColor: '#1e2537',
+      formatter: (price) => (price/1000000).toFixed(2) + "M",
+    },
+    timeScale: {
+      borderColor: '#1e2537',
+      timeVisible: true,
+      secondsVisible: false,
+    },
+  });
+
+  candleSeries = candleChart.addCandlestickSeries({
+    upColor:   '#00e676',
+    downColor: '#ff3d57',
+    borderUpColor:   '#00e676',
+    borderDownColor: '#ff3d57',
+    wickUpColor:   '#00e676',
+    wickDownColor: '#ff3d57',
+  });
+
+  const volContainer = document.getElementById('volume-chart');
+  const volChart = LightweightCharts.createChart(volContainer, {
+    width: volContainer.clientWidth,
+    height: 80,
+    layout: { background: { color: '#0f1422' }, textColor: '#4a5068' },
+    grid: {
+      vertLines: { color: '#1e2537' },
+      horzLines: { color: '#1e2537' },
+    },
+    timeScale: { borderColor: '#1e2537', timeVisible: true },
+    rightPriceScale: { borderColor: '#1e2537' },
+  });
+
+  volumeSeries = volChart.addHistogramSeries({
+    color: "rgba(0,212,255,0.3)",
+    priceFormat: { type: "volume" },
+    priceScaleId: "",
+  });
+
+  setCandleInterval('minute5');
+  setInterval(loadCandles, 10000);
+};
+
+async function loadCandles() {
+  try {
+    const res = await fetch('/api/candles?interval=' + currentInterval);
+    const data = await res.json();
+    if (!data.length) return;
+    if (!candleSeries || !volumeSeries) return;
+
+    candleSeries.setData(data.map(d => ({
+      time:  d.time,
+      open:  d.open,
+      high:  d.high,
+      low:   d.low,
+      close: d.close,
+    })));
+
+    const volUp = "rgba(0,230,118,0.4)", volDn = "rgba(255,61,87,0.4)";
+    volumeSeries.setData(data.map(d => ({
+      time:  d.time,
+      value: d.volume,
+      color: d.close >= d.open ? volUp : volDn,
+    })));
+
+    if (allTrades && allTrades.length) {
+      const markers = allTrades
+        .filter(t => t.action === 'BUY' || t.action === 'SELL')
+        .map(t => ({
+          time:     Math.floor(new Date(t.timestamp).getTime() / 1000),
+          position: t.action === 'BUY' ? 'belowBar' : 'aboveBar',
+          color:    t.action === 'BUY' ? '#00e676' : '#ff3d57',
+          shape:    t.action === 'BUY' ? 'arrowUp' : 'arrowDown',
+          text:     t.action,
+        }));
+      candleSeries.setMarkers(markers);
+    }
+  } catch(e) {
+    console.error('candles error', e);
+  }
+}
+
+async function setCandleInterval(interval) {
+  currentInterval = interval;
+  ['1m','5m','15m','1h'].forEach(m => {
+    const btn = document.getElementById('btn-' + m);
+    if (btn) btn.style.color = '';
+  });
+  const map = {'minute1':'1m','minute5':'5m','minute15':'15m','minute60':'1h'};
+  const btn = document.getElementById('btn-' + map[interval]);
+  if (btn) btn.style.color = 'var(--accent)';
+  await loadCandles();
+}
 
 function setTradeLimit(n) {
   tradeLimit = n;
@@ -802,9 +1027,7 @@ function renderTradesTable() {
     const time = t.timestamp ? t.timestamp.substring(0,16).replace('T',' ') : '--';
     return '<tr><td style="color:var(--muted)">' + time + '</td><td><span class="action-pill ' + action.toLowerCase() + '">' + action + '</span></td><td>' + fmt(t.price) + '원</td><td class="' + (t.rsi >= 70 ? 'negative' : t.rsi <= 30 ? 'positive' : '') + '">' + (t.rsi ? t.rsi.toFixed(1) : '--') + '</td><td class="' + (t.macd > 0 ? 'positive' : 'negative') + '">' + (t.macd ? fmt(Math.round(t.macd)) : '--') + '</td><td class="neutral">' + (t.confidence ? t.confidence + '%' : '--') + '</td><td style="color:var(--muted);font-size:11px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + (t.reason || '—') + '</td><td>' + pnlStr + '</td></tr>';
   }).join('');
-  updateChart();
 }
-let chartMode = 'price';
 
 (function(){
   var h = document.getElementById('hero-price');
@@ -830,7 +1053,22 @@ async function loadLogs() {
     const res = await fetch('/api/logs');
     const d = await res.json();
     const el = document.getElementById('log-viewer');
-    el.textContent = (d.lines || []).join("\\n") || "(비어 있음)";
+    const escape = (s) => String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+    const cls = (line) => {
+      if (/매수|BUY/.test(line)) return "log-line log-buy";
+      if (/매도|SELL|손절/.test(line)) return "log-line log-sell";
+      if (/ERROR|실패/.test(line)) return "log-line log-error";
+      if (/매매 사이클 시작/.test(line)) return "log-line log-cycle";
+      if (/HOLD/.test(line)) return "log-line log-hold";
+      return "log-line";
+    };
+    const nl = String.fromCharCode(10);
+    const colored = (d.lines || []).map(line => {
+      const c = cls(line), t = escape(line);
+      return "<span class=" + JSON.stringify(c) + ">" + t + "</span>";
+    }).join(nl);
+    el.innerHTML = colored || "(비어 있음)";
+    el.scrollTop = el.scrollHeight;
   } catch(e) { document.getElementById('log-viewer').textContent = '로딩 실패'; }
 }
 async function loadSystem() {
@@ -850,6 +1088,48 @@ async function loadBrain() {
     const br = (t) => (t || '').replace(/\\n/g, '<br>');
     document.getElementById('brain-box').innerHTML = '<strong>요약</strong><br>' + br(d.summary) + '<br><br><strong>할일</strong><br>' + br(d.todos) + '<br><br><strong>기억</strong><br>' + br(d.memory);
   } catch(e) { document.getElementById('brain-box').textContent = '로딩 실패'; }
+}
+
+async function loadNews() {
+  var timeEl = document.getElementById('news-time');
+  var grid = document.getElementById('news-grid');
+  if (!timeEl || !grid) return;
+  var done = function(html) {
+    if (grid) grid.innerHTML = html;
+    if (timeEl) timeEl.textContent = '업데이트: ' + new Date().toLocaleTimeString('ko-KR');
+  };
+  try {
+    var ctrl = new AbortController();
+    var t = setTimeout(function() { ctrl.abort(); }, 6000);
+    var res = await fetch('/api/news', { signal: ctrl.signal });
+    clearTimeout(t);
+    var news = [];
+    try { news = await res.json(); } catch(_) {}
+    if (!Array.isArray(news)) news = [];
+    var rateLimited = res.headers && res.headers.get('X-News-Rate-Limited') === 'true';
+    if (!news.length) {
+      var msg = rateLimited ? '요청 한도 초과 (5분마다 자동 재시도)' : '뉴스 없음';
+      done('<div style="color:var(--muted);padding:20px">' + msg + '</div>');
+      return;
+    }
+    var html = news.slice(0, 8).map(function(n) {
+      if (!n) return '';
+      var url = (n.url || '').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+      var title = (n.title || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      var source = (n.source || '').replace(/</g, '&lt;');
+      var time = (n.time || '').replace(/</g, '&lt;');
+      return '<a href="' + url + '" target="_blank" style="text-decoration:none;">' +
+        '<div style="background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:14px;cursor:pointer;transition:border-color 0.2s;height:100%"' +
+        ' onmouseover="this.style.borderColor=&quot;var(--accent)&quot;"' +
+        ' onmouseout="this.style.borderColor=&quot;var(--border)&quot;">' +
+        '<div style="font-size:11px;color:var(--accent);font-family:var(--mono);margin-bottom:6px">' + source + ' · ' + time + '</div>' +
+        '<div style="font-size:13px;color:var(--text);line-height:1.5;font-weight:500">' + title + '</div>' +
+        '</div></a>';
+    }).join('');
+    done(html);
+  } catch(e) {
+    done('<div style="color:var(--muted);padding:20px">뉴스 없음</div>');
+  }
 }
 
 async function loadStats() {
@@ -874,8 +1154,9 @@ async function loadStats() {
     const trend = d.trend || 'SIDEWAYS';
     const trendEl = document.getElementById('hero-trend');
     const trendMap = { UPTREND: ['up','↑ UPTREND'], DOWNTREND: ['down','↓ DOWNTREND'], SIDEWAYS: ['side','→ SIDEWAYS'] };
-    const [tc, tl] = trendMap[trend] || ['side','→ SIDEWAYS'];
-    trendEl.innerHTML = `<span class="trend-chip ${tc}">${tl}</span>`;
+    const tc = (trendMap[trend] || ['side','→ SIDEWAYS'])[0];
+    const tl = (trendMap[trend] || ['side','→ SIDEWAYS'])[1];
+    trendEl.innerHTML = '<span class="trend-chip ' + tc + '">' + tl + '</span>';
 
     // 스탯
     const pnl = d.total_pnl || 0;
@@ -885,9 +1166,9 @@ async function loadStats() {
 
     document.getElementById('stat-pnl-pct').textContent = fmtPct(d.total_pnl_pct);
     document.getElementById('stat-winrate').textContent = (d.winrate || 0).toFixed(1) + '%';
-    document.getElementById('stat-wl').textContent = `${d.wins || 0}승 ${d.losses || 0}패`;
+    document.getElementById('stat-wl').textContent = (d.wins || 0) + '승 ' + (d.losses || 0) + '패';
     document.getElementById('stat-total').textContent = (d.total_trades || 0) + '회';
-    document.getElementById('stat-buysell').textContent = `매수 ${d.buys||0} / 매도 ${d.sells||0}`;
+    document.getElementById('stat-buysell').textContent = '매수 ' + (d.buys||0) + ' / 매도 ' + (d.sells||0);
     document.getElementById('stat-confidence').textContent = (d.avg_confidence || 0).toFixed(1) + '%';
     const krwEl = document.getElementById('stat-krw');
     if (krwEl) krwEl.textContent = (d.krw_balance != null && d.krw_balance !== '') ? (fmt(Math.round(d.krw_balance)) + '원') : '--';
@@ -918,33 +1199,15 @@ async function loadStats() {
       const pos = d.position;
       const change = ((d.last_price - pos.entry_price) / pos.entry_price * 100).toFixed(2);
       const isPos = change >= 0;
-      document.getElementById('position-body').innerHTML = `
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
-          <div>
-            <div class="stat-label">진입가</div>
-            <div style="font-family:var(--mono);font-size:18px;margin-top:4px">${fmt(pos.entry_price)}원</div>
-          </div>
-          <div>
-            <div class="stat-label">현재가</div>
-            <div style="font-family:var(--mono);font-size:18px;margin-top:4px;color:var(--accent)">${fmt(d.last_price)}원</div>
-          </div>
-          <div>
-            <div class="stat-label">수익률</div>
-            <div style="font-family:var(--mono);font-size:24px;margin-top:4px" class="${isPos?'positive':'negative'}">${isPos?'+':''}${change}%</div>
-          </div>
-          <div>
-            <div class="stat-label">투입금액</div>
-            <div style="font-family:var(--mono);font-size:18px;margin-top:4px">${fmt(pos.entry_krw)}원</div>
-          </div>
-          <div>
-            <div class="stat-label">손절가</div>
-            <div style="font-family:var(--mono);font-size:14px;margin-top:4px;color:var(--red)">${fmt(Math.round(pos.entry_price*0.98))}원</div>
-          </div>
-          <div>
-            <div class="stat-label">익절가</div>
-            <div style="font-family:var(--mono);font-size:14px;margin-top:4px;color:var(--green)">${fmt(Math.round(pos.entry_price*1.04))}원</div>
-          </div>
-        </div>`;
+      const posHtml = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">' +
+        '<div><div class="stat-label">진입가</div><div style="font-family:var(--mono);font-size:18px;margin-top:4px">' + fmt(pos.entry_price) + '원</div></div>' +
+        '<div><div class="stat-label">현재가</div><div style="font-family:var(--mono);font-size:18px;margin-top:4px;color:var(--accent)">' + fmt(d.last_price) + '원</div></div>' +
+        '<div><div class="stat-label">수익률</div><div style="font-family:var(--mono);font-size:24px;margin-top:4px" class="' + (isPos ? 'positive' : 'negative') + '">' + (isPos ? '+' : '') + change + '%</div></div>' +
+        '<div><div class="stat-label">투입금액</div><div style="font-family:var(--mono);font-size:18px;margin-top:4px">' + fmt(pos.entry_krw) + '원</div></div>' +
+        '<div><div class="stat-label">손절가</div><div style="font-family:var(--mono);font-size:14px;margin-top:4px;color:var(--red)">' + fmt(Math.round(pos.entry_price*0.98)) + '원</div></div>' +
+        '<div><div class="stat-label">익절가</div><div style="font-family:var(--mono);font-size:14px;margin-top:4px;color:var(--green)">' + fmt(Math.round(pos.entry_price*1.04)) + '원</div></div>' +
+        '</div>';
+      document.getElementById('position-body').innerHTML = posHtml;
       document.getElementById('pos-status').innerHTML = '<span class="action-pill buy">OPEN</span>';
     } else {
       document.getElementById('position-body').innerHTML = '<div class="position-empty">포지션 없음<br><span style="font-size:11px">다음 BUY 신호 대기 중</span></div>';
@@ -992,90 +1255,11 @@ async function loadTrades() {
   }
 }
 
-function setChartMode(mode) {
-  chartMode = mode;
-  ['price','pnl','rsi'].forEach(m => {
-    document.getElementById('btn-' + m).style.color = m === mode ? 'var(--accent)' : '';
-    document.getElementById('btn-' + m).style.borderColor = m === mode ? 'var(--accent)' : '';
-  });
-  updateChart();
-}
-
-function updateChart() {
-  if (!allTrades.length) return;
-
-  const sorted = [...allTrades].reverse();
-  const labels = sorted.map(t => t.timestamp ? t.timestamp.substring(11,16) : '');
-
-  let data, label, color;
-  if (chartMode === 'price') {
-    data = sorted.map(t => t.price);
-    label = 'BTC 가격 (원)';
-    color = 'rgba(0,212,255,1)';
-  } else if (chartMode === 'pnl') {
-    let cum = 0;
-    data = sorted.map(t => { cum += (t.pnl || 0); return cum; });
-    label = '누적 손익 (원)';
-    color = 'rgba(0,230,118,1)';
-  } else {
-    data = sorted.map(t => t.rsi || null);
-    label = 'RSI';
-    color = 'rgba(255,214,0,1)';
-  }
-
-  const ctx = document.getElementById('mainChart').getContext('2d');
-  if (chartInstance) chartInstance.destroy();
-
-  chartInstance = new Chart(ctx, {
-    type: 'line',
-    data: {
-      labels,
-      datasets: [{
-        label,
-        data,
-        borderColor: color,
-        backgroundColor: color.replace('1)', '0.05)'),
-        borderWidth: 2,
-        pointRadius: 0,
-        pointHoverRadius: 4,
-        fill: true,
-        tension: 0.3,
-      }]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: true,
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          backgroundColor: '#141928',
-          borderColor: '#1e2537',
-          borderWidth: 1,
-          titleColor: '#4a5068',
-          bodyColor: '#e8eaf0',
-          bodyFont: { family: 'DM Mono' },
-        }
-      },
-      scales: {
-        x: {
-          grid: { color: 'rgba(30,37,55,0.8)', drawBorder: false },
-          ticks: { color: '#4a5068', font: { family: 'DM Mono', size: 10 }, maxTicksLimit: 8 }
-        },
-        y: {
-          grid: { color: 'rgba(30,37,55,0.8)', drawBorder: false },
-          ticks: { color: '#4a5068', font: { family: 'DM Mono', size: 10 },
-            callback: v => chartMode === 'price' ? (v/1000000).toFixed(1) + 'M' : chartMode === 'pnl' ? v.toLocaleString() : v.toFixed(1)
-          }
-        }
-      }
-    }
-  });
-}
-
 // 초기 로드 + 30초 자동 갱신
 loadAll();
+setTimeout(loadNews, 1500);
 setInterval(loadAll, 30000);
-setChartMode('price');
+setInterval(loadNews, 30000);
 
 // 5초 후에도 상단 가격이 '--'면 연결 안내 (거래 테이블은 항상 표시)
 setTimeout(function(){
@@ -1089,6 +1273,11 @@ setTimeout(function(){
 </body>
 </html>"""
 
+@app.get("/favicon.ico")
+async def favicon():
+    from fastapi.responses import Response
+    return Response(status_code=204)
+
 @app.get("/", response_class=HTMLResponse)
 async def index():
     return HTML
@@ -1097,7 +1286,7 @@ def _empty_stats():
     return {
         "last_price": 0, "last_signal": "HOLD", "last_time": "", "last_rsi": 50.0, "last_macd": 0.0,
         "total_pnl": 0, "total_pnl_pct": 0, "winrate": 0, "wins": 0, "losses": 0, "total_trades": 0,
-        "buys": 0, "sells": 0, "avg_confidence": 0, "today_trades": 0, "today_pnl": 0, "position": None, "trend": "UPTREND",
+        "buys": 0, "sells": 0, "avg_confidence": 0, "today_trades": 0, "today_pnl": 0,         "position": None, "trend": "SIDEWAYS",
         "krw_balance": None,
     }
 
@@ -1131,23 +1320,17 @@ async def get_stats():
 
         last = trades[0] if trades else {}
 
-        # KRW 잔고: Upbit API (env에 키 있으면 조회)
-        krw_balance = None
-        try:
-            upbit_key = os.environ.get("UPBIT_ACCESS_KEY", "")
-            upbit_secret = os.environ.get("UPBIT_SECRET_KEY", "")
-            if upbit_key and upbit_secret:
-                import pyupbit
-                upbit = pyupbit.Upbit(upbit_key, upbit_secret)
-                bal = upbit.get_balance("KRW")
-                krw_balance = float(bal) if bal is not None else None
-        except Exception:
-            pass
+        # KRW 잔고: 60초 캐시
+        _refresh_upbit_cache()
+        krw_balance = _upbit_cache["krw"]
+
+        # 1시간봉 추세 (실패 시 SIDEWAYS)
+        trend = _get_hourly_trend()
 
         return {
             "last_price":     last.get("price", 0),
             "last_signal":    last.get("action", "HOLD"),
-            "last_time":      last.get("timestamp", ""),
+            "last_time":      (last.get("timestamp", "") or "")[:19],
             "last_rsi":       float(last.get("rsi") or 50),
             "last_macd":      float(last.get("macd") or 0),
             "total_pnl":      total_pnl,
@@ -1162,10 +1345,11 @@ async def get_stats():
             "today_trades":   today_trades,
             "today_pnl":      today_pnl,
             "position":       position,
-            "trend":          "UPTREND",
+            "trend":          trend,
             "krw_balance":    krw_balance,
         }
     except Exception as e:
+        print(f"[ERROR] {e}")
         return {"error": str(e)}
 
 @app.get("/api/trades")
@@ -1174,8 +1358,13 @@ async def get_trades():
         return []
     try:
         res = supabase.table("btc_trades").select("*").order("timestamp", desc=True).limit(100).execute()
-        return res.data or []
+        data = res.data or []
+        for t in data:
+            if t.get("timestamp"):
+                t["timestamp"] = t["timestamp"][:19]
+        return data
     except Exception as e:
+        print(f"[ERROR] {e}")
         return []
 
 
@@ -1189,7 +1378,56 @@ async def get_logs():
         lines = result.stdout.strip().split("\n") if result.stdout else []
         return {"lines": lines}
     except Exception as e:
+        print(f"[ERROR] {e}")
         return {"lines": [f"로그 읽기 실패: {e}"]}
+
+
+@app.get("/api/news")
+async def get_news():
+    try:
+        import xml.etree.ElementTree as ET
+        res = requests.get(
+            "https://www.coindesk.com/arc/outboundfeeds/rss/",
+            timeout=5,
+            headers={"User-Agent": "Mozilla/5.0"}
+        )
+        root = ET.fromstring(res.content)
+        items = root.findall(".//item")[:8]
+        return [
+            {
+                "title":  item.findtext("title", ""),
+                "url":    item.findtext("link", ""),
+                "time":   (item.findtext("pubDate", "") or "")[:16],
+                "source": "CoinDesk",
+            }
+            for item in items
+        ]
+    except Exception as e:
+        print(f"[ERROR] news: {e}")
+        return []
+
+
+@app.get("/api/candles")
+async def get_candles(interval: str = Query("minute5")):
+    try:
+        import pyupbit
+        df = pyupbit.get_ohlcv("KRW-BTC", interval=interval, count=100)
+        if df is None or df.empty:
+            return []
+        result = []
+        for ts, row in df.iterrows():
+            result.append({
+                "time":  int(ts.timestamp()),
+                "open":  float(row["open"]),
+                "high":  float(row["high"]),
+                "low":   float(row["low"]),
+                "close": float(row["close"]),
+                "volume": float(row["volume"]),
+            })
+        return result
+    except Exception as e:
+        print(f"[ERROR] candles: {e}")
+        return []
 
 
 @app.get("/api/system")
@@ -1200,22 +1438,14 @@ async def get_system():
         disk = psutil.disk_usage("/")
 
         result = subprocess.run(
-            ["grep", "매매 사이클 시작", LOG_PATH],
+            ["bash", "-c", f"tail -200 {LOG_PATH} | grep '매매 사이클 시작'"],
             capture_output=True, text=True
         )
         lines = result.stdout.strip().split("\n") if result.stdout else []
         last_cron = lines[-1][:50] if lines else "기록 없음"
 
-        try:
-            import pyupbit
-            upbit = pyupbit.Upbit(
-                os.environ.get("UPBIT_ACCESS_KEY", ""),
-                os.environ.get("UPBIT_SECRET_KEY", "")
-            )
-            upbit.get_balance("KRW")
-            upbit_ok = True
-        except Exception:
-            upbit_ok = False
+        _refresh_upbit_cache()
+        upbit_ok = _upbit_cache["ok"]
 
         return {
             "cpu": round(cpu, 1),
@@ -1229,6 +1459,7 @@ async def get_system():
             "upbit_ok": upbit_ok,
         }
     except Exception as e:
+        print(f"[ERROR] {e}")
         return {"error": str(e)}
 
 
@@ -1256,6 +1487,7 @@ async def get_brain():
             "memory": memory,
         }
     except Exception as e:
+        print(f"[ERROR] {e}")
         return {"error": str(e)}
 
 
