@@ -56,6 +56,9 @@ RISK = {
     "take_profit": 0.06,  # 익절 +6%
     "min_confidence": 65,
     "max_positions": 3,  # 최대 동시 보유 종목
+    "max_daily_loss": -0.05,  # 일일 손실 한도 -5%
+    "split_ratios": [0.30, 0.30, 0.30],  # 1/2/3차 분할매수 비율
+    "split_rsi": [40, 35, 28],  # RSI 기준
 }
 
 
@@ -78,6 +81,70 @@ def is_market_open() -> bool:
         return False
     t = now.hour * 100 + now.minute
     return 900 <= t <= 1530
+
+
+def check_daily_loss() -> bool:
+    """오늘 이미 -5% 일일 손실 한도 도달 시 True (거래 중단)."""
+    try:
+        today = datetime.now().date().isoformat()
+        res = (
+            supabase.table('trade_executions')
+            .select('*')
+            .eq('result', 'CLOSED')
+            .gte('created_at', today)
+            .execute()
+            .data
+            or []
+        )
+        if not res:
+            return False
+        total_pnl = sum(
+            (float(r['price']) - float(r.get('entry_price', r['price'])))
+            * int(r.get('quantity', 0))
+            for r in res
+            if r.get('trade_type') == 'SELL'
+        )
+        total_invested = sum(
+            float(r['price']) * int(r.get('quantity', 0))
+            for r in res
+            if r.get('trade_type') == 'BUY'
+        )
+        if total_invested > 0 and (total_pnl / total_invested) <= RISK['max_daily_loss']:
+            send_telegram('🚨 <b>주식 일일 손실 한도 -5% 초과</b>\n오늘 거래 중단')
+            return True
+    except Exception as e:
+        print(f'일일 손실 체크 실패: {e}')
+    return False
+
+
+def get_stock_news(stock_name: str) -> str:
+    """종목명/키워드 관련 뉴스 헤드라인 (연합·한경 RSS)."""
+    try:
+        import xml.etree.ElementTree as ET
+
+        sources = [
+            'https://www.yna.co.kr/rss/economy.xml',
+            'https://rss.hankyung.com/economy.xml',
+        ]
+        headlines = []
+        for url in sources:
+            try:
+                res = requests.get(url, timeout=4, headers={'User-Agent': 'Mozilla/5.0'})
+                root = ET.fromstring(res.content)
+                items = root.findall('.//item')
+                for item in items:
+                    title = item.findtext('title', '')
+                    if stock_name in title or any(
+                        k in title for k in ['반도체', '코스피', '외국인']
+                    ):
+                        headlines.append(title.strip())
+                if headlines:
+                    break
+            except Exception:
+                continue
+        return '\n'.join(headlines[:3]) if headlines else '관련 뉴스 없음'
+    except Exception as e:
+        return '뉴스 조회 실패'
 
 
 def get_today_strategy() -> dict:
@@ -111,6 +178,7 @@ def get_indicators(code: str) -> dict:
             return {}
 
         closes = [float(r['close_price']) for r in rows]
+        volumes = [float(r.get('volume', 0)) for r in rows]
 
         # RSI 계산
         gains, losses = [], []
@@ -135,6 +203,35 @@ def get_indicators(code: str) -> dict:
         ema26 = ema(closes, 26)
         macd = round(ema12 - ema26, 0)
 
+        # 거래량 분석
+        avg_vol = sum(volumes[-20:]) / min(len(volumes), 20) if volumes else 1
+        cur_vol = volumes[-1] if volumes else 0
+        vol_ratio = round(cur_vol / avg_vol, 2) if avg_vol > 0 else 1.0
+        if vol_ratio >= 3.0:
+            vol_label = f'💥 거래량 폭발 ({vol_ratio}배)'
+        elif vol_ratio >= 2.0:
+            vol_label = f'🔥 거래량 급등 ({vol_ratio}배)'
+        elif vol_ratio >= 1.5:
+            vol_label = f'📈 거래량 증가 ({vol_ratio}배)'
+        elif vol_ratio <= 0.5:
+            vol_label = f'😴 거래량 급감 ({vol_ratio}배)'
+        else:
+            vol_label = f'➡️ 거래량 보통 ({vol_ratio}배)'
+
+        # 볼린저밴드 (20일)
+        if len(closes) >= 20:
+            ma20 = sum(closes[-20:]) / 20
+            std20 = (sum((c - ma20) ** 2 for c in closes[-20:]) / 20) ** 0.5
+            bb_upper = round(ma20 + 2 * std20, 0)
+            bb_lower = round(ma20 - 2 * std20, 0)
+            bb_pos = (
+                round((closes[-1] - bb_lower) / (bb_upper - bb_lower) * 100, 1)
+                if (bb_upper - bb_lower) > 0
+                else 50
+            )
+        else:
+            bb_upper = bb_lower = bb_pos = 0
+
         info = kiwoom.get_stock_info(code)
         raw = info or {}
         price = float(
@@ -146,13 +243,31 @@ def get_indicators(code: str) -> dict:
             'rsi': rsi,
             'macd': macd,
             'close': closes[-1],
+            'vol_ratio': vol_ratio,
+            'vol_label': vol_label,
+            'bb_upper': bb_upper,
+            'bb_lower': bb_lower,
+            'bb_pos': bb_pos,
         }
     except Exception as e:
         print(f'지표 계산 실패 {code}: {e}')
         return {}
 
 
-def analyze_with_ai(stock: dict, indicators: dict, strategy: dict) -> dict:
+def get_split_stage(rsi: float) -> int:
+    """RSI 기준 분할매수 차수 (1/2/3)."""
+    if rsi <= 28:
+        return 3
+    if rsi <= 35:
+        return 2
+    if rsi <= 40:
+        return 1
+    return 1
+
+
+def analyze_with_ai(
+    stock: dict, indicators: dict, strategy: dict, news: str = ''
+) -> dict:
     try:
         from openai import OpenAI
 
@@ -171,11 +286,15 @@ def analyze_with_ai(stock: dict, indicators: dict, strategy: dict) -> dict:
 [현재가] {indicators.get('price', 0):,.0f}원
 [RSI] {indicators.get('rsi', 50)}
 [MACD] {indicators.get('macd', 0)}
+[거래량] {indicators.get('vol_label', '정보없음')}
+[볼린저밴드] 위치: {indicators.get('bb_pos', 50)}% (0=하단매수구간, 100=상단매도구간)
 [장 전 전략] {pick_info}
 [시장 전망] {strategy.get('market_outlook', '중립')} / 리스크: {strategy.get('risk_level', '보통')}
+[관련 뉴스]
+{news if news else '없음'}
 
 [매매 규칙]
-BUY: RSI 40 이하 + MACD 양수 + 장전전략 BUY
+BUY: RSI 40 이하 + MACD 양수 + 장전전략 BUY. 거래량 0.5배 이하면 BUY 금지. BB 위치 80% 이상이면 매수 금지. BB 위치 20% 이하면 매수 신호 강화. 거래량 2배 이상이면 신뢰도 +10 고려.
 SELL: RSI 70 이상 OR MACD 음수 전환
 HOLD: 조건 미충족
 
@@ -190,7 +309,14 @@ HOLD: 조건 미충족
         )
         raw = res.choices[0].message.content.strip()
         raw = raw.replace('```json', '').replace('```', '').strip()
-        return json.loads(raw)
+        out = json.loads(raw)
+        # 거래량 2배 이상이면 신뢰도 +10
+        if (
+            out.get('action') == 'BUY'
+            and indicators.get('vol_ratio', 1.0) >= 2.0
+        ):
+            out['confidence'] = min(100, out.get('confidence', 0) + 10)
+        return out
     except Exception as e:
         print(f'AI 분석 실패: {e}')
         return {'action': 'HOLD', 'confidence': 0, 'reason': 'AI 오류'}
@@ -215,6 +341,13 @@ def execute_trade(stock: dict, signal: dict, indicators: dict) -> dict:
         krw_balance = 0
 
     if signal['action'] == 'BUY':
+        if indicators.get('vol_ratio', 1.0) <= 0.5:
+            print('⚠️ 거래량 급감 — BUY 차단')
+            return {'result': 'BLOCKED_VOLUME'}
+        if indicators.get('bb_pos', 0) >= 80:
+            print('⚠️ 볼린저 상단 — 매수 금지')
+            return {'result': 'BLOCKED_BB'}
+
         try:
             positions = (
                 supabase.table('trade_executions')
@@ -230,7 +363,8 @@ def execute_trade(stock: dict, signal: dict, indicators: dict) -> dict:
         except Exception:
             pass
 
-        invest_krw = krw_balance * RISK['invest_per_stock']
+        stage = get_split_stage(indicators.get('rsi', 50))
+        invest_krw = krw_balance * RISK['split_ratios'][stage - 1]
         if invest_krw < 10000:
             return {'result': 'INSUFFICIENT_KRW'}
 
@@ -266,7 +400,7 @@ def execute_trade(stock: dict, signal: dict, indicators: dict) -> dict:
             print(f'DB 저장 실패: {e}')
 
         send_telegram(
-            f"🟢 <b>{stock['name']} 매수</b>\n"
+            f"🟢 <b>{stock['name']} {stage}차 매수</b>\n"
             f"💰 {price:,.0f}원 × {quantity}주\n"
             f"💵 투입: {invest_krw:,.0f}원\n"
             f"🎯 신뢰도: {signal.get('confidence', 0)}%\n"
@@ -404,6 +538,10 @@ def run_trading_cycle():
 
     print(f'\n[{datetime.now()}] 주식 매매 사이클 시작')
 
+    if check_daily_loss():
+        print('🚨 일일 손실 한도 초과 — 사이클 스킵')
+        return
+
     check_stop_loss_take_profit()
 
     strategy = get_today_strategy()
@@ -430,9 +568,13 @@ def run_trading_cycle():
             print('  지표 없음 — 스킵')
             continue
 
-        print(f'  RSI: {indicators["rsi"]} / MACD: {indicators["macd"]}')
+        print(
+            f"  RSI: {indicators['rsi']} / MACD: {indicators['macd']} / "
+            f"거래량: {indicators.get('vol_label', '?')} / BB: {indicators.get('bb_pos', '?')}%"
+        )
 
-        signal = analyze_with_ai(stock, indicators, strategy)
+        news = get_stock_news(stock['name'])
+        signal = analyze_with_ai(stock, indicators, strategy, news)
         print(f'  신호: {signal["action"]} ({signal["confidence"]}%) — {signal["reason"]}')
 
         result = execute_trade(stock, signal, indicators)
