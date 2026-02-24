@@ -562,7 +562,18 @@ def send_hourly_report():
 
 if __name__ == "__main__":
     import sys
-    if len(sys.argv) > 1 and sys.argv[1] == "report":
+    if len(sys.argv) > 1 and sys.argv[1] == "check":
+        pos = get_open_position()
+        if pos:
+            df = get_market_data()
+            ind = calculate_indicators(df)
+            fg = get_fear_greed()
+            vol = get_volume_analysis(df)
+            execute_trade({"action": "HOLD", "confidence": 0, "reason": "1분 체크"}, ind, fg, vol)
+            print(f"[{datetime.now()}] BTC 1분 손절/익절 체크 완료")
+        else:
+            print(f"[{datetime.now()}] BTC 포지션 없음 — 스킵")
+    elif len(sys.argv) > 1 and sys.argv[1] == "report":
         send_hourly_report()
     else:
         run_trading_cycle()
