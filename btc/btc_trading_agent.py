@@ -478,19 +478,21 @@ def run_trading_cycle():
 
     signal = analyze_with_ai(indicators, news, fg, htf, volume)
 
-    # 공포 극복: F&G 10 이하 + RSI 25 이하
+    # 공포 극복: F&G 10 이하 + RSI 25 이하 + 거래량 ≥0.8배
     fg_value, rsi = fg["value"], indicators["rsi"]
-    if fg_value <= 10 and rsi <= 25:
-        print("🚨 극도 공포 + 과매도 감지 → 신뢰도 강제 상향")
+    volume_ratio = volume["ratio"]
+    if fg_value <= 10 and rsi <= 25 and volume_ratio >= 0.8:
+        print("🚨 극도 공포 + 과매도 + 거래량 정상 → 신뢰도 강제 상향")
         if signal["action"] == "BUY":
             signal["confidence"] = max(signal["confidence"], 80)
         elif signal["action"] == "HOLD":
             signal["action"] = "BUY"
             signal["confidence"] = 75
             signal["reason"] = signal.get("reason", "") + " [공포극복 전략 발동]"
+    elif fg_value <= 10 and rsi <= 25 and volume_ratio < 0.8:
+        print(f"⚠️ 극도 공포 + 과매도지만 거래량 부족({volume_ratio}배) — 공포극복 미발동")
 
     # 변동성 폭발: 거래량 평균의 3배 이상
-    volume_ratio = volume["ratio"]
     if volume_ratio >= 3.0:
         print(f"💥 거래량 폭발 감지 ({volume_ratio:.1f}배) → 공격적 진입")
         if signal["action"] == "BUY":
