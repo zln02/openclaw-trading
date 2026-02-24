@@ -12,4 +12,5 @@ for k, v in d.get('env', {}).items():
         print(f'{k}={quote(str(v))}')
 " 2>/dev/null)
 cd /home/wlsdud5035/.openclaw/workspace
-exec python3 -m uvicorn btc_dashboard:app --host 0.0.0.0 --port 8080
+# venv 사용 (fastapi/uvicorn이 시스템에 없을 수 있음)
+exec .venv/bin/python btc/btc_dashboard.py

@@ -656,6 +656,31 @@ HTML = """<!DOCTYPE html>
     color: var(--accent);
   }
 
+  header a.nav-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 16px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--muted);
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: all 0.2s;
+    font-family: var(--mono);
+    text-decoration: none;
+  }
+  header a.nav-tab:hover {
+    color: var(--text);
+    border-color: var(--border);
+  }
+  header a.nav-tab.active {
+    color: var(--accent);
+    border-color: var(--accent);
+    background: rgba(0,212,255,0.08);
+  }
+
   .trend-chip {
     display: inline-flex;
     align-items: center;
@@ -681,9 +706,15 @@ HTML = """<!DOCTYPE html>
 <div class="wrapper">
 
   <header>
-    <div class="logo">
-      <div class="logo-icon">🤖</div>
-      OpenClaw Trading
+    <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
+      <div class="logo">
+        <div class="logo-icon">🤖</div>
+        OpenClaw Trading
+      </div>
+      <nav style="display:flex;align-items:center;gap:4px;margin-left:24px;">
+        <a href="/" style="text-decoration:none" class="nav-tab active">₿ BTC</a>
+        <a href="/stocks" style="text-decoration:none" class="nav-tab">📈 주식</a>
+      </nav>
     </div>
     <div style="display:flex;align-items:center;gap:12px;">
       <div class="live-badge">
@@ -691,6 +722,7 @@ HTML = """<!DOCTYPE html>
         LIVE
       </div>
       <div class="header-time" id="clock">--:--:--</div>
+      <a href="/stocks" class="refresh-btn" style="text-decoration:none">📈 주식</a>
       <button class="refresh-btn" onclick="loadAll()">↻ 새로고침</button>
     </div>
   </header>
@@ -1273,6 +1305,291 @@ setTimeout(function(){
 </body>
 </html>"""
 
+STOCKS_HTML = """<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpenClaw Stocks</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:#0a0e17;--bg2:#0f1422;--bg3:#141928;
+    --border:#1e2537;--accent:#00d4ff;
+    --green:#00e676;--red:#ff3d57;--yellow:#ffd600;
+    --text:#e8eaf0;--muted:#4a5068;
+    --font:'Syne',sans-serif;--mono:'DM Mono',monospace;
+  }
+  * { margin:0;padding:0;box-sizing:border-box; }
+  body { background:var(--bg);color:var(--text);font-family:var(--font);min-height:100vh; }
+  body::before {
+    content:'';position:fixed;inset:0;
+    background-image:linear-gradient(rgba(0,212,255,0.03) 1px,transparent 1px),
+      linear-gradient(90deg,rgba(0,212,255,0.03) 1px,transparent 1px);
+    background-size:40px 40px;pointer-events:none;z-index:0;
+  }
+  .wrapper{position:relative;z-index:1;}
+  header{display:flex;align-items:center;justify-content:space-between;padding:16px 28px;border-bottom:1px solid var(--border);background:rgba(10,14,23,0.9);backdrop-filter:blur(10px);position:sticky;top:0;z-index:100;}
+  .logo{display:flex;align-items:center;gap:10px;font-size:18px;font-weight:800;}
+  .logo-icon{width:32px;height:32px;background:linear-gradient(135deg,var(--accent),#7c3aed);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:16px;}
+  .nav-tab{display:flex;align-items:center;gap:6px;padding:6px 16px;border-radius:8px;font-size:13px;font-weight:700;color:var(--muted);border:1px solid transparent;cursor:pointer;transition:all 0.2s;font-family:var(--mono);}
+  .nav-tab:hover{color:var(--text);border-color:var(--border);}
+  .nav-tab.active{color:var(--accent);border-color:var(--accent);background:rgba(0,212,255,0.08);}
+  main{padding:20px 28px;max-width:1600px;margin:0 auto;}
+  .card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:20px;}
+  .card-header{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--border);}
+  .card-title{font-size:13px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--muted);}
+  .card-body{padding:20px;}
+  .stock-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px;}
+  .stock-card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:16px;cursor:pointer;transition:border-color 0.2s;}
+  .stock-card:hover{border-color:var(--accent);}
+  .stock-card.selected{border-color:var(--accent);background:rgba(0,212,255,0.05);}
+  .stock-label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:6px;font-weight:600;}
+  .stock-name{font-size:15px;font-weight:700;margin-bottom:6px;}
+  .stock-price{font-family:var(--mono);font-size:18px;font-weight:500;}
+  .stock-change{font-family:var(--mono);font-size:12px;margin-top:4px;}
+  .positive{color:var(--green);}
+  .negative{color:var(--red);}
+  .neutral{color:var(--accent);}
+  .industry-badge{display:inline-block;font-size:10px;font-family:var(--mono);padding:2px 6px;border-radius:3px;background:rgba(0,212,255,0.1);color:var(--accent);margin-bottom:6px;}
+  .chart-section{display:grid;grid-template-columns:1fr 320px;gap:16px;margin-bottom:20px;}
+  .trade-table{width:100%;border-collapse:collapse;}
+  .trade-table th{font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);padding:10px 12px;text-align:left;border-bottom:1px solid var(--border);font-weight:600;}
+  .trade-table td{padding:10px 12px;font-family:var(--mono);font-size:12px;border-bottom:1px solid rgba(30,37,55,0.5);}
+  .trade-table tr:hover td{background:rgba(255,255,255,0.02);}
+  .stat-label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:6px;font-weight:600;}
+  .stat-value{font-family:var(--mono);font-size:22px;font-weight:500;}
+  .stat-sub{font-size:11px;color:var(--muted);margin-top:4px;font-family:var(--mono);}
+  ::-webkit-scrollbar{width:4px;}
+  ::-webkit-scrollbar-track{background:var(--bg);}
+  ::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px;}
+  @media(max-width:1200px){.stock-grid{grid-template-columns:repeat(2,1fr);}.chart-section{grid-template-columns:1fr;}}
+  @keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.5;transform:scale(.8)}}
+</style>
+</head>
+<body>
+<div class="wrapper">
+  <header>
+    <div style="display:flex;align-items:center;gap:8px">
+      <div class="logo">
+        <div class="logo-icon">🤖</div>
+        OpenClaw Trading
+      </div>
+      <nav style="display:flex;gap:4px;margin-left:32px">
+        <a href="/" style="text-decoration:none"><div class="nav-tab">₿ BTC</div></a>
+        <a href="/stocks" style="text-decoration:none"><div class="nav-tab active">📈 주식</div></a>
+      </nav>
+    </div>
+    <div style="display:flex;align-items:center;gap:12px;">
+      <div style="display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:11px;color:var(--green);background:rgba(0,230,118,0.1);border:1px solid rgba(0,230,118,0.2);padding:4px 10px;border-radius:20px;">
+        <div style="width:6px;height:6px;border-radius:50%;background:var(--green);animation:pulse 2s infinite"></div>
+        LIVE
+      </div>
+      <div style="font-family:var(--mono);font-size:12px;color:var(--muted)" id="clock"></div>
+    </div>
+  </header>
+
+  <main>
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">📊 관심 종목</span>
+        <span style="font-family:var(--mono);font-size:11px;color:var(--muted)" id="update-time"></span>
+      </div>
+      <div style="padding:16px;">
+        <div class="stock-grid" id="stock-grid">
+          <div style="color:var(--muted);padding:20px;font-size:13px">로딩 중...</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="chart-section">
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title" id="chart-title">종목 차트</span>
+          <span style="font-family:var(--mono);font-size:11px;color:var(--muted)">30일 일봉</span>
+        </div>
+        <div id="stock-candle-chart" style="width:100%;height:320px"></div>
+        <div id="stock-volume-chart" style="width:100%;height:80px"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">종목 정보</span>
+        </div>
+        <div class="card-body" id="stock-detail">
+          <div style="color:var(--muted);font-size:13px;text-align:center;padding:40px 0">
+            종목을 선택하세요
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">🌅 오늘 AI 전략</span>
+        <span style="font-family:var(--mono);font-size:11px;color:var(--muted)" id="strategy-time"></span>
+      </div>
+      <div class="card-body" id="strategy-box">
+        <div style="color:var(--muted);font-size:13px">전략 로딩 중...</div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<script>
+const lwScript = document.createElement('script');
+lwScript.src = 'https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js';
+document.head.appendChild(lwScript);
+
+let stockChart = null, stockSeries = null, stockVolSeries = null;
+let selectedCode = null;
+
+lwScript.onload = function() {
+  const c = document.getElementById('stock-candle-chart');
+  stockChart = LightweightCharts.createChart(c, {
+    width: c.clientWidth, height: 320,
+    layout: { background: { color: '#0f1422' }, textColor: '#4a5068' },
+    grid: { vertLines: { color: '#1e2537' }, horzLines: { color: '#1e2537' } },
+    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+    timeScale: { borderColor: '#1e2537', timeVisible: true },
+    rightPriceScale: { borderColor: '#1e2537' },
+  });
+  stockSeries = stockChart.addCandlestickSeries({
+    upColor: '#00e676', downColor: '#ff3d57',
+    borderUpColor: '#00e676', borderDownColor: '#ff3d57',
+    wickUpColor: '#00e676', wickDownColor: '#ff3d57',
+  });
+
+  const vc = document.getElementById('stock-volume-chart');
+  const volChart = LightweightCharts.createChart(vc, {
+    width: vc.clientWidth, height: 80,
+    layout: { background: { color: '#0f1422' }, textColor: '#4a5068' },
+    grid: { vertLines: { color: '#1e2537' }, horzLines: { color: '#1e2537' } },
+    timeScale: { borderColor: '#1e2537', timeVisible: true },
+    rightPriceScale: { borderColor: '#1e2537' },
+  });
+  stockVolSeries = volChart.addHistogramSeries({
+    color: 'rgba(0,212,255,0.3)', priceFormat: { type: 'volume' }, priceScaleId: '',
+  });
+};
+
+const fmt = n => n ? Number(n).toLocaleString('ko-KR') : '--';
+
+async function loadStocks() {
+  try {
+    const res = await fetch('/api/stocks/overview');
+    const stocks = await res.json();
+    const grid = document.getElementById('stock-grid');
+    const timeEl = document.getElementById('update-time');
+    if (timeEl) timeEl.textContent = '업데이트: ' + new Date().toLocaleTimeString('ko-KR');
+
+    if (!stocks.length) {
+      grid.innerHTML = '<div style="color:var(--muted);padding:20px">데이터 없음</div>';
+      return;
+    }
+
+    grid.innerHTML = stocks.map(s => {
+      const isPos = s.change >= 0;
+      const selected = selectedCode === s.code ? ' selected' : '';
+      return '<div class="stock-card' + selected + '" onclick="selectStock(\\'' + s.code + '\\',\\'' + s.name + '\\')">' +
+        '<div class="industry-badge">' + (s.industry || '') + '</div>' +
+        '<div class="stock-name">' + s.name + '</div>' +
+        '<div class="stock-price">' + fmt(Math.round(s.price)) + '원</div>' +
+        '<div class="stock-change ' + (isPos ? 'positive' : 'negative') + '">' +
+          (isPos ? '▲' : '▼') + ' ' + Math.abs(s.change).toFixed(2) + '%' +
+        '</div>' +
+        '</div>';
+    }).join('');
+  } catch(e) { console.error('stocks error', e); }
+}
+
+async function selectStock(code, name) {
+  selectedCode = code;
+  document.getElementById('chart-title').textContent = name + ' 차트';
+
+  document.querySelectorAll('.stock-card').forEach(el => el.classList.remove('selected'));
+  var t = event && event.currentTarget;
+  if (t) t.classList.add('selected');
+
+  try {
+    const res = await fetch('/api/stocks/chart/' + code);
+    const data = await res.json();
+    if (!data.length || !stockSeries) return;
+
+    stockSeries.setData(data.map(d => ({
+      time: d.time, open: d.open, high: d.high, low: d.low, close: d.close,
+    })));
+    stockVolSeries.setData(data.map(d => ({
+      time: d.time, value: d.volume,
+      color: d.close >= d.open ? 'rgba(0,230,118,0.4)' : 'rgba(255,61,87,0.4)',
+    })));
+
+    const last = data[data.length - 1];
+    const prev = data[data.length - 2];
+    const chg = prev ? ((last.close - prev.close) / prev.close * 100).toFixed(2) : 0;
+    const isPos = chg >= 0;
+    document.getElementById('stock-detail').innerHTML =
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">' +
+      '<div><div class="stat-label">현재가</div><div class="stat-value neutral">' + fmt(Math.round(last.close)) + '원</div></div>' +
+      '<div><div class="stat-label">전일대비</div><div class="stat-value ' + (isPos?'positive':'negative') + '">' + (isPos?'+':'') + chg + '%</div></div>' +
+      '<div><div class="stat-label">고가</div><div class="stat-value" style="font-size:16px;color:var(--green)">' + fmt(Math.round(last.high)) + '원</div></div>' +
+      '<div><div class="stat-label">저가</div><div class="stat-value" style="font-size:16px;color:var(--red)">' + fmt(Math.round(last.low)) + '원</div></div>' +
+      '<div><div class="stat-label">거래량</div><div class="stat-value" style="font-size:16px">' + fmt(last.volume) + '</div></div>' +
+      '<div><div class="stat-label">종목코드</div><div class="stat-value" style="font-size:16px">' + code + '</div></div>' +
+      '</div>';
+  } catch(e) { console.error('chart error', e); }
+}
+
+async function loadStrategy() {
+  try {
+    const res = await fetch('/api/stocks/strategy');
+    const d = await res.json();
+    if (!d || d.error) {
+      document.getElementById('strategy-box').innerHTML =
+        '<div style="color:var(--muted)">오늘 전략 없음 (08:00 브리핑 대기)</div>';
+      return;
+    }
+    const picks = (d.top_picks || []).map(p =>
+      '<div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border)">' +
+      '<span style="font-size:18px">' + (p.action==='BUY'?'🟢':p.action==='WATCH'?'👀':'🔴') + '</span>' +
+      '<div><div style="font-weight:700">' + p.name + ' <span style="font-family:var(--mono);font-size:11px;color:var(--muted)">(' + p.code + ')</span></div>' +
+      '<div style="font-size:12px;color:var(--muted);margin-top:2px">' + p.reason + '</div></div>' +
+      '<span style="margin-left:auto;font-family:var(--mono);font-size:11px;padding:3px 8px;border-radius:4px;background:' +
+        (p.action==='BUY'?'rgba(0,230,118,0.1)':p.action==='WATCH'?'rgba(255,214,0,0.1)':'rgba(255,61,87,0.1)') + ';color:' +
+        (p.action==='BUY'?'var(--green)':p.action==='WATCH'?'var(--yellow)':'var(--red)') + '">' + p.action + '</span>' +
+      '</div>'
+    ).join('');
+
+    const outlook = d.market_outlook || '?';
+    const risk = d.risk_level || '?';
+    document.getElementById('strategy-box').innerHTML =
+      '<div style="display:flex;gap:16px;margin-bottom:16px">' +
+      '<div style="padding:8px 16px;border-radius:8px;background:rgba(0,212,255,0.1);border:1px solid rgba(0,212,255,0.2);font-family:var(--mono);font-size:12px">시장: <b>' + outlook + '</b></div>' +
+      '<div style="padding:8px 16px;border-radius:8px;background:rgba(255,214,0,0.1);border:1px solid rgba(255,214,0,0.2);font-family:var(--mono);font-size:12px">리스크: <b>' + risk + '</b></div>' +
+      '<div style="padding:8px 16px;border-radius:8px;background:rgba(74,80,104,0.2);border:1px solid var(--border);font-family:var(--mono);font-size:12px;flex:1">' + (d.summary||'') + '</div>' +
+      '</div>' + picks;
+
+    const timeEl = document.getElementById('strategy-time');
+    if (timeEl && d.date) timeEl.textContent = d.date;
+  } catch(e) {
+    document.getElementById('strategy-box').innerHTML =
+      '<div style="color:var(--muted)">전략 로드 실패</div>';
+  }
+}
+
+setInterval(function(){ var c=document.getElementById('clock'); if(c) c.textContent=new Date().toLocaleTimeString('ko-KR'); }, 1000);
+loadStocks();
+loadStrategy();
+setInterval(loadStocks, 60000);
+</script>
+</body>
+</html>"""
+
+@app.get("/stocks", response_class=HTMLResponse)
+async def stocks_page():
+    return STOCKS_HTML
+
 @app.get("/favicon.ico")
 async def favicon():
     from fastapi.responses import Response
@@ -1488,6 +1805,61 @@ async def get_brain():
         }
     except Exception as e:
         print(f"[ERROR] {e}")
+        return {"error": str(e)}
+
+
+@app.get("/api/stocks/overview")
+async def get_stocks_overview():
+    if not supabase:
+        return []
+    try:
+        stocks = supabase.table("top50_stocks").select("*").execute().data or []
+        result = []
+        for s in stocks:
+            try:
+                ohlcv = supabase.table("daily_ohlcv").select("*").eq("stock_code", s["stock_code"]).order("date", desc=True).limit(2).execute().data or []
+                price = ohlcv[0]["close_price"] if ohlcv else 0
+                prev = ohlcv[1]["close_price"] if len(ohlcv) > 1 else price
+                change = ((price - prev) / prev * 100) if prev else 0
+                result.append({
+                    "code": s["stock_code"],
+                    "name": s["stock_name"],
+                    "industry": s.get("industry", ""),
+                    "price": price,
+                    "change": round(change, 2),
+                    "volume": ohlcv[0]["volume"] if ohlcv else 0,
+                })
+            except Exception:
+                pass
+        return sorted(result, key=lambda x: abs(x["change"]), reverse=True)
+    except Exception as e:
+        print(f"[ERROR] stocks overview: {e}")
+        return []
+
+
+@app.get("/api/stocks/chart/{code}")
+async def get_stock_chart(code: str):
+    if not supabase:
+        return []
+    try:
+        rows = supabase.table("daily_ohlcv").select("*").eq("stock_code", code).order("date", desc=False).limit(30).execute().data or []
+        return [
+            {"time": r["date"], "open": r["open_price"], "high": r["high_price"], "low": r["low_price"], "close": r["close_price"], "volume": r["volume"]}
+            for r in rows
+        ]
+    except Exception as e:
+        print(f"[ERROR] stock chart: {e}")
+        return []
+
+
+@app.get("/api/stocks/strategy")
+async def get_stocks_strategy():
+    try:
+        path = Path("/home/wlsdud5035/.openclaw/workspace/stocks/today_strategy.json")
+        if not path.exists():
+            return {"error": "없음"}
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception as e:
         return {"error": str(e)}
 
 

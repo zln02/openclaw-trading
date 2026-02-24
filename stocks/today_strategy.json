@@ -1,0 +1,48 @@
+{
+  "market_outlook": "약세",
+  "top_picks": [
+    {
+      "code": "005930",
+      "name": "삼성전자",
+      "action": "BUY",
+      "reason": "미국 증시 하락에도 불구하고 강세 유지"
+    },
+    {
+      "code": "000660",
+      "name": "SK하이닉스",
+      "action": "BUY",
+      "reason": "상승세 지속, 반도체 수요 증가 기대"
+    },
+    {
+      "code": "042700",
+      "name": "한미반도체",
+      "action": "WATCH",
+      "reason": "상승세지만 변동성 주의 필요"
+    }
+  ],
+  "risk_level": "보통",
+  "summary": "미국 증시 하락에도 일부 종목 강세, 반도체 관련주 주목",
+  "date": "2026-02-24",
+  "us_market": [
+    {
+      "name": "S&P500",
+      "price": 6837.75,
+      "change": -1.04
+    },
+    {
+      "name": "나스닥",
+      "price": 22627.27,
+      "change": -1.13
+    },
+    {
+      "name": "엔비디아",
+      "price": 191.55,
+      "change": 0.91
+    },
+    {
+      "name": "TSMC",
+      "price": 370.04,
+      "change": -0.13
+    }
+  ]
+}
