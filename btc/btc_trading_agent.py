@@ -58,12 +58,20 @@ client  = OpenAI(api_key=OPENAI_KEY)
 
 # ── 리스크 설정 ───────────────────────────────────
 RISK = {
-    "split_ratios":    [0.30, 0.30, 0.30],  # 1차/2차/3차 매수 비율
+    # 분할매수 비율 / RSI 기준
+    "split_ratios":    [0.30, 0.30, 0.30],   # 1차/2차/3차 매수 비율
     "split_rsi":       [45,   38,   30  ],   # 각 차수 RSI 조건
-    "stop_loss":       -0.02,                # 손절 -2%
-    "take_profit":      0.04,                # 익절 +4%
-    "max_daily_loss":  -0.05,                # 일일 손실 한도 -5%
-    "min_confidence":   65,                  # 최소 신뢰도
+    # 리스크 관리
+    "invest_ratio":     0.30,                # BTC는 단일 자산이므로 30%
+    "stop_loss":       -0.03,                # 손절 -3% (변동성 고려)
+    "take_profit":      0.15,                # 고정 익절 15% (트레일링 보완용)
+    "trailing_stop":    0.02,                # 고점 대비 2% 하락 시 트레일링 스탑
+    "trailing_activate":0.015,               # 수익 1.5% 이상일 때만 트레일링 활성화
+    "max_daily_loss":  -0.10,                # 일일 손실 한도 -10%
+    "min_confidence":   70,                  # 최소 신뢰도 70%
+    "max_trades_per_day": 3,                 # 하루 신규 매수 최대 3건
+    "fee_buy":          0.001,               # 매수 수수료 0.1%
+    "fee_sell":         0.001,               # 매도 수수료 0.1%
 }
 
 # ── 텔레그램 ──────────────────────────────────────
@@ -221,6 +229,7 @@ def open_position(entry_price, quantity, entry_krw):
             "entry_time":  datetime.now().isoformat(),
             "quantity":    quantity,
             "entry_krw":   entry_krw,
+            "highest_price": entry_price,
             "status":      "OPEN",
         }).execute()
     except Exception as e:
@@ -364,11 +373,41 @@ def execute_trade(signal, indicators, fg=None, volume=None) -> dict:
     pos         = get_open_position()
     price       = indicators["price"]
 
-    # ── 손절/익절 자동화 ──
+    # ── 손절/익절 + 트레일링 스탑 ──
     if btc_balance > 0.00001 and pos:
-        change = (price - float(pos["entry_price"])) / float(pos["entry_price"])
+        entry_price = float(pos["entry_price"])
+        change = (price - entry_price) / entry_price
+        fee_cost = RISK["fee_buy"] + RISK["fee_sell"]
+        net_change = change - fee_cost
 
-        if change <= RISK["stop_loss"]:
+        # 고점 추적 (highest_price)
+        highest = float(pos.get("highest_price") or entry_price)
+        if price > highest:
+            highest = price
+            try:
+                if not DRY_RUN:
+                    supabase.table("btc_position").update(
+                        {"highest_price": highest}
+                    ).eq("id", pos["id"]).execute()
+            except Exception as e:
+                print(f"highest_price 업데이트 실패: {e}")
+
+        # 트레일링 스탑: 수익 1.5% 이상 구간에서 고점 대비 2% 이상 하락
+        if net_change > RISK["trailing_activate"] and highest > 0:
+            drop = (highest - price) / highest
+            if drop >= RISK["trailing_stop"]:
+                if not DRY_RUN:
+                    upbit.sell_market_order("KRW-BTC", btc_balance * 0.9995)
+                    close_all_positions(price)
+                send_telegram(
+                    f"📉 <b>트레일링 스탑</b>\n"
+                    f"고점: {highest:,.0f}원 → 현재가: {price:,.0f}원\n"
+                    f"하락폭: {drop*100:.1f}% / 수익: {net_change*100:.2f}%"
+                )
+                return {"result": "TRAILING_STOP"}
+
+        # 손절
+        if net_change <= RISK["stop_loss"]:
             if not DRY_RUN:
                 upbit.sell_market_order("KRW-BTC", btc_balance * 0.9995)
                 close_all_positions(price)
@@ -376,11 +415,12 @@ def execute_trade(signal, indicators, fg=None, volume=None) -> dict:
                 f"🛑 <b>손절 실행</b>\n"
                 f"진입가: {pos['entry_price']:,}원\n"
                 f"현재가: {price:,}원\n"
-                f"손실: {change*100:.2f}%"
+                f"손실(비용 포함): {net_change*100:.2f}%"
             )
             return {"result": "STOP_LOSS"}
 
-        if change >= RISK["take_profit"]:
+        # 최대 익절
+        if net_change >= RISK["take_profit"]:
             if not DRY_RUN:
                 upbit.sell_market_order("KRW-BTC", btc_balance * 0.9995)
                 close_all_positions(price)
@@ -388,7 +428,7 @@ def execute_trade(signal, indicators, fg=None, volume=None) -> dict:
                 f"✅ <b>익절 실행</b>\n"
                 f"진입가: {pos['entry_price']:,}원\n"
                 f"현재가: {price:,}원\n"
-                f"수익: +{change*100:.2f}%"
+                f"수익(비용 포함): +{net_change*100:.2f}%"
             )
             return {"result": "TAKE_PROFIT"}
 
@@ -458,6 +498,19 @@ def run_trading_cycle():
     if check_daily_loss():
         print("🚨 일일 손실 한도 초과 — 사이클 스킵")
         return {"result": "DAILY_LOSS_LIMIT"}
+
+    # 오늘 신규 매수 건수 한도 체크
+    today = datetime.now().date().isoformat()
+    try:
+        res = supabase.table("btc_position")\
+                      .select("id")\
+                      .gte("entry_time", today).execute()
+        today_trades = len(res.data or [])
+        if today_trades >= RISK.get("max_trades_per_day", 999):
+            print("오늘 BTC 매수 한도 도달 — 사이클 스킵")
+            return {"result": "MAX_TRADES_PER_DAY"}
+    except Exception as e:
+        print(f"오늘 BTC 매수 건수 조회 실패: {e}")
 
     print(f"\n[{datetime.now()}] 매매 사이클 시작")
 

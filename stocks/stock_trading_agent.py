@@ -295,6 +295,70 @@ def get_investor_trend_krx(stock_code: str) -> dict:
         return {}
 
 
+def calc_momentum_score(code: str) -> dict:
+    """
+    모멘텀 스코어 — 최근 수익률 + 거래량 증가 + 신고가 근접도
+    """
+    try:
+        rows = (
+            supabase.table('daily_ohlcv')
+            .select('close_price,high_price,volume,date')
+            .eq('stock_code', code)
+            .order('date', desc=True)
+            .limit(60)
+            .execute()
+            .data
+            or []
+        )
+        if len(rows) < 20:
+            return {'score': 0, 'grade': 'F'}
+
+        rows.reverse()
+        closes = [float(r['close_price']) for r in rows]
+        highs = [float(r['high_price']) for r in rows]
+        volumes = [float(r.get('volume', 0)) for r in rows]
+        price = closes[-1]
+
+        # 1. 수익률 모멘텀 (가중치 40%)
+        ret_5d = (closes[-1] / closes[-6] - 1) * 100 if len(closes) >= 6 else 0
+        ret_20d = (closes[-1] / closes[-21] - 1) * 100 if len(closes) >= 21 else 0
+        momentum_raw = ret_5d * 0.6 + ret_20d * 0.4
+        momentum_score = max(0, min(100, 50 + momentum_raw * 5))
+
+        # 2. 거래량 모멘텀 (가중치 30%)
+        vol_5 = sum(volumes[-5:]) / 5
+        vol_20 = sum(volumes[-20:]) / 20 if len(volumes) >= 20 else vol_5
+        vol_ratio = vol_5 / vol_20 if vol_20 > 0 else 1
+        vol_score = max(0, min(100, vol_ratio * 50))
+
+        # 3. 신고가 근접도 (가중치 30%)
+        high_60d = max(highs) if highs else price
+        nearness = (price / high_60d) * 100 if high_60d > 0 else 50
+        high_score = max(0, min(100, (nearness - 80) * 5))
+
+        total = momentum_score * 0.4 + vol_score * 0.3 + high_score * 0.3
+
+        if total >= 75:
+            grade = 'A'
+        elif total >= 60:
+            grade = 'B'
+        elif total >= 40:
+            grade = 'C'
+        else:
+            grade = 'D'
+
+        return {
+            'score': round(total, 1),
+            'grade': grade,
+            'ret_5d': round(ret_5d, 2),
+            'ret_20d': round(ret_20d, 2),
+            'vol_ratio': round(vol_ratio, 2),
+            'near_high': round(nearness, 1),
+        }
+    except Exception:
+        return {'score': 0, 'grade': 'F'}
+
+
 def get_current_price(code: str) -> float:
     """키움 API로 현재가 조회 (안정적 파싱)"""
     try:
@@ -700,6 +764,14 @@ def analyze_with_ai(
         elif foreign_net < 0 and inst_net < 0:
             supply_signal = 'SELL'
 
+        # 모멘텀 스코어
+        momentum = calc_momentum_score(stock['code'])
+        m_grade = momentum.get('grade', 'F')
+        m_score = momentum.get('score', 0)
+        m_ret5 = momentum.get('ret_5d', 0)
+        m_ret20 = momentum.get('ret_20d', 0)
+        m_vol = momentum.get('vol_ratio', 1)
+
         prompt = f"""당신은 연평균 수익률 50% 이상의 한국 주식 상위 1% 퀀트 트레이더입니다.
 현재 모의투자 환경이므로 공격적으로 수익을 추구합니다.
 
@@ -715,6 +787,7 @@ def analyze_with_ai(
 [주봉 추세] {weekly_trend}
 [수급] 외국인: {'+' if foreign_net > 0 else ''}{foreign_net:,}주 / 기관: {'+' if inst_net > 0 else ''}{inst_net:,}주
 수급 시그널: {supply_signal}
+[모멘텀] 등급: {m_grade}({m_score}) | 5일수익: {m_ret5:+.1f}% | 20일수익: {m_ret20:+.1f}% | 거래량추세: {m_vol:.1f}배
 [뉴스] {news if news else '없음'}
 [데이터 소스] {indicators.get('data_source', '?')} ({indicators.get('data_points', '?')}봉)
 
@@ -1210,6 +1283,31 @@ def check_stop_loss_take_profit():
                 time.sleep(0.3)
                 continue
 
+            # 타임컷: 5일 이상 보유 + 수익 거의 없음
+            try:
+                oldest_buy = min(
+                    datetime.fromisoformat(
+                        (t.get('created_at') or '2000-01-01T00:00:00')
+                        .replace('Z', '')
+                        .replace('+00:00', '')[:19]
+                    )
+                    for t in trades
+                )
+                holding_days = (datetime.now() - oldest_buy).days
+            except Exception:
+                holding_days = 0
+
+            if holding_days >= 5 and net_pnl_pct < 0.01:
+                log(f'{name} 타임컷: {holding_days}일 보유, 수익 {net_pnl_pct*100:.2f}%', 'TRADE')
+                execute_sell(
+                    {'code': code, 'name': name},
+                    {},
+                    {'price': price},
+                    reason_prefix=f'⏰ 타임컷({holding_days}일, {net_pnl_pct*100:.2f}%): ',
+                )
+                time.sleep(0.3)
+                continue
+
             time.sleep(0.3)
 
         except Exception as e:
@@ -1294,8 +1392,16 @@ def run_trading_cycle():
             )
             targets.append({'code': code, 'name': name})
 
+    # 모멘텀 스코어 기반 정렬 (상위 종목 우선 분석)
+    scored_targets = []
+    for stock in targets:
+        m = calc_momentum_score(stock['code'])
+        scored_targets.append((stock, m))
+    scored_targets.sort(key=lambda x: x[1].get('score', 0), reverse=True)
+    scored_targets = scored_targets[:20]  # 상위 20개만 분석
+
     # 종목별 분석 + 매매
-    for stock in targets[:10]:  # 최대 10종목
+    for stock, momentum in scored_targets:
         code = stock['code']
         name = stock['name']
         has_position = code in open_codes
@@ -1312,6 +1418,17 @@ def run_trading_cycle():
             f"  RSI: {indicators['rsi']} / MACD: {indicators['macd']}({indicators.get('macd_histogram', '?')}) / "
             f"거래량: {indicators.get('vol_label', '?')} / BB: {indicators.get('bb_pos', '?')}% [{indicators.get('data_source', '?')}/{indicators.get('data_points', '?')}봉]"
         )
+
+        # 모멘텀 스코어 로깅 및 D등급 차단
+        log(
+            f"  모멘텀: {momentum.get('grade', 'F')}({momentum.get('score', 0)}) | "
+            f"5일 {momentum.get('ret_5d', 0):+.1f}% | "
+            f"거래량 {momentum.get('vol_ratio', 1):.1f}배 | "
+            f"신고가 {momentum.get('near_high', 0):.0f}%"
+        )
+        if momentum.get('grade') == 'D' and not has_position:
+            log(f'  {name}: 모멘텀 D등급 — BUY 차단')
+            continue
 
         weekly = get_weekly_trend(code)
         log(f'  주봉 추세: {weekly.get("trend", "?")}')
