@@ -25,75 +25,55 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-# ─────────────────────────────────────────────
-# 환경변수 로드
-# ─────────────────────────────────────────────
-def _load_env():
-    openclaw_json = Path('/home/wlsdud5035/.openclaw/openclaw.json')
-    if openclaw_json.exists():
-        d = json.loads(openclaw_json.read_text())
-        for k, v in (d.get('env') or {}).items():
-            if isinstance(v, str):
-                os.environ.setdefault(k, v)
-    for p in [
-        Path('/home/wlsdud5035/.openclaw/.env'),
-        Path('/home/wlsdud5035/.openclaw/workspace/skills/kiwoom-api/.env'),
-    ]:
-        if not p.exists():
-            continue
-        for line in p.read_text().splitlines():
-            if '=' in line and not line.startswith('#'):
-                k, _, v = line.partition('=')
-                os.environ.setdefault(k.strip(), v.strip())
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from common.env_loader import load_env
+from common.telegram import send_telegram as _tg_send
+from common.supabase_client import get_supabase
 
-_load_env()
+load_env()
 
 sys.path.insert(0, str(Path(__file__).parent))
 from kiwoom_client import KiwoomClient
-from supabase import create_client
 
 # ─────────────────────────────────────────────
 # 설정
 # ─────────────────────────────────────────────
-TG_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
-TG_CHAT = os.environ.get('TELEGRAM_CHAT_ID', '')
 OPENAI_KEY = os.environ.get('OPENAI_API_KEY', '')
-SUPABASE_URL = os.environ.get('SUPABASE_URL', '')
-SUPABASE_KEY = os.environ.get('SUPABASE_SECRET_KEY', '')
 
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+supabase = get_supabase()
 kiwoom = KiwoomClient()
 
 RISK = {
-    "invest_ratio": 0.25,        # 종목당 잔고의 25% (공격적)
-    "stop_loss": -0.02,          # 손절 -2% (빠른 손절)
-    "take_profit": 0.10,         # 고정 익절 +10% (트레일링 보완용)
-    "trailing_stop": 0.015,      # 트레일링 스탑 1.5%
-    "trailing_activate": 0.01,   # 수익 1% 이상일 때만 트레일링 활성화
-    "min_confidence": 70,        # 최소 신뢰도 70%
-    "max_positions": 5,          # 최대 동시 5종목
-    "max_daily_loss": -0.08,     # 일일 손실 한도 -8%
-    "max_trades_per_day": 2,     # 하루 신규 매수 최대 2건
-    "split_ratios": [0.50, 0.30, 0.20],  # 1차에 50% 공격적
-    "split_rsi_thresholds": [45, 38, 30],  # RSI 기준 완화
-    "min_order_krw": 30000,      # 최소 주문금액
-    "cooldown_minutes": 15,      # 쿨다운 15분
-    "min_hours_between_splits": 4,  # 분할매수 간 최소 간격(시간)
-    # 매매 비용 (수수료/거래세)
-    "fee_buy": 0.00015,          # 매수 수수료 0.015%
-    "fee_sell": 0.00015,         # 매도 수수료 0.015%
-    "tax_sell": 0.0018,          # 매도 거래세 0.18%
+    "invest_ratio": 0.25,
+    "stop_loss": -0.025,         # 비용 반영: -2% 실질 -> -2.5% 기준
+    "take_profit": 0.08,         # 10% -> 8% (빠른 수익 확정)
+    "trailing_stop": 0.015,
+    "trailing_activate": 0.015,  # 1.5% 이상일 때 트레일링 활성화
+    "min_confidence": 65,        # 70 -> 65 완화
+    "max_positions": 5,
+    "max_daily_loss": -0.08,
+    "max_trades_per_day": 3,     # 2 -> 3 확대
+    "split_ratios": [0.50, 0.30, 0.20],
+    "split_rsi_thresholds": [50, 42, 35],  # 45/38/30 -> 50/42/35 완화
+    "min_order_krw": 30000,
+    "cooldown_minutes": 10,      # 15 -> 10분 단축
+    "min_hours_between_splits": 3,
+    # round-trip 비용: 매수 0.015% + 매도 0.015% + 세금 0.18% = ~0.21%
+    "fee_buy": 0.00015,
+    "fee_sell": 0.00015,
+    "tax_sell": 0.0018,
+    "round_trip_cost": 0.0021,
 }
 
-# 룰 기반 매매 기준 (AI fallback) — v3 공격적
 RULES = {
-    "buy_rsi_max": 35,
-    "buy_bb_max": 40,
+    "buy_rsi_max": 45,           # 35 -> 45 완화 (모멘텀+RSI 복합 스코어로 전환)
+    "buy_bb_max": 50,            # 40 -> 50 완화
     "buy_vol_min": 0.7,
-    "sell_rsi_min": 65,
-    "sell_bb_min": 75,
+    "buy_momentum_min": 50,      # 모멘텀 스코어 최소 기준 추가
+    "sell_rsi_min": 70,          # 65 -> 70 (수익 더 먹게)
+    "sell_bb_min": 80,           # 75 -> 80
     "block_vol_below": 0.3,
-    "block_bb_above": 85,
+    "block_bb_above": 90,        # 85 -> 90 완화
     "block_kospi_above": 80,
 }
 
@@ -107,16 +87,7 @@ def log(msg: str, level: str = "INFO"):
 
 
 def send_telegram(msg: str):
-    if not TG_TOKEN or not TG_CHAT:
-        return
-    try:
-        requests.post(
-            f'https://api.telegram.org/bot{TG_TOKEN}/sendMessage',
-            json={'chat_id': TG_CHAT, 'text': msg, 'parse_mode': 'HTML'},
-            timeout=5,
-        )
-    except Exception as e:
-        log(f'텔레그램 실패: {e}', 'WARN')
+    _tg_send(msg)
 
 
 def is_market_open() -> bool:
@@ -625,10 +596,9 @@ def rule_based_signal(
     weekly: dict = None,
     has_position: bool = False,
     supply: dict = None,
+    momentum: dict = None,
 ) -> dict:
-    """
-    AI 없이 동작하는 룰 기반 매매 판단 (fallback)
-    """
+    """복합 스코어 룰 기반 매매 판단 (모멘텀+기술+수급)."""
     rsi = indicators.get('rsi', 50)
     macd = indicators.get('macd', 0)
     macd_hist = indicators.get('macd_histogram', 0)
@@ -636,17 +606,18 @@ def rule_based_signal(
     bb_pos = indicators.get('bb_pos', 50)
     kospi_rsi = (kospi or {}).get('rsi', 50)
     trend = (weekly or {}).get('trend', 'UNKNOWN')
+    m_score = (momentum or {}).get('score', 0)
+    m_grade = (momentum or {}).get('grade', 'F')
 
-    # 수급 시그널
     foreign_net = (supply or {}).get('foreign_net', 0)
     inst_net = (supply or {}).get('inst_net', 0)
     supply_signal = 'NEUTRAL'
     if foreign_net > 0 and inst_net > 0:
-        supply_signal = 'STRONG_BUY'  # 외국인+기관 동시 순매수
+        supply_signal = 'STRONG_BUY'
     elif foreign_net > 0 or inst_net > 0:
         supply_signal = 'BUY'
     elif foreign_net < 0 and inst_net < 0:
-        supply_signal = 'SELL'       # 동시 순매도
+        supply_signal = 'SELL'
 
     # ── SELL 조건 ──
     if has_position:
@@ -656,7 +627,9 @@ def rule_based_signal(
         if bb_pos >= RULES['sell_bb_min']:
             sell_reasons.append(f'BB 상단({bb_pos}%)')
         if macd < 0 and macd_hist < 0:
-            sell_reasons.append(f'MACD 음수 전환')
+            sell_reasons.append('MACD 음수 전환')
+        if m_grade in ('D', 'F') and m_score < 30:
+            sell_reasons.append(f'모멘텀 급락({m_grade}:{m_score:.0f})')
 
         if len(sell_reasons) >= 2:
             return {
@@ -673,11 +646,10 @@ def rule_based_signal(
         blocks.append(f'BB 상단({bb_pos}%)')
     if kospi_rsi >= RULES['block_kospi_above']:
         blocks.append(f'코스피 과열({kospi_rsi})')
-    if trend == 'DOWNTREND':
+    if trend == 'DOWNTREND' and rsi > 35:
         blocks.append('주봉 하락추세')
-    # 수급 동시 순매도일 때 신규 매수 차단
     if not has_position and supply_signal == 'SELL':
-        blocks.append('수급 동시 순매도(외국인+기관)')
+        blocks.append('수급 동시 순매도')
 
     if blocks:
         return {
@@ -686,45 +658,58 @@ def rule_based_signal(
             'reason': f'[룰] 매수 차단: {", ".join(blocks)}',
         }
 
-    # ── BUY 조건 ──
-    buy_score = 0
+    # ── 복합 BUY 스코어 (100점 만점) ──
+    cs = 0
     buy_reasons = []
 
-    if rsi <= RULES['buy_rsi_max']:
-        buy_score += 30
-        buy_reasons.append(f'RSI 저점({rsi})')
-    if bb_pos <= RULES['buy_bb_max']:
-        buy_score += 20
-        buy_reasons.append(f'BB 하단({bb_pos}%)')
-    if macd > 0 or macd_hist > 0:
-        buy_score += 15
-        buy_reasons.append('MACD 양수')
-    if vol_ratio >= 1.5:
-        buy_score += 10
-        buy_reasons.append(f'거래량 증가({vol_ratio}배)')
+    # 1) 모멘텀 (35점)
+    if m_grade == 'A':
+        cs += 35; buy_reasons.append(f'모멘텀A({m_score:.0f})')
+    elif m_grade == 'B':
+        cs += 25; buy_reasons.append(f'모멘텀B({m_score:.0f})')
+    elif m_grade == 'C':
+        cs += 15; buy_reasons.append(f'모멘텀C({m_score:.0f})')
+
+    # 2) RSI (20점)
+    if rsi <= 30:
+        cs += 20; buy_reasons.append(f'RSI과매도({rsi:.0f})')
+    elif rsi <= 40:
+        cs += 15; buy_reasons.append(f'RSI저점({rsi:.0f})')
+    elif rsi <= 50:
+        cs += 10; buy_reasons.append(f'RSI중립({rsi:.0f})')
+
+    # 3) BB (15점)
+    if bb_pos <= 25:
+        cs += 15; buy_reasons.append(f'BB하단({bb_pos:.0f}%)')
+    elif bb_pos <= 45:
+        cs += 10; buy_reasons.append(f'BB중간({bb_pos:.0f}%)')
+
+    # 4) 거래량 (10점)
+    if vol_ratio >= 2.0:
+        cs += 10; buy_reasons.append(f'거래량급증({vol_ratio:.1f}x)')
+    elif vol_ratio >= 1.2:
+        cs += 7; buy_reasons.append(f'거래량증가({vol_ratio:.1f}x)')
+
+    # 5) 추세 (10점)
     if trend == 'UPTREND':
-        buy_score += 10
-        buy_reasons.append('주봉 상승추세')
-    if kospi_rsi <= 30:
-        buy_score += 10
-        buy_reasons.append(f'코스피 공포({kospi_rsi})')
+        cs += 10; buy_reasons.append('상승추세')
+    elif trend == 'SIDEWAYS':
+        cs += 5
 
-    # 수급 우호 시 가산점
+    # 6) 수급 (10점)
     if supply_signal == 'STRONG_BUY':
-        buy_score += 25
-        buy_reasons.append('외국인+기관 동시 순매수')
+        cs += 10; buy_reasons.append('수급 동시매수')
     elif supply_signal == 'BUY':
-        buy_score += 15
-        buy_reasons.append('수급 우호(외국인/기관 순매수)')
+        cs += 5; buy_reasons.append('수급 우호')
 
-    if buy_score >= 50:
+    if cs >= 50:
         return {
             'action': 'BUY',
-            'confidence': min(buy_score + 20, 95),
-            'reason': f'[룰] {" + ".join(buy_reasons)}',
+            'confidence': min(cs + 15, 95),
+            'reason': f'[룰] 복합{cs}점: {" + ".join(buy_reasons[:4])}',
         }
 
-    return {'action': 'HOLD', 'confidence': 0, 'reason': '[룰] 조건 미충족'}
+    return {'action': 'HOLD', 'confidence': 0, 'reason': f'[룰] 복합{cs}점 미달'}
 
 
 def analyze_with_ai(
@@ -738,10 +723,10 @@ def analyze_with_ai(
     supply: dict = None,
 ) -> dict:
     """AI 분석 (실패 시 룰 기반 fallback)"""
-    # AI 키가 없으면 바로 룰 기반
     if not OPENAI_KEY:
         log('OpenAI 키 없음 → 룰 기반 판단', 'WARN')
-        return rule_based_signal(indicators, kospi, weekly, has_position, supply)
+        momentum = calc_momentum_score(stock['code'])
+        return rule_based_signal(indicators, kospi, weekly, has_position, supply, momentum)
 
     try:
         from openai import OpenAI
@@ -836,7 +821,7 @@ def analyze_with_ai(
 
     except Exception as e:
         log(f'AI 분석 실패 → 룰 기반 fallback: {e}', 'WARN')
-        result = rule_based_signal(indicators, kospi, weekly, has_position, supply)
+        result = rule_based_signal(indicators, kospi, weekly, has_position, supply, momentum)
         result['source'] = 'RULE_FALLBACK'
         return result
 
@@ -893,7 +878,8 @@ def get_trading_signal(
         log(f'AI 분석 실패: {e}', 'WARN')
 
     # 3차: 룰 기반
-    return rule_based_signal(indicators, kospi, weekly, has_position, supply)
+    momentum = calc_momentum_score(stock['code'])
+    return rule_based_signal(indicators, kospi, weekly, has_position, supply, momentum)
 
 
 # ─────────────────────────────────────────────

@@ -3,6 +3,7 @@
 __pycache__/
 *.pyc
 *.pyo
+*.pkl
 .DS_Store
 logs/
 *.egg-info/
@@ -11,4 +12,7 @@ venv/
 node_modules/
 *.bak
 *.v1.*
+archive/
+secretary/.venv/
+brain/kiwoom_token.json
 /home/wlsdud5035/.openclaw/openclaw.json
