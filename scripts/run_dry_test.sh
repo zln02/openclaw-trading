@@ -17,4 +17,4 @@ for k, v in d.get('env', {}).items():
 " 2>/dev/null)
 export DRY_RUN=1
 cd "$WORKSPACE"
-python3 btc_trading_agent.py
+exec .venv/bin/python btc/btc_trading_agent.py

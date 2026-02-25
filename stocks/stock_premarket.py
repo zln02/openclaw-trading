@@ -289,6 +289,122 @@ def get_stock_indicators() -> list:
     return results
 
 
+def get_fundamental_scores() -> dict:
+    """재무제표 기반 펀더멘털 점수 (종목코드 → dict)"""
+    if not supabase:
+        return {}
+    try:
+        codes = [s["code"] for s in WATCHLIST]
+        rows = (
+            supabase.table("financial_statements")
+            .select(
+                "stock_code,fiscal_year,revenue,operating_profit,net_income,total_assets,total_liabilities,total_equity"
+            )
+            .in_("stock_code", codes)
+            .execute()
+            .data
+            or []
+        )
+        if not rows:
+            return {}
+
+        latest = {}
+        for r in rows:
+            code = r.get("stock_code")
+            fy = r.get("fiscal_year") or 0
+            if not code:
+                continue
+            if code not in latest or fy > (latest[code].get("fiscal_year") or 0):
+                latest[code] = r
+
+        fundamentals = {}
+        for code, r in latest.items():
+            rev = float(r.get("revenue") or 0)
+            op = float(r.get("operating_profit") or 0)
+            ni = float(r.get("net_income") or 0)
+            assets = float(r.get("total_assets") or 0)
+            liab = float(r.get("total_liabilities") or 0)
+            equity = float(r.get("total_equity") or 0)
+
+            roe = (ni / equity * 100) if equity > 0 else None
+            op_margin = (op / rev * 100) if rev > 0 else None
+            debt_ratio = (liab / assets * 100) if assets > 0 else None
+
+            fundamentals[code] = {
+                "code": code,
+                "fiscal_year": r.get("fiscal_year"),
+                "revenue": rev,
+                "operating_profit": op,
+                "net_income": ni,
+                "total_assets": assets,
+                "total_liabilities": liab,
+                "total_equity": equity,
+                "roe": roe,
+                "op_margin": op_margin,
+                "debt_ratio": debt_ratio,
+            }
+
+        def _normalize(values, reverse: bool = False) -> dict:
+            vals = {k: v for k, v in values.items() if v is not None}
+            if not vals:
+                return {k: None for k in values}
+            vmin = min(vals.values())
+            vmax = max(vals.values())
+            if abs(vmax - vmin) < 1e-9:
+                return {k: 50.0 if v is not None else None for k, v in values.items()}
+            scores = {}
+            for k, v in values.items():
+                if v is None:
+                    scores[k] = None
+                    continue
+                s = (v - vmin) / (vmax - vmin) * 100.0
+                scores[k] = 100.0 - s if reverse else s
+            return scores
+
+        roe_vals = {c: f["roe"] for c, f in fundamentals.items()}
+        mar_vals = {c: f["op_margin"] for c, f in fundamentals.items()}
+        debt_vals = {c: f["debt_ratio"] for c, f in fundamentals.items()}
+
+        roe_score = _normalize(roe_vals, reverse=False)
+        mar_score = _normalize(mar_vals, reverse=False)
+        debt_score = _normalize(debt_vals, reverse=True)  # 부채비율은 낮을수록 좋음
+
+        for code, f in fundamentals.items():
+            rp = roe_score.get(code)
+            mp = mar_score.get(code)
+            dp = debt_score.get(code)
+            # 수익성 점수 (ROE 60%, 마진 40%)
+            if rp is not None or mp is not None:
+                parts = []
+                weights = []
+                if rp is not None:
+                    parts.append(rp)
+                    weights.append(0.6)
+                if mp is not None:
+                    parts.append(mp)
+                    weights.append(0.4)
+                prof_score = sum(p * w for p, w in zip(parts, weights)) / sum(weights)
+            else:
+                prof_score = None
+
+            # 안전성 점수 (부채비율 기반)
+            safety_score = dp
+
+            if prof_score is not None and safety_score is not None:
+                fund_score = 0.7 * prof_score + 0.3 * safety_score
+            else:
+                fund_score = prof_score or safety_score
+
+            f["score_profitability"] = round(prof_score, 1) if prof_score is not None else None
+            f["score_safety"] = round(safety_score, 1) if safety_score is not None else None
+            f["score_fundamental"] = round(fund_score, 1) if fund_score is not None else None
+
+        return fundamentals
+    except Exception as e:
+        log(f"펀더멘털 점수 계산 실패: {e}", "WARN")
+        return {}
+
+
 def get_yesterday_results() -> str:
     """전날 매매 결과 요약"""
     if not supabase:
@@ -322,6 +438,7 @@ def analyze_with_ai(
     stocks: list,
     indicators: list,
     yesterday: str,
+    fundamentals: dict,
 ) -> dict:
     """GPT로 오늘 전략 수립"""
     if not OPENAI_KEY:
@@ -346,6 +463,28 @@ def analyze_with_ai(
             if ind['code'] == s['code']
         ) if stocks and indicators else '종목 데이터 없음'
 
+        fundamental_summary = '펀더멘털 데이터 없음'
+        if fundamentals:
+            by_score = [
+                f for f in fundamentals.values()
+                if f.get('score_fundamental') is not None
+            ]
+            by_score.sort(key=lambda x: x['score_fundamental'], reverse=True)
+            lines = []
+            code_to_name = {w['code']: w['name'] for w in WATCHLIST}
+            for f in by_score[:15]:
+                code = f['code']
+                name = code_to_name.get(code, code)
+                fy = f.get('fiscal_year')
+                sf = f.get('score_fundamental')
+                roe = f.get('roe')
+                dr = f.get('debt_ratio')
+                lines.append(
+                    f"  {name}({code}) FY{fy}: F{sf:.1f} / ROE {roe:.1f}% / 부채비율 {dr:.1f}%"
+                )
+            if lines:
+                fundamental_summary = '\n'.join(lines)
+
         prompt = f"""당신은 연평균 수익률 50% 이상의 상위 1% 한국 주식 퀀트 트레이더입니다.
 현재 모의투자 환경이므로 최대한 공격적으로 수익을 추구합니다.
 50개 종목 중 오늘 수익 가능성이 가장 높은 종목을 선별합니다. 보수적 판단은 하지 마세요. 기회가 보이면 BUY로 추천합니다.
@@ -358,6 +497,9 @@ def analyze_with_ai(
 
 [감시 종목 현황 (50종목)]
 {stock_summary}
+
+[기초 체력 (재무제표 기반 상위 종목)]
+{fundamental_summary}
 
 [전일 매매]
 {yesterday}
@@ -483,12 +625,16 @@ def run_premarket():
     indicators = get_stock_indicators()
     log(f'  {len(indicators)}개 종목 지표 계산')
 
+    log('펀더멘털 점수 계산...')
+    fundamentals = get_fundamental_scores()
+    log(f'  펀더멘털 데이터 {len(fundamentals)}개 종목')
+
     yesterday = get_yesterday_results()
     log(f'  {yesterday}')
 
     # 2. AI 전략 수립
     log('전략 수립 중...')
-    strategy = analyze_with_ai(us_market, news, stocks, indicators, yesterday)
+    strategy = analyze_with_ai(us_market, news, stocks, indicators, yesterday, fundamentals)
     log(f"전략 생성 완료 [{strategy.get('source', '?')}]: {strategy.get('market_outlook', '?')}")
 
     # 3. 전략 저장
