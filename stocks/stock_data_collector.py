@@ -231,6 +231,67 @@ def collect_ohlcv():
         )
 
 
+def collect_ohlcv_extended(period: str = '1y'):
+    """yfinance로 TOP_STOCKS 1년치 일봉 수집 → daily_ohlcv"""
+    if not supabase:
+        log('Supabase 미연결', 'ERROR')
+        return
+
+    try:
+        import yfinance as yf
+    except ImportError:
+        log('yfinance 미설치. pip install yfinance', 'ERROR')
+        return
+
+    log(f'확장 OHLCV 수집 시작 ({period})')
+    success = 0
+    fail = 0
+    total = 0
+
+    for stock in TOP_STOCKS:
+        code = stock['code']
+        name = stock['name']
+        try:
+            ticker = yf.Ticker(code + '.KS')
+            hist = ticker.history(period=period)
+
+            if hist.empty:
+                log(f'  {name}: 데이터 없음', 'WARN')
+                fail += 1
+                continue
+
+            rows = []
+            for date, row in hist.iterrows():
+                rows.append({
+                    'stock_code': code,
+                    'date': date.strftime('%Y-%m-%d'),
+                    'open_price': round(float(row['Open']), 0),
+                    'high_price': round(float(row['High']), 0),
+                    'low_price': round(float(row['Low']), 0),
+                    'close_price': round(float(row['Close']), 0),
+                    'volume': int(row['Volume']),
+                })
+
+            # 500개씩 배치 upsert
+            for i in range(0, len(rows), 500):
+                batch = rows[i:i+500]
+                supabase.table('daily_ohlcv').upsert(
+                    batch, on_conflict='stock_code,date'
+                ).execute()
+
+            total += len(rows)
+            success += 1
+            log(f'  {name}: {len(rows)}일치 저장')
+            time.sleep(1.0)  # yfinance rate limit
+
+        except Exception as e:
+            log(f'  {name} 실패: {e}', 'ERROR')
+            fail += 1
+            continue
+
+    log(f'확장 수집 완료: 성공 {success} / 실패 {fail} / 총 {total}행', 'OK')
+
+
 # ─────────────────────────────────────────────
 # 분봉 데이터 수집 (NEW)
 # ─────────────────────────────────────────────
@@ -501,6 +562,8 @@ if __name__ == '__main__':
         collect_intraday()
     if cmd == 'cleanup':
         cleanup_old_data()
+    if cmd == 'extended':
+        collect_ohlcv_extended('1y')
     if cmd == 'all':
         cleanup_old_data()
 
