@@ -5,7 +5,7 @@ OPENCLAW_ENV="/home/wlsdud5035/.openclaw/.env"
 WORKSPACE="/home/wlsdud5035/.openclaw/workspace"
 # OPENAI_API_KEY 등 .env 먼저 로드
 if [ -f "$OPENCLAW_ENV" ]; then set -a; . "$OPENCLAW_ENV"; set +a; fi
-export $(python3 -c "
+export $(.venv/bin/python -c "
 import json, os
 from shlex import quote
 d = json.load(open('$OPENCLAW_JSON'))
@@ -21,4 +21,4 @@ if not os.environ.get('TELEGRAM_BOT_TOKEN'):
 # export DRY_RUN=1   # 실거래 시 주석 처리 유지
 cd "$WORKSPACE"
 echo "[CRON] $(date -Iseconds) USER=$(whoami) ARGS=$@ TG=$([ -n "$TELEGRAM_BOT_TOKEN" ] && echo SET || echo MISSING)" >> /home/wlsdud5035/.openclaw/logs/btc_trading.log
-exec /usr/bin/python3 btc/btc_trading_agent.py "$@"
+exec .venv/bin/python btc/btc_trading_agent.py "$@"

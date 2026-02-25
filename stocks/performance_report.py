@@ -53,13 +53,14 @@ def send_telegram(msg: str):
         pass
 
 
-def get_closed_trades(days: int = 30) -> list:
+def get_closed_trades(days: int = 30, market: str = "kr") -> list:
     """최근 N일 CLOSED 거래 조회"""
     if not supabase:
         return []
+    table = 'us_trade_executions' if market == 'us' else 'trade_executions'
     cutoff = (datetime.now() - timedelta(days=days)).isoformat()
     trades = (
-        supabase.table('trade_executions')
+        supabase.table(table)
         .select('*')
         .in_('result', ['CLOSED', 'CLOSED_MANUAL', 'CLOSED_SYNC'])
         .gte('created_at', cutoff)
@@ -71,23 +72,24 @@ def get_closed_trades(days: int = 30) -> list:
     return trades
 
 
-def calc_trade_pnl(trades: list) -> list:
+def calc_trade_pnl(trades: list, market: str = "kr") -> list:
     """거래별 수익률 계산"""
     results = []
     for t in trades:
         entry = float(t.get('entry_price') or t.get('price') or 0)
         exit_price = float(t.get('exit_price') or t.get('price') or 0)
-        qty = int(t.get('quantity', 0))
+        qty = float(t.get('quantity', 0))
         if entry <= 0 or qty <= 0:
             continue
 
         pnl_pct = (exit_price - entry) / entry * 100
-        pnl_krw = (exit_price - entry) * qty
+        pnl_amount = (exit_price - entry) * qty
+        name = t.get('stock_name') or t.get('symbol') or t.get('stock_code') or '?'
         results.append(
             {
-                'name': t.get('stock_name', t.get('stock_code', '?')),
+                'name': name,
                 'pnl_pct': pnl_pct,
-                'pnl_krw': pnl_krw,
+                'pnl_krw': pnl_amount,
                 'date': t.get('created_at', '')[:10],
                 'type': t.get('result', ''),
             }
@@ -164,29 +166,29 @@ def calc_metrics(pnl_list: list) -> dict:
     }
 
 
-def generate_report():
+def generate_report(market: str = "kr"):
     """성과 리포트 생성 + 텔레그램 발송"""
-    # 오늘 거래
-    today_trades = get_closed_trades(days=1)
-    today_pnl = calc_trade_pnl(today_trades)
+    label = "🇺🇸 US" if market == "us" else "🇰🇷 KR"
+    currency = "$" if market == "us" else "원"
+
+    today_trades = get_closed_trades(days=1, market=market)
+    today_pnl = calc_trade_pnl(today_trades, market)
     today_metrics = calc_metrics(today_pnl)
 
-    # 주간 거래
-    week_trades = get_closed_trades(days=7)
-    week_pnl = calc_trade_pnl(week_trades)
+    week_trades = get_closed_trades(days=7, market=market)
+    week_pnl = calc_trade_pnl(week_trades, market)
     week_metrics = calc_metrics(week_pnl)
 
-    # 월간 거래
-    month_trades = get_closed_trades(days=30)
-    month_pnl = calc_trade_pnl(month_trades)
+    month_trades = get_closed_trades(days=30, market=market)
+    month_pnl = calc_trade_pnl(month_trades, market)
     month_metrics = calc_metrics(month_pnl)
 
-    def format_section(label, m):
+    def format_section(sec_label, m):
         if not m:
-            return f"\n<b>{label}</b>\n  거래 없음"
+            return f"\n<b>{sec_label}</b>\n  거래 없음"
         pf_display = f"{m['profit_factor']}" if m['profit_factor'] < 100 else "∞"
         return (
-            f"\n<b>{label}</b>\n"
+            f"\n<b>{sec_label}</b>\n"
             f"  거래: {m['total_trades']}건 (승 {m['win_count']} / 패 {m['loss_count']})\n"
             f"  승률: {m['win_rate']}%\n"
             f"  평균수익: {m['avg_win']:+.2f}% / 평균손실: {m['avg_loss']:.2f}%\n"
@@ -194,10 +196,10 @@ def generate_report():
             f"  샤프비율: {m['sharpe']}\n"
             f"  MDD: -{m['mdd']:.2f}%\n"
             f"  최고: {m['best_trade']:+.2f}% / 최저: {m['worst_trade']:.2f}%\n"
-            f"  누적: {m['total_pnl_pct']:+.2f}% ({m['total_pnl_krw']:+,.0f}원)"
+            f"  누적: {m['total_pnl_pct']:+.2f}% ({m['total_pnl_krw']:+,.0f}{currency})"
         )
 
-    msg = f"📊 <b>성과 리포트</b> ({datetime.now().strftime('%Y-%m-%d')})"
+    msg = f"📊 <b>{label} 성과 리포트</b> ({datetime.now().strftime('%Y-%m-%d')})"
     msg += format_section("📅 오늘", today_metrics)
     msg += format_section("📆 주간 (7일)", week_metrics)
     msg += format_section("📈 월간 (30일)", month_metrics)
@@ -231,5 +233,7 @@ def generate_report():
 
 
 if __name__ == '__main__':
-    generate_report()
+    import sys
+    mkt = sys.argv[1] if len(sys.argv) > 1 else "kr"
+    generate_report(market=mkt)
 

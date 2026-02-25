@@ -37,17 +37,21 @@ client  = OpenAI(api_key=OPENAI_KEY)
 # ── 리스크 설정 ───────────────────────────────────
 RISK = {
     "split_ratios":    [0.30, 0.30, 0.30],
-    "split_rsi":       [50,   42,   35  ],   # 완화: 45/38/30 -> 50/42/35
+    "split_rsi":       [55,   45,   35  ],
     "invest_ratio":     0.30,
     "stop_loss":       -0.03,
     "take_profit":      0.15,
     "trailing_stop":    0.02,
     "trailing_activate":0.015,
     "max_daily_loss":  -0.10,
-    "min_confidence":   65,                  # 완화: 70 -> 65
+    "min_confidence":   65,
     "max_trades_per_day": 3,
     "fee_buy":          0.001,
     "fee_sell":         0.001,
+    "buy_composite_min": 45,
+    "sell_composite_max": 20,
+    "timecut_days":      7,
+    "cooldown_minutes":  30,
 }
 
 # ── 텔레그램 ──────────────────────────────────────
@@ -187,6 +191,94 @@ def get_kimchi_premium():
         print(f"[ERROR] 김치 프리미엄: {e}")
         return None
 
+# ── 일봉 모멘텀 분석 ─────────────────────────────
+def get_daily_momentum() -> dict:
+    """yfinance BTC-USD 일봉으로 RSI/BB/거래량/수익률 분석."""
+    try:
+        import yfinance as yf
+        df = yf.download("BTC-USD", period="90d", interval="1d", progress=False)
+        if df.empty:
+            return {"rsi_d": 50, "bb_pct": 50, "vol_ratio_d": 1.0,
+                    "ret_7d": 0, "ret_30d": 0}
+        close = df["Close"].squeeze()
+        from ta.momentum import RSIIndicator
+        from ta.volatility import BollingerBands
+        rsi_d = RSIIndicator(close, window=14).rsi().iloc[-1]
+        bb = BollingerBands(close, window=20)
+        bb_h, bb_l = bb.bollinger_hband().iloc[-1], bb.bollinger_lband().iloc[-1]
+        bb_pct = (close.iloc[-1] - bb_l) / (bb_h - bb_l) * 100 if bb_h > bb_l else 50
+        vol = df["Volume"].squeeze()
+        vol_avg = vol.rolling(20).mean().iloc[-1]
+        vol_ratio_d = vol.iloc[-1] / vol_avg if vol_avg > 0 else 1.0
+        ret_7d = (close.iloc[-1] / close.iloc[-8] - 1) * 100 if len(close) > 8 else 0
+        ret_30d = (close.iloc[-1] / close.iloc[-31] - 1) * 100 if len(close) > 31 else 0
+        return {
+            "rsi_d": round(float(rsi_d), 1),
+            "bb_pct": round(float(bb_pct), 1),
+            "vol_ratio_d": round(float(vol_ratio_d), 2),
+            "ret_7d": round(float(ret_7d), 1),
+            "ret_30d": round(float(ret_30d), 1),
+        }
+    except Exception as e:
+        print(f"일봉 모멘텀 조회 실패: {e}")
+        return {"rsi_d": 50, "bb_pct": 50, "vol_ratio_d": 1.0,
+                "ret_7d": 0, "ret_30d": 0}
+
+
+# ── BTC 복합 스코어 ──────────────────────────────
+def calc_btc_composite(fg_value, rsi_d, bb_pct, vol_ratio_d, trend, ret_7d=0):
+    """
+    BTC 매수 복합 스코어 (0~100).
+    F&G 30점 + RSI일봉 25점 + BB 15점 + 거래량 15점 + 추세 15점.
+    """
+    # F&G (낮을수록 매수 기회, 최대 30)
+    if fg_value <= 10:   fg_sc = 30
+    elif fg_value <= 20: fg_sc = 25
+    elif fg_value <= 30: fg_sc = 18
+    elif fg_value <= 45: fg_sc = 10
+    elif fg_value <= 55: fg_sc = 5
+    else:                fg_sc = 0
+
+    # 일봉 RSI (낮을수록 매수, 최대 25)
+    if rsi_d <= 30:   rsi_sc = 25
+    elif rsi_d <= 38:  rsi_sc = 20
+    elif rsi_d <= 45:  rsi_sc = 15
+    elif rsi_d <= 55:  rsi_sc = 8
+    elif rsi_d <= 65:  rsi_sc = 3
+    else:              rsi_sc = 0
+
+    # BB 포지션 (하단일수록 매수, 최대 15)
+    if bb_pct <= 10:   bb_sc = 15
+    elif bb_pct <= 25: bb_sc = 12
+    elif bb_pct <= 40: bb_sc = 8
+    elif bb_pct <= 55: bb_sc = 4
+    else:              bb_sc = 0
+
+    # 일봉 거래량 (높을수록 확신, 최대 15)
+    if vol_ratio_d >= 2.0:   vol_sc = 15
+    elif vol_ratio_d >= 1.5: vol_sc = 12
+    elif vol_ratio_d >= 1.0: vol_sc = 8
+    elif vol_ratio_d >= 0.6: vol_sc = 4
+    else:                    vol_sc = 0
+
+    # 추세 (최대 15)
+    if trend == "UPTREND":    tr_sc = 15
+    elif trend == "SIDEWAYS": tr_sc = 8
+    else:                     tr_sc = 0
+
+    # 7일 하락 시 보너스 (과매도 반등 기대)
+    bonus = 0
+    if ret_7d <= -15: bonus = 5
+    elif ret_7d <= -10: bonus = 3
+
+    total = min(fg_sc + rsi_sc + bb_sc + vol_sc + tr_sc + bonus, 100)
+    return {
+        "total": total,
+        "fg": fg_sc, "rsi": rsi_sc, "bb": bb_sc,
+        "vol": vol_sc, "trend": tr_sc, "bonus": bonus,
+    }
+
+
 # ── 포지션 관리 ───────────────────────────────────
 def get_open_position():
     try:
@@ -197,18 +289,25 @@ def get_open_position():
     except Exception:
         return None
 
-def open_position(entry_price, quantity, entry_krw):
+def open_position(entry_price, quantity, entry_krw) -> bool:
+    row = {
+        "entry_price": entry_price,
+        "entry_time":  datetime.now().isoformat(),
+        "quantity":    quantity,
+        "entry_krw":   entry_krw,
+        "status":      "OPEN",
+    }
     try:
-        supabase.table("btc_position").insert({
-            "entry_price": entry_price,
-            "entry_time":  datetime.now().isoformat(),
-            "quantity":    quantity,
-            "entry_krw":   entry_krw,
-            "highest_price": entry_price,
-            "status":      "OPEN",
-        }).execute()
+        supabase.table("btc_position").insert({**row, "highest_price": entry_price}).execute()
+        return True
+    except Exception:
+        pass
+    try:
+        supabase.table("btc_position").insert(row).execute()
+        return True
     except Exception as e:
         print(f"포지션 오픈 실패: {e}")
+        return False
 
 def close_all_positions(exit_price):
     try:
@@ -265,8 +364,8 @@ def analyze_with_ai(indicators, news_summary, fg, htf, volume) -> dict:
     else:
         vol_comment = f"➡️ 거래량 보통({volume['ratio']}배)"
 
-    prompt = f"""당신은 보수적인 비트코인 퀀트 트레이더입니다.
-아래 데이터를 분석해 매매 신호를 JSON으로만 출력하세요.
+    prompt = f"""당신은 비트코인 퀀트 트레이더입니다.
+아래 데이터로 매매 신호를 JSON으로만 출력하세요.
 
 [5분봉 지표]
 {json.dumps(indicators, ensure_ascii=False)}
@@ -280,27 +379,25 @@ def analyze_with_ai(indicators, news_summary, fg, htf, volume) -> dict:
 [시장 심리]
 {fg['msg']}
 
-[매매 규칙 — 반드시 준수]
-- BUY 조건 (모두 충족):
-  1. 1시간봉 UPTREND 또는 SIDEWAYS
-  2. 5분봉 RSI 45 이하
-  3. 5분봉 MACD 상승 중 (양수)
-  4. Fear&Greed 55 이하
-  5. 거래량 0.5배 이하면 BUY 금지
-     거래량 2배 이상이면 신뢰도 +10
+[매매 규칙]
+- BUY 조건:
+  1. 1시간봉 DOWNTREND가 아닐 것
+  2. Fear&Greed <= 55 (공포 구간 우선 매수)
+  3. 거래량 0.3배 이하면 BUY 금지 (단, F&G<=20이면 면제)
+  4. 거래량 2배 이상이면 신뢰도 +10
+  5. F&G <= 25 구간은 적극 매수 (역발상)
 
-- SELL 조건 (하나라도 해당):
-  1. 1시간봉 DOWNTREND
-  2. 5분봉 RSI 70 이상
-  3. Fear&Greed 75 이상
+- SELL 조건 (하나라도):
+  1. 1시간봉 DOWNTREND + RSI 65 이상
+  2. Fear&Greed >= 75
 
-- HOLD: 위 조건 미충족
-- 신뢰도 65% 미만 → 무조건 HOLD
+- HOLD: 위 미충족 또는 불확실
+- 신뢰도 65% 미만 → HOLD
 
 [최근 뉴스]
 {news_summary}
 
-[출력 형식 - JSON만, 다른 텍스트 금지]
+[출력 형식 - JSON만]
 {{"action":"BUY또는SELL또는HOLD","confidence":0~100,"reason":"한줄근거"}}"""
 
     try:
@@ -317,28 +414,24 @@ def analyze_with_ai(indicators, news_summary, fg, htf, volume) -> dict:
         print(f"AI 분석 실패: {e}")
         return {"action": "HOLD", "confidence": 0, "reason": "AI 오류"}
 
-# ── 분할 매수 단계 ────────────────────────────────
-def get_split_stage(rsi: float) -> int:
-    if rsi <= 35: return 3
-    if rsi <= 42: return 2
-    if rsi <= 50: return 1
-    return 0
+# ── 분할 매수 단계 (복합 스코어 기반) ─────────────
+def get_split_stage(composite_total: float) -> int:
+    """복합 스코어가 높을수록 큰 비중으로 매수."""
+    if composite_total >= 70: return 3
+    if composite_total >= 55: return 2
+    return 1
 
 # ── 주문 실행 ─────────────────────────────────────
-def execute_trade(signal, indicators, fg=None, volume=None) -> dict:
+def execute_trade(signal, indicators, fg=None, volume=None, comp=None) -> dict:
 
-    # ── 코드 레벨 강제 필터 ──
+    # ── 코드 레벨 안전 필터 (복합 스코어 기반) ──
     if signal["action"] == "BUY":
-        if indicators["rsi"] > 55:
-            print(f"⚠️ RSI {indicators['rsi']} > 55 — BUY 차단")
-            return {"result": "BLOCKED_RSI"}
-        if fg and fg["value"] > 60:
-            print(f"⚠️ F&G {fg['value']} > 60 — BUY 차단")
+        if fg and fg["value"] > 75:
+            print(f"⚠️ F&G {fg['value']} > 75 (극도 탐욕) — BUY 차단")
             return {"result": "BLOCKED_FG"}
-        # Extreme Fear(<20)이면 거래량 필터 면제
         is_extreme_fear = fg and fg["value"] <= 20
-        if volume and volume["ratio"] <= 0.3 and not is_extreme_fear:
-            print(f"⚠️ 거래량 {volume['ratio']}배 급감 — BUY 차단")
+        if volume and volume["ratio"] <= 0.15 and not is_extreme_fear:
+            print(f"⚠️ 5분봉 거래량 {volume['ratio']}x 거의 0 — BUY 차단")
             return {"result": "BLOCKED_VOLUME"}
 
     # ── 신뢰도 필터 ──
@@ -357,17 +450,17 @@ def execute_trade(signal, indicators, fg=None, volume=None) -> dict:
         fee_cost = RISK["fee_buy"] + RISK["fee_sell"]
         net_change = change - fee_cost
 
-        # 고점 추적 (highest_price)
+        # 고점 추적 (highest_price — 컬럼 없으면 무시)
         highest = float(pos.get("highest_price") or entry_price)
         if price > highest:
             highest = price
-            try:
-                if not DRY_RUN:
+            if not DRY_RUN:
+                try:
                     supabase.table("btc_position").update(
                         {"highest_price": highest}
                     ).eq("id", pos["id"]).execute()
-            except Exception as e:
-                print(f"highest_price 업데이트 실패: {e}")
+                except Exception:
+                    pass
 
         # 트레일링 스탑: 수익 1.5% 이상 구간에서 고점 대비 2% 이상 하락
         if net_change > RISK["trailing_activate"] and highest > 0:
@@ -411,7 +504,8 @@ def execute_trade(signal, indicators, fg=None, volume=None) -> dict:
 
     # ── 분할 매수 ──
     if signal["action"] == "BUY":
-        stage      = get_split_stage(indicators["rsi"])
+        comp_total = comp["total"] if comp else 50
+        stage      = get_split_stage(comp_total)
         invest_krw = krw_balance * RISK["split_ratios"][stage - 1]
 
         if invest_krw < 5000:
@@ -420,7 +514,15 @@ def execute_trade(signal, indicators, fg=None, volume=None) -> dict:
         if not DRY_RUN:
             result = upbit.buy_market_order("KRW-BTC", invest_krw)
             qty    = float(result.get("executed_volume", 0)) or (invest_krw / price)
-            open_position(price, qty, invest_krw)
+            ok = open_position(price, qty, invest_krw)
+            if not ok:
+                print("⚠️ 포지션 기록 실패 → 즉시 되팔기")
+                try:
+                    upbit.sell_market_order("KRW-BTC", qty * 0.9995)
+                except Exception as e2:
+                    print(f"되팔기도 실패: {e2}")
+                send_telegram("🚨 BTC 매수 후 포지션 기록 실패 → 자동 되팔기 시도")
+                return {"result": "POSITION_ROLLBACK"}
         else:
             print(f"[DRY_RUN] {stage}차 매수 — {invest_krw:,.0f}원")
 
@@ -496,77 +598,99 @@ def run_trading_cycle():
     volume     = get_volume_analysis(df)
     fg         = get_fear_greed()
     htf        = get_hourly_trend()
+    momentum   = get_daily_momentum()
     news       = get_news_summary()
     pos        = get_open_position()
+    kimchi     = get_kimchi_premium()
 
-    print(f"Fear & Greed: {fg['label']}({fg['value']})")
-    print(f"1시간봉 추세: {htf['trend']}")
-    print(f"거래량: {volume['label']} (평균比 {volume['ratio']}배)")
+    fg_value = fg["value"]
+    rsi_5m   = indicators["rsi"]
+    rsi_d    = momentum["rsi_d"]
+
+    comp = calc_btc_composite(
+        fg_value, rsi_d, momentum["bb_pct"],
+        momentum["vol_ratio_d"], htf["trend"], momentum["ret_7d"]
+    )
+
+    print(f"Fear & Greed: {fg['label']}({fg_value})")
+    print(f"1시간봉 추세: {htf['trend']} | 일봉 RSI: {rsi_d} | 5분봉 RSI: {rsi_5m}")
+    print(f"BB 포지션: {momentum['bb_pct']:.0f}% | 일봉 거래량: {momentum['vol_ratio_d']}x")
+    print(f"7일 수익률: {momentum['ret_7d']:+.1f}% | 30일: {momentum['ret_30d']:+.1f}%")
+    print(f"복합스코어: {comp['total']}/100 (F&G:{comp['fg']} RSI:{comp['rsi']} BB:{comp['bb']} Vol:{comp['vol']} Trend:{comp['trend']} Bonus:{comp['bonus']})")
+    print(f"거래량(5분봉): {volume['label']} ({volume['ratio']}x)")
     print(f"포지션: {'있음 @ {:,}원'.format(int(pos['entry_price'])) if pos else '없음 (대기 중)'}")
-    kimchi = get_kimchi_premium()
-    print(f"김치 프리미엄: {kimchi:+.2f}%" if kimchi is not None else "김치 프리미엄: 조회 실패")
-
-    # ── 룰 기반 1차 필터 (AI 전에 먼저 판단) ──
-    fg_value, rsi = fg["value"], indicators["rsi"]
-    volume_ratio = volume["ratio"]
-    rule_signal = None
-
-    # 1) Extreme Fear 공격 매수: F&G <= 20 + RSI <= 40
-    if fg_value <= 20 and rsi <= 40 and htf["trend"] != "DOWNTREND":
-        conf = 80 if fg_value <= 10 else 75 if fg_value <= 15 else 70
-        rule_signal = {
-            "action": "BUY", "confidence": conf,
-            "reason": f"극도공포 F&G={fg_value}, RSI={rsi:.0f} [룰기반]"
-        }
-        print(f"🚨 룰기반 공포매수 발동: F&G={fg_value}, RSI={rsi:.0f}")
-
-    # 2) 기술적 과매도 매수: RSI <= 30 + BB 하단 + 상승/횡보 추세
-    elif rsi <= 30 and htf["trend"] in ("UPTREND", "SIDEWAYS"):
-        bb_lower = indicators.get("bb_lower", 0)
-        price = indicators["price"]
-        if bb_lower > 0 and price <= bb_lower * 1.01:
-            rule_signal = {
-                "action": "BUY", "confidence": 72,
-                "reason": f"과매도+BB하단 RSI={rsi:.0f} [룰기반]"
-            }
-
-    # 3) 기술적 과매수 매도 (포지션 있을 때): RSI >= 75 + 하락 추세
-    elif rsi >= 75 and htf["trend"] == "DOWNTREND":
-        rule_signal = {
-            "action": "SELL", "confidence": 75,
-            "reason": f"과매수+하락추세 RSI={rsi:.0f} [룰기반]"
-        }
-
-    # AI 분석 (룰 기반이 BUY/SELL을 발동하지 않은 경우에만)
-    if rule_signal and rule_signal["action"] != "HOLD":
-        signal = rule_signal
-        print(f"📋 룰 기반 신호 사용: {signal['action']} conf={signal['confidence']}")
-    else:
-        signal = analyze_with_ai(indicators, news, fg, htf, volume)
-
-    # ── 보조 전략 (AI 결과에 추가 보정) ──
-
-    # 변동성 폭발: 거래량 3배 이상
-    if volume_ratio >= 3.0:
-        print(f"💥 거래량 폭발 감지 ({volume_ratio:.1f}배)")
-        if signal["action"] == "BUY":
-            signal["confidence"] = max(signal["confidence"], 75)
-        elif signal["action"] == "HOLD" and indicators["macd"] > 0 and rsi < 60:
-            signal["action"] = "BUY"
-            signal["confidence"] = 70
-            signal["reason"] = signal.get("reason", "") + " [변동성 폭발]"
-
-    # 김치 프리미엄 활용
     if kimchi is not None:
         print(f"🇰🇷 김치 프리미엄: {kimchi:+.2f}%")
-        if kimchi <= -2.0 and signal["action"] == "HOLD" and rsi < 50:
-            signal["action"] = "BUY"
-            signal["confidence"] = max(signal.get("confidence", 0), 70)
-            signal["reason"] = signal.get("reason", "") + f" [김치 저평가 {kimchi:+.2f}%]"
-        elif kimchi >= 5.0 and signal["action"] == "HOLD":
-            signal["reason"] = signal.get("reason", "") + f" [김치 과열 {kimchi:+.2f}% 주의]"
 
-    result = execute_trade(signal, indicators, fg, volume)
+    # ── 복합 스코어 기반 매매 결정 ──
+    signal = None
+    buy_min = RISK["buy_composite_min"]
+
+    # 1) 복합 스코어 매수 (핵심 로직)
+    if comp["total"] >= buy_min and not pos and htf["trend"] != "DOWNTREND":
+        conf = min(60 + comp["total"] - buy_min, 90)
+        signal = {
+            "action": "BUY", "confidence": int(conf),
+            "reason": f"복합스코어 {comp['total']}/{buy_min} (F&G={fg_value}, dRSI={rsi_d}) [룰기반]"
+        }
+        print(f"🚨 복합스코어 매수 발동: {comp['total']}점 >= {buy_min}")
+
+    # 2) 극단 공포 오버라이드: F&G<=15면 일봉 RSI<=55까지 매수 허용
+    elif fg_value <= 15 and rsi_d <= 55 and not pos and htf["trend"] != "DOWNTREND":
+        signal = {
+            "action": "BUY", "confidence": 78,
+            "reason": f"극도공포 오버라이드 F&G={fg_value}, dRSI={rsi_d} [룰기반]"
+        }
+        print(f"🚨 극도공포 오버라이드: F&G={fg_value}, dRSI={rsi_d}")
+
+    # 3) 기술적 과매수 매도: 일봉 RSI>=75 + 하락 추세
+    elif rsi_d >= 75 and htf["trend"] == "DOWNTREND" and pos:
+        signal = {
+            "action": "SELL", "confidence": 78,
+            "reason": f"과매수+하락추세 dRSI={rsi_d:.0f} [룰기반]"
+        }
+
+    # 4) 타임컷: 보유 기간 초과 + 수익 미미
+    if pos and not signal:
+        from datetime import timedelta
+        entry_dt = datetime.fromisoformat(pos["entry_time"].replace("Z", "+00:00")) \
+            if "Z" in str(pos["entry_time"]) else datetime.fromisoformat(str(pos["entry_time"]))
+        held_days = (datetime.now() - entry_dt.replace(tzinfo=None)).days
+        if held_days >= RISK["timecut_days"]:
+            entry_p = float(pos["entry_price"])
+            cur_p = indicators["price"]
+            pnl_pct = (cur_p - entry_p) / entry_p
+            if pnl_pct < 0.02:
+                signal = {
+                    "action": "SELL", "confidence": 70,
+                    "reason": f"타임컷 {held_days}일 보유, 수익 {pnl_pct*100:+.1f}% [룰기반]"
+                }
+                print(f"⏰ 타임컷 발동: {held_days}일, 수익 {pnl_pct*100:+.1f}%")
+
+    # 5) 룰기반 미발동 → AI 분석
+    if not signal:
+        signal = analyze_with_ai(indicators, news, fg, htf, volume)
+
+    # ── 보조 보정 ──
+
+    # 거래량 폭발
+    vol_r = volume["ratio"]
+    if vol_r >= 3.0:
+        print(f"💥 거래량 폭발 감지 ({vol_r:.1f}x)")
+        if signal["action"] == "BUY":
+            signal["confidence"] = max(signal["confidence"], 78)
+        elif signal["action"] == "HOLD" and indicators["macd"] > 0 and rsi_d < 60:
+            signal["action"] = "BUY"
+            signal["confidence"] = 72
+            signal["reason"] += " [거래량 폭발]"
+
+    # 김치 프리미엄 저평가
+    if kimchi is not None and kimchi <= -2.0 and signal["action"] == "HOLD" and rsi_d < 55:
+        signal["action"] = "BUY"
+        signal["confidence"] = max(signal.get("confidence", 0), 72)
+        signal["reason"] += f" [김치 저평가 {kimchi:+.2f}%]"
+
+    result = execute_trade(signal, indicators, fg, volume, comp)
 
     print(f"신호: {signal['action']} (신뢰도: {signal['confidence']}%) → {result['result']}")
 
@@ -623,7 +747,7 @@ if __name__ == "__main__":
             ind = calculate_indicators(df)
             fg = get_fear_greed()
             vol = get_volume_analysis(df)
-            execute_trade({"action": "HOLD", "confidence": 0, "reason": "1분 체크"}, ind, fg, vol)
+            execute_trade({"action": "HOLD", "confidence": 0, "reason": "1분 체크"}, ind, fg, vol, None)
             print(f"[{datetime.now()}] BTC 1분 손절/익절 체크 완료")
         else:
             print(f"[{datetime.now()}] BTC 포지션 없음 — 스킵")

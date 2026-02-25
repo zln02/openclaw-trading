@@ -29,13 +29,14 @@ STOCKS_HTML = """<!DOCTYPE html>
   .nav-tab:hover{color:var(--text);border-color:var(--border);}
   .nav-tab.active{color:var(--accent);border-color:var(--accent);background:rgba(0,212,255,0.08);}
   main{padding:20px 28px;max-width:1600px;margin:0 auto;}
-  .card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:20px;}
+  .card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:20px;transition:border-color 0.2s;}
+  .card:hover{border-color:rgba(0,212,255,0.15);}
   .card-header{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--border);}
   .card-title{font-size:13px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--muted);}
   .card-body{padding:20px;}
   .stock-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px;}
   .stock-card{position:relative;background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:16px;cursor:pointer;transition:border-color 0.2s;}
-  .stock-card:hover{border-color:var(--accent);}
+  .stock-card:hover{border-color:var(--accent);box-shadow:0 0 12px rgba(0,212,255,0.08);}
   .stock-card.selected{border-color:var(--accent);background:rgba(0,212,255,0.05);}
   .stock-label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:6px;font-weight:600;}
   .stock-name{font-size:15px;font-weight:700;margin-bottom:6px;}
@@ -67,17 +68,21 @@ STOCKS_HTML = """<!DOCTYPE html>
   ::-webkit-scrollbar{width:4px;}
   ::-webkit-scrollbar-track{background:var(--bg);}
   ::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px;}
-  @media(max-width:1200px){.stock-grid{grid-template-columns:repeat(2,1fr);}.chart-section{grid-template-columns:1fr;}}
+  @media(max-width:1200px){.stock-grid{grid-template-columns:repeat(2,1fr);}.chart-section{grid-template-columns:1fr;}.portfolio-bar{grid-template-columns:repeat(3,1fr);}}
+  @media(max-width:768px){main{padding:12px;}header{padding:12px 16px;}.stock-grid{grid-template-columns:1fr;}.portfolio-bar{grid-template-columns:repeat(2,1fr);}.port-value{font-size:16px;}}
   @keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.5;transform:scale(.8)}}
   .interval-btn{background:transparent;border:1px solid var(--border);color:var(--muted);font-family:var(--mono);font-size:11px;padding:3px 10px;border-radius:4px;cursor:pointer;transition:all 0.2s;}
   .interval-btn:hover{color:var(--text);border-color:var(--accent);}
   .interval-btn.active{color:var(--accent);border-color:var(--accent);background:rgba(0,212,255,0.08);}
   .portfolio-bar{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:16px;}
-  .port-card{background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);border:1px solid rgba(255,255,255,0.1);border-radius:8px;padding:16px;text-align:center;}
-  .port-label{font-size:12px;color:var(--muted);margin-bottom:4px;}
-  .port-value{font-size:18px;font-weight:bold;color:#fff;}
-  .port-value.kr-up{color:#ff4444;}
+  .port-card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:20px;text-align:center;transition:border-color 0.2s,box-shadow 0.2s;}
+  .port-card:hover{border-color:rgba(0,212,255,0.25);box-shadow:0 0 16px rgba(0,212,255,0.08);}
+  .port-label{font-size:11px;color:var(--muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:1px;font-weight:600;}
+  .port-value{font-family:var(--mono);font-size:20px;font-weight:700;color:var(--text);}
+  .port-value.kr-up{color:var(--red);}
   .port-value.kr-dn{color:#4488ff;}
+  .pnl-gauge{height:4px;background:var(--border);border-radius:2px;margin-top:4px;overflow:hidden;}
+  .pnl-gauge-fill{height:100%;border-radius:2px;transition:width 0.5s ease;}
   .holdings-section{background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:16px;}
   .holdings-section h3{color:var(--text);margin:0 0 12px 0;font-size:14px;}
   .holdings-table{width:100%;border-collapse:collapse;font-size:13px;}
@@ -133,11 +138,11 @@ STOCKS_HTML = """<!DOCTYPE html>
     </div>
 
     <div id="portfolio-summary" class="portfolio-bar">
-      <div class="port-card"><div class="port-label">💰 총 자산</div><div class="port-value" id="total-asset">--</div></div>
-      <div class="port-card"><div class="port-label">📈 총 평가</div><div class="port-value" id="total-eval">--</div></div>
-      <div class="port-card"><div class="port-label">💵 예수금</div><div class="port-value" id="deposit">--</div></div>
-      <div class="port-card"><div class="port-label">📊 누적 수익률</div><div class="port-value" id="cum-pnl">--</div></div>
-      <div class="port-card"><div class="port-label">📅 오늘 수익</div><div class="port-value" id="today-pnl">--</div></div>
+      <div class="port-card"><div class="port-label">총 자산</div><div class="port-value" id="total-asset">--</div></div>
+      <div class="port-card"><div class="port-label">총 평가</div><div class="port-value" id="total-eval">--</div></div>
+      <div class="port-card"><div class="port-label">예수금</div><div class="port-value" id="deposit">--</div></div>
+      <div class="port-card"><div class="port-label">누적 수익률</div><div class="port-value" id="cum-pnl">--</div></div>
+      <div class="port-card"><div class="port-label">오늘 수익</div><div class="port-value" id="today-pnl">--</div></div>
     </div>
 
     <div class="holdings-section">
@@ -151,7 +156,7 @@ STOCKS_HTML = """<!DOCTYPE html>
     <div style="display:grid;grid-template-columns:320px 1fr;gap:16px;margin-bottom:16px;">
       <div class="daily-pnl-section">
         <h3>📈 일별 수익 추이 (7일)</h3>
-        <canvas id="daily-pnl-chart" height="150" style="width:100%;max-width:100%;"></canvas>
+        <div id="daily-pnl-lw" style="width:100%;height:180px;"></div>
       </div>
       <div class="chart-section">
       <div class="card">
@@ -164,8 +169,8 @@ STOCKS_HTML = """<!DOCTYPE html>
             <button type="button" class="interval-btn active" data-interval="1d" onclick="setStockInterval('1d')">일봉</button>
           </div>
         </div>
-        <div id="stock-candle-chart" style="width:100%;height:320px"></div>
-        <div id="stock-volume-chart" style="width:100%;height:80px"></div>
+        <div id="stock-candle-chart" style="width:100%;height:400px"></div>
+        <div id="stock-volume-chart" style="width:100%;height:100px"></div>
         <div id="rsi-chart-container" style="height:80px;margin-top:4px;position:relative;display:none;">
           <canvas id="rsi-chart"></canvas>
           <div style="position:absolute;top:2px;left:8px;font-size:10px;color:#4a5068;">RSI(14)</div>
@@ -264,7 +269,7 @@ let currentStockInterval = '1d';
 lwScript.onload = function() {
   const c = document.getElementById('stock-candle-chart');
   stockChart = LightweightCharts.createChart(c, {
-    width: c.clientWidth, height: 320,
+    width: c.clientWidth, height: 400,
     layout: { background: { color: '#0f1422' }, textColor: '#4a5068' },
     grid: { vertLines: { color: '#1e2537' }, horzLines: { color: '#1e2537' } },
     crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
@@ -282,7 +287,7 @@ lwScript.onload = function() {
 
   const vc = document.getElementById('stock-volume-chart');
   const volChart = LightweightCharts.createChart(vc, {
-    width: vc.clientWidth, height: 80,
+    width: vc.clientWidth, height: 100,
     layout: { background: { color: '#0f1422' }, textColor: '#4a5068' },
     grid: { vertLines: { color: '#1e2537' }, horzLines: { color: '#1e2537' } },
     timeScale: { borderColor: '#1e2537', timeVisible: true },
@@ -345,7 +350,8 @@ function renderHoldings(positions, maxPos) {
       '<td>' + (p.avg_entry || 0).toLocaleString('ko-KR') + '</td>' +
       '<td>' + (p.current_price || 0).toLocaleString('ko-KR') + liveTag + '</td>' +
       '<td>' + (p.evaluation || 0).toLocaleString('ko-KR') + '</td>' +
-      '<td class="' + pnlClass + '">' + pnlSign + (p.pnl_pct || 0) + '%<br><small>(' + pnlSign + (p.pnl_amount || 0).toLocaleString('ko-KR') + '원)</small></td>' +
+      '<td class="' + pnlClass + '">' + pnlSign + (p.pnl_pct || 0) + '%<br><small>(' + pnlSign + (p.pnl_amount || 0).toLocaleString('ko-KR') + '원)</small>' +
+      '<div class="pnl-gauge"><div class="pnl-gauge-fill" style="width:' + Math.min(Math.abs(p.pnl_pct || 0) * 5, 100) + '%;background:' + (p.pnl_pct >= 0 ? 'var(--red)' : '#4488ff') + '"></div></div></td>' +
       '<td>' + (p.split_count || 1) + '차</td></tr>';
   }).join('');
 
@@ -364,64 +370,45 @@ function renderHoldings(positions, maxPos) {
     '<td>' + positions.length + '/' + (maxPos || 5) + '</td></tr>';
 }
 
+let dailyPnlChart = null, dailyPnlSeries = null;
+
+function initDailyPnlChart() {
+  if (dailyPnlChart || typeof LightweightCharts === 'undefined') return;
+  var el = document.getElementById('daily-pnl-lw');
+  if (!el) return;
+  dailyPnlChart = LightweightCharts.createChart(el, {
+    width: el.clientWidth, height: 180,
+    layout: { background: { color: '#0f1422' }, textColor: '#4a5068' },
+    grid: { vertLines: { color: '#1e2537' }, horzLines: { color: '#1e2537' } },
+    timeScale: { borderColor: '#1e2537', timeVisible: false },
+    rightPriceScale: { borderColor: '#1e2537' },
+    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+  });
+  dailyPnlSeries = dailyPnlChart.addBaselineSeries({
+    baseValue: { type: 'price', price: 0 },
+    topLineColor: 'rgba(255,68,68,0.8)',
+    topFillColor1: 'rgba(255,68,68,0.2)',
+    topFillColor2: 'rgba(255,68,68,0.02)',
+    bottomLineColor: 'rgba(68,136,255,0.8)',
+    bottomFillColor1: 'rgba(68,136,255,0.02)',
+    bottomFillColor2: 'rgba(68,136,255,0.2)',
+    lineWidth: 2,
+  });
+}
+
 async function loadDailyPnL() {
   try {
     var res = await fetch('/api/stocks/daily-pnl?days=7');
     var data = await res.json();
     if (!data.daily || data.daily.length === 0) return;
-    var canvas = document.getElementById('daily-pnl-chart');
-    if (!canvas) return;
-    var ctx = canvas.getContext('2d');
-    canvas.width = canvas.parentElement.clientWidth || 300;
-    var w = canvas.width, h = canvas.height;
-    ctx.fillStyle = '#0f1422';
-    ctx.fillRect(0, 0, w, h);
-    var points = data.daily;
-    var values = points.map(function(p){ return p.total_pnl || 0; });
-    var maxVal = Math.max.apply(null, values.map(Math.abs).concat([1]));
-    var padding = { left: 50, right: 20, top: 20, bottom: 28 };
-    var chartW = w - padding.left - padding.right;
-    var chartH = h - padding.top - padding.bottom;
-    var xScale = function(i){ return padding.left + (i / (points.length - 1)) * chartW; };
-    var yScale = function(v){ return padding.top + chartH/2 - (v / maxVal) * (chartH/2); };
-    ctx.beginPath();
-    ctx.strokeStyle = 'rgba(255,255,255,0.15)';
-    ctx.moveTo(padding.left, yScale(0));
-    ctx.lineTo(w - padding.right, yScale(0));
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(xScale(0), yScale(0));
-    points.forEach(function(p, i){ ctx.lineTo(xScale(i), yScale(p.total_pnl || 0)); });
-    ctx.lineTo(xScale(points.length - 1), yScale(0));
-    ctx.closePath();
-    ctx.fillStyle = values[values.length - 1] >= 0 ? 'rgba(255,68,68,0.1)' : 'rgba(68,136,255,0.1)';
-    ctx.fill();
-    ctx.beginPath();
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = values[values.length - 1] >= 0 ? '#ff4444' : '#4488ff';
-    points.forEach(function(p, i){
-      var x = xScale(i), y = yScale(p.total_pnl || 0);
-      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    initDailyPnlChart();
+    if (!dailyPnlSeries) return;
+    var chartData = data.daily.map(function(p) {
+      var d = String(p.date || '');
+      var yr = d.slice(0,4), mo = d.slice(4,6), dy = d.slice(6,8);
+      return { time: yr + '-' + mo + '-' + dy, value: p.total_pnl || 0 };
     });
-    ctx.stroke();
-    ctx.fillStyle = '#4a5068';
-    ctx.font = '10px sans-serif';
-    ctx.textAlign = 'center';
-    points.forEach(function(p, i){
-      if (i % 2 === 0 || i === points.length - 1) {
-        var label = (p.date || '').slice(4, 6) + '/' + (p.date || '').slice(6, 8);
-        ctx.fillText(label, xScale(i), h - 8);
-      }
-      ctx.beginPath();
-      ctx.arc(xScale(i), yScale(p.total_pnl || 0), 3, 0, Math.PI * 2);
-      ctx.fillStyle = (p.total_pnl || 0) >= 0 ? '#ff4444' : '#4488ff';
-      ctx.fill();
-    });
-    var lastPnl = values[values.length - 1];
-    ctx.fillStyle = lastPnl >= 0 ? '#ff4444' : '#4488ff';
-    ctx.font = 'bold 11px sans-serif';
-    ctx.textAlign = 'left';
-    ctx.fillText((lastPnl >= 0 ? '+' : '') + lastPnl.toLocaleString('ko-KR') + '원', xScale(points.length - 1) + 6, yScale(lastPnl) + 4);
+    dailyPnlSeries.setData(chartData);
   } catch(e) { console.error('daily-pnl', e); }
 }
 
@@ -735,10 +722,10 @@ setInterval(function(){ var c=document.getElementById('clock'); if(c) c.textCont
 loadPortfolio().then(function(){ loadStocks(); });
 loadStrategy();
 loadDailyPnL();
-setInterval(loadPortfolio, 30000);
-setInterval(loadStocks, 60000);
-setInterval(loadDailyPnL, 300000);
-setInterval(function(){ if (stocksData.length) stocksData.forEach(function(s){ loadStockIndicators(s.code); }); }, 60000);
+setInterval(loadPortfolio, 15000);
+setInterval(loadStocks, 30000);
+setInterval(loadDailyPnL, 120000);
+setInterval(function(){ if (stocksData.length) stocksData.forEach(function(s){ loadStockIndicators(s.code); }); }, 30000);
 
 async function loadStockLogs() {
   try {
@@ -795,8 +782,8 @@ async function loadStockTradeSummary() {
 
 loadStockLogs();
 loadStockTradeSummary();
-setInterval(loadStockLogs, 30000);
-setInterval(loadStockTradeSummary, 30000);
+setInterval(loadStockLogs, 15000);
+setInterval(loadStockTradeSummary, 15000);
 </script>
 </body>
 </html>"""

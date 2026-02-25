@@ -269,6 +269,97 @@ async def api_us_fx():
         return {"usdkrw": _fx_cache["rate"]}
     return {"usdkrw": 1450}
 
+@app.get("/api/btc/composite")
+async def api_btc_composite():
+    """BTC 복합 스코어 + 일봉 모멘텀 실시간 조회."""
+    try:
+        import yfinance as _yf_c
+        import requests as _req_c
+        from ta.momentum import RSIIndicator as _RSI
+        from ta.volatility import BollingerBands as _BB
+
+        df = _yf_c.download("BTC-USD", period="90d", interval="1d", progress=False)
+        if df.empty:
+            return {"error": "데이터 없음"}
+        close = df["Close"].squeeze()
+        rsi_d = float(_RSI(close, window=14).rsi().iloc[-1])
+        bb = _BB(close, window=20)
+        bb_h, bb_l = float(bb.bollinger_hband().iloc[-1]), float(bb.bollinger_lband().iloc[-1])
+        bb_pct = (float(close.iloc[-1]) - bb_l) / (bb_h - bb_l) * 100 if bb_h > bb_l else 50
+        vol = df["Volume"].squeeze()
+        vol_avg = float(vol.rolling(20).mean().iloc[-1])
+        vol_ratio_d = float(vol.iloc[-1]) / vol_avg if vol_avg > 0 else 1.0
+        ret_7d = (float(close.iloc[-1]) / float(close.iloc[-8]) - 1) * 100 if len(close) > 8 else 0
+        ret_30d = (float(close.iloc[-1]) / float(close.iloc[-31]) - 1) * 100 if len(close) > 31 else 0
+
+        fg_val = 50
+        try:
+            fg_r = _req_c.get("https://api.alternative.me/fng/?limit=1", timeout=5)
+            fg_val = int(fg_r.json()["data"][0]["value"])
+        except Exception:
+            pass
+
+        trend = _get_hourly_trend()
+
+        def _score(fg, rsi, bb_p, vol_r, tr, r7):
+            fg_sc = 30 if fg <= 10 else 25 if fg <= 20 else 18 if fg <= 30 else 10 if fg <= 45 else 5 if fg <= 55 else 0
+            rsi_sc = 25 if rsi <= 30 else 20 if rsi <= 38 else 15 if rsi <= 45 else 8 if rsi <= 55 else 3 if rsi <= 65 else 0
+            bb_sc = 15 if bb_p <= 10 else 12 if bb_p <= 25 else 8 if bb_p <= 40 else 4 if bb_p <= 55 else 0
+            vol_sc = 15 if vol_r >= 2.0 else 12 if vol_r >= 1.5 else 8 if vol_r >= 1.0 else 4 if vol_r >= 0.6 else 0
+            tr_sc = 15 if tr == "UPTREND" else 8 if tr == "SIDEWAYS" else 0
+            bonus = 5 if r7 <= -15 else 3 if r7 <= -10 else 0
+            return {"total": min(fg_sc+rsi_sc+bb_sc+vol_sc+tr_sc+bonus, 100),
+                    "fg": fg_sc, "rsi": rsi_sc, "bb": bb_sc, "vol": vol_sc, "trend": tr_sc, "bonus": bonus}
+
+        comp = _score(fg_val, rsi_d, bb_pct, vol_ratio_d, trend, ret_7d)
+
+        pos = None
+        if supabase:
+            pr = supabase.table("btc_position").select("*").eq("status","OPEN").order("entry_time",desc=True).limit(1).execute()
+            pos = pr.data[0] if pr.data else None
+
+        cur_price = float(close.iloc[-1])
+        pos_pnl = None
+        if pos:
+            entry_p = float(pos.get("entry_price", 0))
+            if entry_p > 0:
+                pos_pnl = {"pnl_pct": round((cur_price * 1450 - entry_p) / entry_p * 100, 2),
+                           "entry_price": entry_p, "quantity": pos.get("quantity", 0),
+                           "entry_krw": pos.get("entry_krw", 0)}
+
+        return {
+            "composite": comp,
+            "fg_value": fg_val, "rsi_d": round(rsi_d, 1), "bb_pct": round(bb_pct, 1),
+            "vol_ratio_d": round(vol_ratio_d, 2), "trend": trend,
+            "ret_7d": round(ret_7d, 1), "ret_30d": round(ret_30d, 1),
+            "buy_threshold": 45,
+            "position": pos_pnl,
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/api/summary")
+async def api_summary():
+    """BTC + KR + US 통합 요약."""
+    result = {}
+    try:
+        if supabase:
+            btc_pos = supabase.table("btc_position").select("entry_price,entry_krw,quantity").eq("status","OPEN").execute().data or []
+            result["btc"] = {"positions": len(btc_pos), "invested_krw": sum(float(p.get("entry_krw",0)) for p in btc_pos)}
+
+            kr_open = supabase.table("trade_executions").select("trade_id").eq("result","OPEN").execute().data or []
+            result["kr"] = {"positions": len(kr_open)}
+
+            us_open = supabase.table("us_trade_executions").select("symbol,price,quantity").eq("result","OPEN").execute().data or []
+            us_invested = sum(float(p.get("price",0))*float(p.get("quantity",0)) for p in us_open)
+            result["us"] = {"positions": len(us_open), "invested_usd": round(us_invested,2),
+                            "symbols": [p["symbol"] for p in us_open]}
+    except Exception as e:
+        result["error"] = str(e)
+    return result
+
+
 @app.get("/favicon.ico")
 async def favicon():
     from fastapi.responses import Response
