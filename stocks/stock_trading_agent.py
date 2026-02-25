@@ -767,6 +767,61 @@ def analyze_with_ai(
         return result
 
 
+def get_trading_signal(
+    stock: dict,
+    indicators: dict,
+    strategy: dict,
+    news: str,
+    weekly: dict,
+    kospi: dict,
+    has_position: bool,
+    supply: dict,
+) -> dict:
+    """
+    매매 신호 결정 (우선순위):
+    1. ML 모델 (XGBoost) — 확률 기반
+    2. AI (GPT) — ML 모델 없을 때 또는 애매할 때
+    3. 룰 기반 — AI도 실패 시
+    """
+    # 1차: ML 모델
+    try:
+        from ml_model import get_ml_signal, MODEL_PATH  # 같은 디렉토리
+        if MODEL_PATH.exists():
+            ml = get_ml_signal(stock['code'])
+            if ml.get('action') == 'BUY' and ml.get('confidence', 0) >= 65:
+                log(
+                    f"  ML 신호: {ml['action']} ({ml['confidence']:.1f}%) "
+                    f"[{ml.get('source', 'ML_XGBOOST')}]",
+                    'INFO',
+                )
+                return {
+                    'action': 'BUY',
+                    'confidence': ml['confidence'],
+                    'reason': f"ML 모델 매수확률 {ml['confidence']:.1f}%",
+                    'source': 'ML_XGBOOST',
+                }
+            elif ml.get('confidence', 0) >= 50:
+                log(
+                    f"  ML 애매: {ml.get('confidence', 0):.1f}% → AI 확인",
+                    'INFO',
+                )
+    except Exception as e:
+        log(f'  ML 모델 오류: {e}', 'WARN')
+
+    # 2차: AI (GPT)
+    try:
+        ai_result = analyze_with_ai(
+            stock, indicators, strategy, news, weekly, kospi, has_position, supply
+        )
+        if ai_result and ai_result.get('action') in ('BUY', 'SELL', 'HOLD'):
+            return ai_result
+    except Exception as e:
+        log(f'AI 분석 실패: {e}', 'WARN')
+
+    # 3차: 룰 기반
+    return rule_based_signal(indicators, kospi, weekly, has_position, supply)
+
+
 # ─────────────────────────────────────────────
 # 전략 로드
 # ─────────────────────────────────────────────
@@ -1254,7 +1309,7 @@ def run_trading_cycle():
                 'INFO',
             )
 
-        signal = analyze_with_ai(
+        signal = get_trading_signal(
             stock, indicators, strategy, news, weekly, kospi, has_position, supply
         )
         log(
