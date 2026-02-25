@@ -76,6 +76,7 @@ RISK = {
     "split_rsi_thresholds": [45, 38, 30],  # RSI 기준 완화
     "min_order_krw": 30000,      # 최소 주문금액
     "cooldown_minutes": 15,      # 쿨다운 15분
+    "min_hours_between_splits": 4,  # 분할매수 간 최소 간격(시간)
 }
 
 # 룰 기반 매매 기준 (AI fallback) — v3 공격적
@@ -764,6 +765,18 @@ def execute_buy(
     if split_stage > 3:
         log(f'{name}: 이미 3차 매수 완료 — 추가 매수 차단', 'WARN')
         return {'result': 'MAX_SPLIT_REACHED'}
+
+    # 분할매수 간 최소 시간 간격 (2차·3차부터)
+    if existing and split_stage >= 2:
+        def _parse_created(s: str):
+            s = (s or '2000-01-01T00:00:00').replace('Z', '').replace('+00:00', '')[:19]
+            return datetime.fromisoformat(s)
+        last_buy_time = max(_parse_created(p.get('created_at')) for p in existing)
+        hours_since = (datetime.now() - last_buy_time).total_seconds() / 3600
+        min_hours = RISK.get('min_hours_between_splits', 4)
+        if hours_since < min_hours:
+            log(f'{name}: {split_stage}차 매수 대기 ({hours_since:.1f}시간/{min_hours}시간)', 'WARN')
+            return {'result': 'SPLIT_TOO_SOON'}
 
     # 분할매수 RSI 기준 체크
     rsi = indicators.get('rsi', 50)
