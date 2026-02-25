@@ -286,7 +286,7 @@ def get_investor_trend_krx(stock_code: str) -> dict:
                 return 0
         return {
             'foreign_net': _parse(row.get('FRGN_NET_BUY_QTY', '0')),
-            'inst_net': _parse(row.get('ORGNET_BUY_QTY', row.get('ORGNET_NET_BUY_QTY', '0'))),
+            'inst_net': _parse(row.get('ORGN_NET_BUY_QTY', '0')),
             'individual_net': _parse(row.get('INDV_NET_BUY_QTY', '0')),
         }
     except Exception as e:
