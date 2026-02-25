@@ -67,8 +67,9 @@ kiwoom = KiwoomClient()
 RISK = {
     "invest_ratio": 0.25,        # 종목당 잔고의 25% (공격적)
     "stop_loss": -0.02,          # 손절 -2% (빠른 손절)
-    "take_profit": 0.05,         # 익절 +5%
+    "take_profit": 0.10,         # 고정 익절 +10% (트레일링 보완용)
     "trailing_stop": 0.015,      # 트레일링 스탑 1.5%
+    "trailing_activate": 0.01,   # 수익 1% 이상일 때만 트레일링 활성화
     "min_confidence": 55,        # 최소 신뢰도 55%
     "max_positions": 5,          # 최대 동시 5종목
     "max_daily_loss": -0.08,     # 일일 손실 한도 -8%
@@ -252,6 +253,45 @@ def get_stock_news(stock_name: str) -> str:
         return '\n'.join(headlines[:3]) if headlines else '관련 뉴스 없음'
     except Exception:
         return '뉴스 조회 실패'
+
+
+def get_investor_trend_krx(stock_code: str) -> dict:
+    """KRX 투자자별 매매동향 (당일 기준)"""
+    try:
+        url = 'http://data.krx.co.kr/comm/bldAttendant/getJsonData.cmd'
+        today = datetime.now().strftime('%Y%m%d')
+        payload = {
+            'bld': 'dbms/MDC/STAT/standard/MDCSTAT02203',
+            'locale': 'ko_KR',
+            'isuCd': stock_code,
+            'strtDd': today,
+            'endDd': today,
+            'share': '1',
+            'csvxls_isNo': '',
+        }
+        headers = {
+            'User-Agent': 'Mozilla/5.0',
+            'Referer': 'http://data.krx.co.kr/',
+        }
+        res = requests.post(url, data=payload, headers=headers, timeout=10)
+        data = res.json()
+        items = data.get('output', [])
+        if not items:
+            return {}
+        row = items[0]
+        def _parse(v: str) -> int:
+            try:
+                return int(str(v).replace(',', ''))
+            except Exception:
+                return 0
+        return {
+            'foreign_net': _parse(row.get('FRGN_NET_BUY_QTY', '0')),
+            'inst_net': _parse(row.get('ORGNET_BUY_QTY', row.get('ORGNET_NET_BUY_QTY', '0'))),
+            'individual_net': _parse(row.get('INDV_NET_BUY_QTY', '0')),
+        }
+    except Exception as e:
+        log(f'수급(투자자별 매매동향) 조회 실패 {stock_code}: {e}', 'WARN')
+        return {}
 
 
 def get_current_price(code: str) -> float:
@@ -519,6 +559,7 @@ def rule_based_signal(
     kospi: dict = None,
     weekly: dict = None,
     has_position: bool = False,
+    supply: dict = None,
 ) -> dict:
     """
     AI 없이 동작하는 룰 기반 매매 판단 (fallback)
@@ -530,6 +571,17 @@ def rule_based_signal(
     bb_pos = indicators.get('bb_pos', 50)
     kospi_rsi = (kospi or {}).get('rsi', 50)
     trend = (weekly or {}).get('trend', 'UNKNOWN')
+
+    # 수급 시그널
+    foreign_net = (supply or {}).get('foreign_net', 0)
+    inst_net = (supply or {}).get('inst_net', 0)
+    supply_signal = 'NEUTRAL'
+    if foreign_net > 0 and inst_net > 0:
+        supply_signal = 'STRONG_BUY'  # 외국인+기관 동시 순매수
+    elif foreign_net > 0 or inst_net > 0:
+        supply_signal = 'BUY'
+    elif foreign_net < 0 and inst_net < 0:
+        supply_signal = 'SELL'       # 동시 순매도
 
     # ── SELL 조건 ──
     if has_position:
@@ -558,6 +610,9 @@ def rule_based_signal(
         blocks.append(f'코스피 과열({kospi_rsi})')
     if trend == 'DOWNTREND':
         blocks.append('주봉 하락추세')
+    # 수급 동시 순매도일 때 신규 매수 차단
+    if not has_position and supply_signal == 'SELL':
+        blocks.append('수급 동시 순매도(외국인+기관)')
 
     if blocks:
         return {
@@ -589,6 +644,14 @@ def rule_based_signal(
         buy_score += 10
         buy_reasons.append(f'코스피 공포({kospi_rsi})')
 
+    # 수급 우호 시 가산점
+    if supply_signal == 'STRONG_BUY':
+        buy_score += 25
+        buy_reasons.append('외국인+기관 동시 순매수')
+    elif supply_signal == 'BUY':
+        buy_score += 15
+        buy_reasons.append('수급 우호(외국인/기관 순매수)')
+
     if buy_score >= 50:
         return {
             'action': 'BUY',
@@ -607,12 +670,13 @@ def analyze_with_ai(
     weekly: dict = None,
     kospi: dict = None,
     has_position: bool = False,
+    supply: dict = None,
 ) -> dict:
     """AI 분석 (실패 시 룰 기반 fallback)"""
     # AI 키가 없으면 바로 룰 기반
     if not OPENAI_KEY:
         log('OpenAI 키 없음 → 룰 기반 판단', 'WARN')
-        return rule_based_signal(indicators, kospi, weekly, has_position)
+        return rule_based_signal(indicators, kospi, weekly, has_position, supply)
 
     try:
         from openai import OpenAI
@@ -623,6 +687,17 @@ def analyze_with_ai(
         pick_info = f"AI 장 전 전략: {pick['action']} — {pick['reason']}" if pick else "장 전 전략 없음"
         kospi_msg = (kospi or {}).get('msg', '중립')
         weekly_trend = (weekly or {}).get('trend', 'UNKNOWN')
+
+        # 수급 정보
+        foreign_net = (supply or {}).get('foreign_net', 0)
+        inst_net = (supply or {}).get('inst_net', 0)
+        supply_signal = 'NEUTRAL'
+        if foreign_net > 0 and inst_net > 0:
+            supply_signal = 'STRONG_BUY'
+        elif foreign_net > 0 or inst_net > 0:
+            supply_signal = 'BUY'
+        elif foreign_net < 0 and inst_net < 0:
+            supply_signal = 'SELL'
 
         prompt = f"""당신은 연평균 수익률 50% 이상의 한국 주식 상위 1% 퀀트 트레이더입니다.
 현재 모의투자 환경이므로 공격적으로 수익을 추구합니다.
@@ -637,6 +712,8 @@ def analyze_with_ai(
 [장 전 전략] {pick_info}
 [코스피] {kospi_msg}
 [주봉 추세] {weekly_trend}
+[수급] 외국인: {'+' if foreign_net > 0 else ''}{foreign_net:,}주 / 기관: {'+' if inst_net > 0 else ''}{inst_net:,}주
+수급 시그널: {supply_signal}
 [뉴스] {news if news else '없음'}
 [데이터 소스] {indicators.get('data_source', '?')} ({indicators.get('data_points', '?')}봉)
 
@@ -685,7 +762,7 @@ def analyze_with_ai(
 
     except Exception as e:
         log(f'AI 분석 실패 → 룰 기반 fallback: {e}', 'WARN')
-        result = rule_based_signal(indicators, kospi, weekly, has_position)
+        result = rule_based_signal(indicators, kospi, weekly, has_position, supply)
         result['source'] = 'RULE_FALLBACK'
         return result
 
@@ -987,12 +1064,11 @@ def execute_trade(
 # 손절/익절 자동 체크
 # ─────────────────────────────────────────────
 def check_stop_loss_take_profit():
-    """손절/익절 + 트레일링 스탑 자동 체크"""
+    """1분마다 실행: 손절/익절/트레일링 스탑"""
     positions = get_open_positions()
     if not positions:
         return
 
-    # 종목별 그룹핑
     from collections import defaultdict
     by_code = defaultdict(list)
     for p in positions:
@@ -1000,49 +1076,88 @@ def check_stop_loss_take_profit():
         if code:
             by_code[code].append(p)
 
-    for code, pos_list in by_code.items():
+    for code, trades in by_code.items():
         try:
+            name = trades[0].get('stock_name', code)
+            total_qty = sum(int(t.get('quantity', 0)) for t in trades)
+            total_cost = sum(float(t.get('price', 0)) * int(t.get('quantity', 0)) for t in trades)
+            avg_entry = total_cost / total_qty if total_qty > 0 else 0
+
             price = get_current_price(code)
-            if not price:
+            if price <= 0 or avg_entry <= 0:
                 continue
 
-            avg_entry = calc_avg_entry_price(pos_list)
-            if not avg_entry:
-                continue
-
-            # 비용 차감 전후 수익률 계산
-            raw_pnl_pct = (price - avg_entry) / avg_entry
+            # 비용 차감
             fee_cost = RISK['fee_buy'] + RISK['fee_sell'] + RISK['tax_sell']
+            raw_pnl_pct = (price - avg_entry) / avg_entry
             net_pnl_pct = raw_pnl_pct - fee_cost
-            total_qty = sum(int(p['quantity']) for p in pos_list)
-            name = pos_list[0].get('stock_name', code)
 
-            stock = {'code': code, 'name': name}
+            # ── 고점 갱신 ──
+            current_highest = max(float(t.get('highest_price') or 0) for t in trades)
+            if price > current_highest:
+                current_highest = price
+                for t in trades:
+                    tid = t.get('trade_id')
+                    if tid is None:
+                        continue
+                    try:
+                        supabase.table('trade_executions').update(
+                            {'highest_price': price}
+                        ).eq('trade_id', tid).execute()
+                    except Exception as e:
+                        log(f'highest_price 업데이트 실패({code}, trade_id={tid}): {e}', 'WARN')
 
-            # 손절 (비용 포함 실수익률 기준)
+            # ── 트레일링 스탑 체크 ──
+            trailing_activate = RISK.get('trailing_activate', 0.01)
+            if current_highest > 0 and net_pnl_pct > trailing_activate:
+                drop_from_high = (current_highest - price) / current_highest
+                if drop_from_high >= RISK.get('trailing_stop', 0.015):
+                    trail_pnl = (price - avg_entry) / avg_entry * 100
+                    log(
+                        f'{name} 트레일링 스탑 발동: 고점 {current_highest:,.0f} → 현재 {price:,.0f} '
+                        f'(하락 {drop_from_high*100:.1f}%, 수익 {trail_pnl:.1f}%)',
+                        'TRADE',
+                    )
+                    execute_sell(
+                        {'code': code, 'name': name},
+                        {},
+                        {'price': price},
+                        reason_prefix=(
+                            f'📉 트레일링스탑(고점 대비 -{drop_from_high*100:.1f}%, '
+                            f'수익 {trail_pnl:.1f}%): '
+                        ),
+                    )
+                    time.sleep(0.3)
+                    continue
+
+            # ── 기존 손절 (비용 포함 기준) ──
             if net_pnl_pct <= RISK['stop_loss']:
-                log(f'{name} 손절 발동(비용 포함): {net_pnl_pct*100:.2f}%', 'TRADE')
+                log(f'{name} 손절: {net_pnl_pct*100:.2f}%', 'TRADE')
                 execute_sell(
-                    stock,
+                    {'code': code, 'name': name},
                     {},
                     {'price': price},
-                    reason_prefix=f'🛑 손절(비용 포함 {net_pnl_pct*100:.2f}%): ',
+                    reason_prefix=f'🛑 손절({net_pnl_pct*100:.2f}%): ',
                 )
+                time.sleep(0.3)
+                continue
 
-            # 익절 (비용 포함 실수익률 기준)
-            elif net_pnl_pct >= RISK['take_profit']:
-                log(f'{name} 익절 발동(비용 포함): {net_pnl_pct*100:.2f}%', 'TRADE')
+            # ── 고정 익절 (트레일링 보완용, 10% 이상이면 무조건 익절) ──
+            if net_pnl_pct >= RISK['take_profit']:
+                log(f'{name} 최대 익절: {net_pnl_pct*100:.2f}%', 'TRADE')
                 execute_sell(
-                    stock,
+                    {'code': code, 'name': name},
                     {},
                     {'price': price},
-                    reason_prefix=f'✅ 익절(비용 포함 {net_pnl_pct*100:.2f}%): ',
+                    reason_prefix=f'🎯 최대익절({net_pnl_pct*100:.2f}%): ',
                 )
+                time.sleep(0.3)
+                continue
 
             time.sleep(0.3)
 
         except Exception as e:
-            log(f'손절/익절 체크 실패 {code}: {e}', 'ERROR')
+            log(f'손절/익절/트레일링 체크 실패 {code}: {e}', 'ERROR')
 
 
 # ─────────────────────────────────────────────
@@ -1129,8 +1244,18 @@ def run_trading_cycle():
 
         news = get_stock_news(name)
 
+        # 수급 데이터 (외국인/기관)
+        supply = get_investor_trend_krx(code)
+        foreign_net = supply.get('foreign_net', 0)
+        inst_net = supply.get('inst_net', 0)
+        if foreign_net or inst_net:
+            log(
+                f'  수급: 외국인 {foreign_net:+,}주 / 기관 {inst_net:+,}주',
+                'INFO',
+            )
+
         signal = analyze_with_ai(
-            stock, indicators, strategy, news, weekly, kospi, has_position
+            stock, indicators, strategy, news, weekly, kospi, has_position, supply
         )
         log(
             f"  신호: {signal['action']} ({signal.get('confidence', 0)}%) "

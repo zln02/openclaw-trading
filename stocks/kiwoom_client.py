@@ -242,6 +242,23 @@ class KiwoomAPIClient:
         })
         return result
 
+    def get_investor_trend(self, stock_code: str) -> Dict:
+        """투자자별 매매동향 조회 (외국인/기관/개인)"""
+        try:
+            result = self._call_api("ka10007", "/api/dostk/stkinfo", {
+                "stk_cd": stock_code,
+            })
+            output = result.get('output', result)
+            return {
+                "foreign_net": _int(output.get("frgn_net_buy_qty", 0)),
+                "inst_net": _int(output.get("orgn_net_buy_qty", 0)),
+                "individual_net": _int(output.get("indv_net_buy_qty", 0)),
+                "foreign_ratio": _float(output.get("frgn_hold_rt", 0)),
+            }
+        except Exception as e:
+            _log(f"투자자 동향 조회 실패 {stock_code}: {e}", "WARN")
+            return {}
+
     def get_current_price(self, stock_code: str) -> int:
         """현재가만 간편 조회"""
         try:
