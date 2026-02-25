@@ -273,8 +273,30 @@ def get_current_price(code: str) -> float:
         return 0.0
 
 
-def get_indicators(code: str) -> dict:
-    """기술적 지표 계산 (RSI/MACD/BB/거래량)"""
+def _fetch_live_candles(code: str, period: str = '5d', interval: str = '5m') -> dict:
+    cache_key = f'live_{code}_{interval}'
+    if cache_key in _cache:
+        return _cache[cache_key]
+    try:
+        import yfinance as yf
+        ticker = yf.Ticker(code + '.KS')
+        hist = ticker.history(period=period, interval=interval)
+        if hist.empty or len(hist) < 14:
+            return {}
+        result = {
+            'closes': [float(c) for c in hist['Close']],
+            'volumes': [float(v) for v in hist['Volume']],
+            'source': f'{interval}_live',
+            'last_time': str(hist.index[-1]),
+        }
+        _cache[cache_key] = result
+        return result
+    except Exception as e:
+        log(f'실시간 분봉 조회 실패 {code}: {e}', 'WARN')
+        return {}
+
+
+def _fetch_daily_from_db(code: str) -> dict:
     try:
         rows = (
             supabase.table('daily_ohlcv')
@@ -286,80 +308,84 @@ def get_indicators(code: str) -> dict:
             .data or []
         )
         if len(rows) < 14:
-            log(f'{code}: OHLCV 데이터 부족 ({len(rows)}개)', 'WARN')
             return {}
+        return {
+            'closes': [float(r['close_price']) for r in rows],
+            'volumes': [float(r.get('volume', 0)) for r in rows],
+            'source': 'daily_db',
+            'last_date': rows[-1].get('date', 'unknown'),
+        }
+    except Exception as e:
+        log(f'일봉 DB 조회 실패 {code}: {e}', 'WARN')
+        return {}
 
-        closes = [float(r['close_price']) for r in rows]
-        volumes = [float(r.get('volume', 0)) for r in rows]
 
-        # RSI
-        rsi = _calc_rsi(closes)
+def _calc_indicators_from_data(closes: list, volumes: list) -> dict:
+    rsi = _calc_rsi(closes)
+    ema12 = _calc_ema(closes, 12)
+    ema26 = _calc_ema(closes, 26)
+    macd = round(ema12 - ema26, 0)
+    if len(closes) >= 26:
+        macd_line = []
+        for i in range(26, len(closes) + 1):
+            e12 = _calc_ema(closes[:i], 12)
+            e26 = _calc_ema(closes[:i], 26)
+            macd_line.append(e12 - e26)
+        macd_signal = _calc_ema(macd_line, 9) if len(macd_line) >= 9 else macd
+        macd_histogram = round(macd - macd_signal, 0)
+    else:
+        macd_signal = macd
+        macd_histogram = 0
+    avg_vol = sum(volumes[-20:]) / min(len(volumes[-20:]), 20) if volumes else 1
+    cur_vol = volumes[-1] if volumes else 0
+    vol_ratio = round(cur_vol / avg_vol, 2) if avg_vol > 0 else 1.0
+    vol_labels = [(3.0, '💥 거래량 폭발'), (2.0, '🔥 거래량 급등'), (1.5, '📈 거래량 증가'), (0.5, '➡️ 거래량 보통')]
+    vol_label = f'😴 거래량 급감 ({vol_ratio}배)'
+    for threshold, label in vol_labels:
+        if vol_ratio >= threshold:
+            vol_label = f'{label} ({vol_ratio}배)'
+            break
+    bb_upper = bb_lower = bb_pos = 0
+    if len(closes) >= 20:
+        ma20 = sum(closes[-20:]) / 20
+        std20 = (sum((c - ma20) ** 2 for c in closes[-20:]) / 20) ** 0.5
+        bb_upper = round(ma20 + 2 * std20, 0)
+        bb_lower = round(ma20 - 2 * std20, 0)
+        bb_width = bb_upper - bb_lower
+        if bb_width > 0:
+            bb_pos = round((closes[-1] - bb_lower) / bb_width * 100, 1)
+    return {
+        'rsi': rsi, 'macd': macd, 'macd_signal': round(macd_signal, 0),
+        'macd_histogram': macd_histogram, 'close': closes[-1],
+        'vol_ratio': vol_ratio, 'vol_label': vol_label,
+        'bb_upper': bb_upper, 'bb_lower': bb_lower, 'bb_pos': bb_pos,
+    }
 
-        # MACD (12/26 EMA)
-        ema12 = _calc_ema(closes, 12)
-        ema26 = _calc_ema(closes, 26)
-        macd = round(ema12 - ema26, 0)
 
-        # MACD Signal (9 EMA of MACD) — 추세 전환 감지용
-        if len(closes) >= 26:
-            macd_line = []
-            for i in range(26, len(closes) + 1):
-                e12 = _calc_ema(closes[:i], 12)
-                e26 = _calc_ema(closes[:i], 26)
-                macd_line.append(e12 - e26)
-            macd_signal = _calc_ema(macd_line, 9) if len(macd_line) >= 9 else macd
-            macd_histogram = round(macd - macd_signal, 0)
-        else:
-            macd_signal = macd
-            macd_histogram = 0
-
-        # 거래량 분석
-        avg_vol = sum(volumes[-20:]) / min(len(volumes[-20:]), 20) if volumes else 1
-        cur_vol = volumes[-1] if volumes else 0
-        vol_ratio = round(cur_vol / avg_vol, 2) if avg_vol > 0 else 1.0
-
-        vol_labels = [
-            (3.0, '💥 거래량 폭발'),
-            (2.0, '🔥 거래량 급등'),
-            (1.5, '📈 거래량 증가'),
-            (0.5, '➡️ 거래량 보통'),  # 0.5 이상
-        ]
-        vol_label = f'😴 거래량 급감 ({vol_ratio}배)'
-        for threshold, label in vol_labels:
-            if vol_ratio >= threshold:
-                vol_label = f'{label} ({vol_ratio}배)'
-                break
-
-        # 볼린저밴드 (20일)
-        bb_upper = bb_lower = bb_pos = 0
-        if len(closes) >= 20:
-            ma20 = sum(closes[-20:]) / 20
-            std20 = (sum((c - ma20) ** 2 for c in closes[-20:]) / 20) ** 0.5
-            bb_upper = round(ma20 + 2 * std20, 0)
-            bb_lower = round(ma20 - 2 * std20, 0)
-            bb_width = bb_upper - bb_lower
-            if bb_width > 0:
-                bb_pos = round((closes[-1] - bb_lower) / bb_width * 100, 1)
-
-        # 현재가
+def get_indicators(code: str) -> dict:
+    """장 중: yfinance 5분봉 실시간 / 장 외: DB 일봉"""
+    try:
+        data = {}
+        if is_market_open():
+            data = _fetch_live_candles(code, period='5d', interval='5m')
+            if data:
+                log(f'  {code}: 실시간 5분봉 사용 (마지막: {data.get("last_time", "?")})')
+        if not data:
+            data = _fetch_daily_from_db(code)
+        if not data or len(data.get('closes', [])) < 14:
+            log(f'{code}: 데이터 부족', 'WARN')
+            return {}
+        indicators = _calc_indicators_from_data(data['closes'], data['volumes'])
         price = get_current_price(code)
         if price == 0:
-            price = closes[-1]  # fallback: 마지막 종가
-
-        return {
-            'price': price,
-            'rsi': rsi,
-            'macd': macd,
-            'macd_signal': round(macd_signal, 0),
-            'macd_histogram': macd_histogram,
-            'close': closes[-1],
-            'vol_ratio': vol_ratio,
-            'vol_label': vol_label,
-            'bb_upper': bb_upper,
-            'bb_lower': bb_lower,
-            'bb_pos': bb_pos,
-            'data_date': rows[-1].get('date', 'unknown'),
-        }
+            price = data['closes'][-1]
+        if indicators['bb_upper'] > indicators['bb_lower']:
+            bb_width = indicators['bb_upper'] - indicators['bb_lower']
+            indicators['bb_pos'] = round((price - indicators['bb_lower']) / bb_width * 100, 1)
+        indicators['price'] = price
+        indicators['data_source'] = data.get('source', 'unknown')
+        indicators['data_points'] = len(data['closes'])
+        return indicators
     except Exception as e:
         log(f'지표 계산 실패 {code}: {e}', 'ERROR')
         return {}
@@ -1047,7 +1073,7 @@ def run_trading_cycle():
 
         log(
             f"  RSI: {indicators['rsi']} / MACD: {indicators['macd']}({indicators.get('macd_histogram', '?')}) / "
-            f"거래량: {indicators.get('vol_label', '?')} / BB: {indicators.get('bb_pos', '?')}%"
+            f"거래량: {indicators.get('vol_label', '?')} / BB: {indicators.get('bb_pos', '?')}% [{indicators.get('data_source', '?')}/{indicators.get('data_points', '?')}봉]"
         )
 
         weekly = get_weekly_trend(code)
