@@ -62,13 +62,16 @@ cd /home/wlsdud5035/.openclaw/workspace
 ```
 
 ### 5단계: cron 확인
-기존 cron 스케줄은 변경 불필요 (동일한 CLI 인터페이스 유지).
+**반드시 `.venv/bin/python` 사용** — 시스템 `python3`는 yfinance 등 패키지가 없어 오류 발생 가능.
 
-선택 — 분봉 수집 cron 추가:
 ```bash
+# 주식 매매 에이전트 (장 중 5분마다 예시)
+*/5 9-15 * * 1-5 cd /home/wlsdud5035/.openclaw/workspace && .venv/bin/python stocks/stock_trading_agent.py >> /home/wlsdud5035/.openclaw/logs/stock_trading.log 2>&1
+
 # 분봉 데이터 수집 (장 중 매 30분)
 */30 9-15 * * 1-5 cd /home/wlsdud5035/.openclaw/workspace && .venv/bin/python stocks/stock_data_collector.py intraday >> /home/wlsdud5035/.openclaw/logs/intraday.log 2>&1
 ```
+확인: `crontab -l | grep stock` 후 `python3`로 되어 있으면 `.venv/bin/python`으로 변경.
 
 ## 롤백
 ```bash

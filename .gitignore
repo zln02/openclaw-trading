@@ -9,3 +9,6 @@ logs/
 .venv/
 venv/
 node_modules/
+*.bak
+*.v1.*
+/home/wlsdud5035/.openclaw/openclaw.json

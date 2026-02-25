@@ -398,15 +398,16 @@ class KiwoomAPIClient:
         if quantity < 1:
             raise ValueError("수량은 1 이상이어야 합니다.")
 
-        trde_tp = "2" if order_type == "buy" else "1"
+        # 키움 REST API 주문: api-id는 kt10000(매수)/kt10001(매도). tr_id 헤더는 사용 안 함.
+        api_id = "kt10000" if order_type == "buy" else "kt10001"
+        trde_tp = "3" if price == 0 else "0"  # 3=시장가, 0=보통(지정가)
         ord_prc_ptn_cd = "03" if price == 0 else "00"
 
         acnt_no = (self.account_no or "")[:8]
         acnt_prdt_cd = (self.account_no or "")[8:] if len(self.account_no or "") > 8 else "01"
 
-        tr_id = "TTTC0802U" if self.use_mock else "TTTC0801U"
-
         body = {
+            "dmst_stex_tp": "KRX",
             "acnt_no": acnt_no,
             "acnt_prdt_cd": acnt_prdt_cd,
             "stk_cd": stock_code,
@@ -419,17 +420,16 @@ class KiwoomAPIClient:
         extra_headers = {
             "appkey": self.api_key,
             "secretkey": self.api_secret,
-            "tr_id": tr_id,
         }
 
         _log(
             f"주문 요청: {order_type.upper()} {stock_code} "
-            f"{quantity}주 {'시장가' if price == 0 else f'{price:,}원'}",
+            f"{quantity}주 {'시장가' if price == 0 else f'{price:,}원'} (api-id={api_id})",
             "TRADE",
         )
 
         result = self._call_api(
-            api_id=tr_id,
+            api_id=api_id,
             endpoint="/api/dostk/ordr",
             body=body,
             extra_headers=extra_headers,
