@@ -681,6 +681,20 @@ HTML = """<!DOCTYPE html>
     background: rgba(0,212,255,0.08);
   }
 
+  .interval-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 3px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .interval-btn:hover { color: var(--text); border-color: var(--accent); }
+  .interval-btn.active { color: var(--accent); border-color: var(--accent); background: rgba(0,212,255,0.08); }
+
   .trend-chip {
     display: inline-flex;
     align-items: center;
@@ -1365,6 +1379,9 @@ STOCKS_HTML = """<!DOCTYPE html>
   ::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px;}
   @media(max-width:1200px){.stock-grid{grid-template-columns:repeat(2,1fr);}.chart-section{grid-template-columns:1fr;}}
   @keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.5;transform:scale(.8)}}
+  .interval-btn{background:transparent;border:1px solid var(--border);color:var(--muted);font-family:var(--mono);font-size:11px;padding:3px 10px;border-radius:4px;cursor:pointer;transition:all 0.2s;}
+  .interval-btn:hover{color:var(--text);border-color:var(--accent);}
+  .interval-btn.active{color:var(--accent);border-color:var(--accent);background:rgba(0,212,255,0.08);}
 </style>
 </head>
 <body>
@@ -1406,7 +1423,12 @@ STOCKS_HTML = """<!DOCTYPE html>
       <div class="card">
         <div class="card-header">
           <span class="card-title" id="chart-title">종목 차트</span>
-          <span style="font-family:var(--mono);font-size:11px;color:var(--muted)">30일 일봉</span>
+          <div style="display:flex;gap:6px;">
+            <button type="button" class="interval-btn" data-interval="5m" onclick="setStockInterval('5m')">5분</button>
+            <button type="button" class="interval-btn" data-interval="10m" onclick="setStockInterval('10m')">10분</button>
+            <button type="button" class="interval-btn" data-interval="1h" onclick="setStockInterval('1h')">1시간</button>
+            <button type="button" class="interval-btn active" data-interval="1d" onclick="setStockInterval('1d')">일봉</button>
+          </div>
         </div>
         <div id="stock-candle-chart" style="width:100%;height:320px"></div>
         <div id="stock-volume-chart" style="width:100%;height:80px"></div>
@@ -1434,6 +1456,24 @@ STOCKS_HTML = """<!DOCTYPE html>
       </div>
     </div>
 
+    <div style="display:grid;grid-template-columns:1fr 400px;gap:16px;margin-bottom:20px">
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">📋 실시간 로그 (stock_trading)</span>
+          <span style="font-family:var(--mono);font-size:11px;color:var(--muted)" id="stock-log-time"></span>
+        </div>
+        <div class="card-body" style="height:300px;overflow:auto">
+          <pre id="stock-log-viewer" style="margin:0;font-size:12px;line-height:1.8;color:var(--text);white-space:pre-wrap;word-break:break-all"></pre>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header"><span class="card-title">📊 오늘 거래</span></div>
+        <div class="card-body" id="stock-trade-summary">
+          <div style="color:var(--muted);font-size:13px">로딩 중...</div>
+        </div>
+      </div>
+    </div>
+
   </main>
 </div>
 
@@ -1444,6 +1484,7 @@ document.head.appendChild(lwScript);
 
 let stockChart = null, stockSeries = null, stockVolSeries = null;
 let selectedCode = null;
+let currentStockInterval = '1d';
 
 lwScript.onload = function() {
   const c = document.getElementById('stock-candle-chart');
@@ -1504,18 +1545,20 @@ async function loadStocks() {
   } catch(e) { console.error('stocks error', e); }
 }
 
-async function selectStock(code, name) {
-  selectedCode = code;
-  document.getElementById('chart-title').textContent = name + ' 차트';
+function setStockInterval(interval) {
+  currentStockInterval = interval;
+  document.querySelectorAll('.interval-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.getAttribute('data-interval') === interval);
+  });
+  if (selectedCode) loadStockChart(selectedCode);
+}
 
-  document.querySelectorAll('.stock-card').forEach(el => el.classList.remove('selected'));
-  var t = event && event.currentTarget;
-  if (t) t.classList.add('selected');
-
+async function loadStockChart(code) {
+  if (!code || !stockSeries || !stockVolSeries) return;
   try {
-    const res = await fetch('/api/stocks/chart/' + code);
+    const res = await fetch('/api/stocks/chart/' + code + '?interval=' + encodeURIComponent(currentStockInterval));
     const data = await res.json();
-    if (!data.length || !stockSeries) return;
+    if (!data.length) return;
 
     stockSeries.setData(data.map(d => ({
       time: d.time, open: d.open, high: d.high, low: d.low, close: d.close,
@@ -1539,6 +1582,17 @@ async function selectStock(code, name) {
       '<div><div class="stat-label">종목코드</div><div class="stat-value" style="font-size:16px">' + code + '</div></div>' +
       '</div>';
   } catch(e) { console.error('chart error', e); }
+}
+
+async function selectStock(code, name) {
+  selectedCode = code;
+  document.getElementById('chart-title').textContent = name + ' 차트';
+
+  document.querySelectorAll('.stock-card').forEach(el => el.classList.remove('selected'));
+  var t = event && event.currentTarget;
+  if (t) t.classList.add('selected');
+
+  await loadStockChart(code);
 }
 
 async function loadStrategy() {
@@ -1582,6 +1636,64 @@ setInterval(function(){ var c=document.getElementById('clock'); if(c) c.textCont
 loadStocks();
 loadStrategy();
 setInterval(loadStocks, 60000);
+
+async function loadStockLogs() {
+  try {
+    const res = await fetch('/api/stocks/logs');
+    const d = await res.json();
+    const el = document.getElementById('stock-log-viewer');
+    const timeEl = document.getElementById('stock-log-time');
+    if (timeEl) timeEl.textContent = new Date().toLocaleTimeString('ko-KR');
+
+    const escape = s => String(s)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+      .replace(/>/g,'&gt;');
+
+    const cls = line => {
+      if (/매수|BUY/.test(line)) return 'color:var(--green)';
+      if (/매도|SELL|손절/.test(line)) return 'color:var(--red)';
+      if (/ERROR|실패/.test(line)) return 'color:var(--red)';
+      if (/사이클 시작/.test(line)) return 'color:var(--accent)';
+      if (/HOLD|SKIP/.test(line)) return 'color:var(--muted)';
+      if (/익절/.test(line)) return 'color:var(--green)';
+      return 'color:var(--text)';
+    };
+
+    el.innerHTML = (d.lines || [])
+      .map(l => '<span style="' + cls(l) + '">' + escape(l) + '</span>')
+      .join('\\n') || '(비어 있음)';
+    el.scrollTop = el.scrollHeight;
+  } catch(e) {
+    const v = document.getElementById('stock-log-viewer');
+    if (v) v.textContent = '로딩 실패';
+  }
+}
+
+async function loadStockTradeSummary() {
+  try {
+    const res = await fetch('/api/stocks/trades');
+    const d = await res.json();
+    const el = document.getElementById('stock-trade-summary');
+    if (!el) return;
+    if (!d || !d.length) {
+      el.innerHTML = '<div style="color:var(--muted);font-size:13px;text-align:center;padding:20px">오늘 거래 없음</div>';
+      return;
+    }
+    el.innerHTML = d.map(t =>
+      '<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border);font-family:var(--mono);font-size:12px">' +
+      '<span style="color:' + (t.trade_type==='BUY'?'var(--green)':'var(--red)') + '">' + t.trade_type + '</span>' +
+      '<span>' + (t.stock_name || t.stock_code || '') + '</span>' +
+      '<span>' + Number(t.price||0).toLocaleString() + '원</span>' +
+      '<span style="color:var(--muted)">' + t.quantity + '주</span>' +
+      '</div>'
+    ).join('');
+  } catch(e) {}
+}
+
+loadStockLogs();
+loadStockTradeSummary();
+setInterval(loadStockLogs, 30000);
+setInterval(loadStockTradeSummary, 30000);
 </script>
 </body>
 </html>"""
@@ -1838,7 +1950,7 @@ async def get_stocks_overview():
 
 
 @app.get("/api/stocks/chart/{code}")
-async def get_stock_chart(code: str):
+async def get_stock_chart(code: str, interval: str = Query("1d")):
     if not supabase:
         return []
     try:
@@ -1861,6 +1973,45 @@ async def get_stocks_strategy():
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception as e:
         return {"error": str(e)}
+
+
+@app.get("/api/stocks/logs")
+async def get_stocks_logs():
+    try:
+        log_path = Path("/home/wlsdud5035/.openclaw/logs/stock_trading.log")
+        if not log_path.exists():
+            return {"lines": []}
+        lines = log_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+        return {"lines": lines[-50:]}
+    except Exception as e:
+        return {"lines": [str(e)]}
+
+
+@app.get("/api/stocks/trades")
+async def get_stocks_trades():
+    try:
+        if not supabase:
+            return []
+        today = datetime.now().date().isoformat()
+        res = (
+            supabase.table("trade_executions")
+            .select("*")
+            .order("trade_id", desc=True)
+            .limit(20)
+            .execute()
+        )
+        data = res.data or []
+        if data and isinstance(data[0], dict) and "created_at" in data[0]:
+            data = [r for r in data if str(r.get("created_at") or "")[:10] == today]
+        return data
+    except Exception as e:
+        try:
+            res = supabase.table("trade_executions").select("*").order("trade_id", desc=True).limit(20).execute()
+            return res.data or []
+        except Exception:
+            pass
+        print(f"[ERROR] stocks trades: {e}")
+        return []
 
 
 if __name__ == "__main__":

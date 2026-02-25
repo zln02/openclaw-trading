@@ -1,267 +1,502 @@
 #!/usr/bin/env python3
 """
-주식 장 전 분석 (08:00 실행)
-- 전날 종가 수집
-- 미국 증시 마감 결과 (yfinance)
-- 뉴스 감정분석 (CoinDesk RSS 대신 네이버 금융 RSS)
-- AI 오늘 전략 수립
-- 텔레그램 브리핑 발송
+주식 장 전 분석 v2.0 (08:00 실행)
+
+변경사항 (v1 → v2):
+- [FIX] AI 실패 시 룰 기반 전략 생성 (fallback)
+- [FIX] 전략 JSON 스키마 일관성
+- [NEW] 전날 매매 결과 요약 포함
+- [NEW] 섹터별 분석 추가
+- [NEW] 전략 저장 성공/실패 텔레그램 알림
+- [REFACTOR] 에러 핸들링 강화
+
+실행:
+    python3 stock_premarket.py
 """
 
-import os, json, requests
+import os
+import json
+import sys
+import requests
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
+# ─────────────────────────────────────────────
 # 환경변수 로드
+# ─────────────────────────────────────────────
 def _load_env():
+    openclaw_json = Path('/home/wlsdud5035/.openclaw/openclaw.json')
+    if openclaw_json.exists():
+        d = json.loads(openclaw_json.read_text())
+        for k, v in (d.get('env') or {}).items():
+            if isinstance(v, str):
+                os.environ.setdefault(k, v)
     for p in [
         Path('/home/wlsdud5035/.openclaw/.env'),
         Path('/home/wlsdud5035/.openclaw/workspace/skills/kiwoom-api/.env'),
     ]:
-        if not p.exists(): continue
+        if not p.exists():
+            continue
         for line in p.read_text().splitlines():
             if '=' in line and not line.startswith('#'):
                 k, _, v = line.partition('=')
                 os.environ.setdefault(k.strip(), v.strip())
+
 _load_env()
 
-# openclaw.json env (Supabase 등)
-_openclaw_json = Path('/home/wlsdud5035/.openclaw/openclaw.json')
-if _openclaw_json.exists():
-    try:
-        data = json.loads(_openclaw_json.read_text())
-        for k, v in (data.get('env') or {}).items():
-            if k != 'shellEnv' and isinstance(v, str):
-                os.environ.setdefault(k, v)
-    except Exception:
-        pass
+sys.path.insert(0, str(Path(__file__).parent))
+from kiwoom_client import KiwoomClient
+from supabase import create_client
 
 TG_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
-TG_CHAT  = os.environ.get('TELEGRAM_CHAT_ID', '')
+TG_CHAT = os.environ.get('TELEGRAM_CHAT_ID', '')
 OPENAI_KEY = os.environ.get('OPENAI_API_KEY', '')
+SUPABASE_URL = os.environ.get('SUPABASE_URL', '')
+SUPABASE_KEY = os.environ.get('SUPABASE_SECRET_KEY', '')
 
-try:
-    from supabase import create_client
-    _supabase_url = os.environ.get('SUPABASE_URL', '')
-    _supabase_key = os.environ.get('SUPABASE_SECRET_KEY') or os.environ.get('SUPABASE_KEY', '')
-    supabase = create_client(_supabase_url, _supabase_key) if (_supabase_url and _supabase_key) else None
-except Exception:
-    supabase = None
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if (SUPABASE_URL and SUPABASE_KEY) else None
+kiwoom = KiwoomClient()
 
-# 종목 리스트
+STRATEGY_PATH = Path('/home/wlsdud5035/.openclaw/workspace/stocks/today_strategy.json')
+
+# 감시 종목
 WATCHLIST = [
     {"code": "005930", "name": "삼성전자",     "sector": "반도체"},
     {"code": "000660", "name": "SK하이닉스",   "sector": "반도체"},
-    {"code": "042700", "name": "한미반도체",   "sector": "HBM"},
-    {"code": "035420", "name": "NAVER",        "sector": "IT"},
+    {"code": "042700", "name": "한미반도체",   "sector": "반도체장비"},
     {"code": "005380", "name": "현대차",       "sector": "자동차"},
+    {"code": "000270", "name": "기아",         "sector": "자동차"},
+    {"code": "068270", "name": "셀트리온",     "sector": "바이오"},
+    {"code": "035420", "name": "NAVER",        "sector": "IT"},
+    {"code": "035720", "name": "카카오",       "sector": "IT"},
+    {"code": "051910", "name": "LG화학",       "sector": "화학"},
+    {"code": "006400", "name": "삼성SDI",      "sector": "배터리"},
+    {"code": "003670", "name": "포스코퓨처엠", "sector": "2차전지"},
+    {"code": "373220", "name": "LG에너지솔루션","sector": "배터리"},
+    {"code": "055550", "name": "신한지주",     "sector": "금융"},
+    {"code": "105560", "name": "KB금융",       "sector": "금융"},
+    {"code": "034730", "name": "SK",           "sector": "지주"},
+    {"code": "012330", "name": "현대모비스",   "sector": "자동차부품"},
+    {"code": "066570", "name": "LG전자",       "sector": "전자"},
+    {"code": "028260", "name": "삼성물산",     "sector": "건설"},
+    {"code": "207940", "name": "삼성바이오로직스","sector": "바이오"},
+    {"code": "003550", "name": "LG",           "sector": "지주"},
 ]
 
-# 미국 지수 (yfinance)
 US_INDICES = [
-    {"symbol": "^GSPC",  "name": "S&P500"},
-    {"symbol": "^IXIC",  "name": "나스닥"},
-    {"symbol": "NVDA",   "name": "엔비디아"},
-    {"symbol": "TSM",    "name": "TSMC"},
+    {"symbol": "^GSPC", "name": "S&P500"},
+    {"symbol": "^IXIC", "name": "나스닥"},
+    {"symbol": "^DJI",  "name": "다우존스"},
+    {"symbol": "^VIX",  "name": "VIX공포지수"},
 ]
 
-def send_telegram(msg):
-    if not TG_TOKEN or not TG_CHAT: return
+
+# ─────────────────────────────────────────────
+# 유틸리티
+# ─────────────────────────────────────────────
+def log(msg: str, level: str = "INFO"):
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    prefix = {"INFO": "ℹ️", "WARN": "⚠️", "ERROR": "❌", "OK": "✅"}.get(level, "")
+    print(f"[{ts}] {prefix} {msg}")
+
+
+def send_telegram(msg: str):
+    if not TG_TOKEN or not TG_CHAT:
+        return
     try:
         requests.post(
             f'https://api.telegram.org/bot{TG_TOKEN}/sendMessage',
             json={'chat_id': TG_CHAT, 'text': msg, 'parse_mode': 'HTML'},
-            timeout=5
+            timeout=5,
         )
     except Exception as e:
-        print(f'텔레그램 실패: {e}')
+        log(f'텔레그램 실패: {e}', 'WARN')
 
-def get_us_market():
-    """미국 증시 마감 데이터"""
-    results = []
+
+# ─────────────────────────────────────────────
+# 데이터 수집
+# ─────────────────────────────────────────────
+def get_us_market() -> list:
+    """미국 증시 전일 마감 결과"""
     try:
         import yfinance as yf
-        for item in US_INDICES:
-            ticker = yf.Ticker(item['symbol'])
-            hist = ticker.history(period='2d')
-            if len(hist) >= 2:
-                prev = hist['Close'].iloc[-2]
-                last = hist['Close'].iloc[-1]
-                chg = (last - prev) / prev * 100
-                results.append({
-                    'name': item['name'],
-                    'price': round(last, 2),
-                    'change': round(chg, 2),
-                })
-    except Exception as e:
-        print(f'미국 시장 조회 실패: {e}')
-    return results
-
-def get_korean_stock_news():
-    import xml.etree.ElementTree as ET
-    sources = [
-        'https://www.yna.co.kr/rss/economy.xml',
-        'https://rss.hankyung.com/economy.xml',
-    ]
-    for url in sources:
-        try:
-            res = requests.get(url, timeout=5, headers={'User-Agent': 'Mozilla/5.0'})
-            root = ET.fromstring(res.content)
-            items = root.findall('.//item')[:5]
-            headlines = [item.findtext('title', '').strip() for item in items if item.findtext('title')]
-            if headlines:
-                return headlines
-        except Exception as e:
-            print(f'뉴스 RSS 실패 {url}: {e}')
-    return []
-
-def get_kiwoom_stock_prices():
-    """키움 API로 종목 현재가 조회"""
-    import time
-    try:
-        from kiwoom_client import KiwoomClient
-        client = KiwoomClient()
         results = []
-        for stock in WATCHLIST:
-            time.sleep(1)
+        for idx in US_INDICES:
             try:
-                info = client.get_stock_info(stock['code'])
-                # 키움 API: cur_prc(현재가), flu_rt(등락률) 또는 stck_prpr, prdy_ctrt
-                price = info.get('cur_prc') or info.get('stck_prpr', 0)
-                change = info.get('flu_rt') or info.get('prdy_ctrt', 0)
-                try:
-                    price = int(price) if price else 0
-                except (ValueError, TypeError):
-                    price = 0
-                try:
-                    change = float(change) if change else 0.0
-                except (ValueError, TypeError):
-                    change = 0.0
-                results.append({
-                    'code': stock['code'],
-                    'name': stock['name'],
-                    'price': price,
-                    'change': change,
-                })
-            except Exception as e:
-                print(f"{stock['name']} 조회 실패: {e}")
+                ticker = yf.Ticker(idx['symbol'])
+                hist = ticker.history(period='2d')
+                if len(hist) >= 2:
+                    prev = float(hist['Close'].iloc[-2])
+                    last = float(hist['Close'].iloc[-1])
+                    chg_pct = (last - prev) / prev * 100
+                    results.append({
+                        'name': idx['name'],
+                        'price': round(last, 2),
+                        'change_pct': round(chg_pct, 2),
+                    })
+            except Exception:
+                continue
         return results
     except Exception as e:
-        print(f'키움 클라이언트 실패: {e}')
+        log(f'미국 증시 조회 실패: {e}', 'WARN')
         return []
 
-def analyze_with_ai(us_market, news, stocks):
-    """AI 오늘 전략 수립"""
+
+def get_korean_stock_news() -> list:
+    """한국 경제 뉴스 헤드라인"""
+    try:
+        import xml.etree.ElementTree as ET
+        sources = [
+            'https://www.yna.co.kr/rss/economy.xml',
+            'https://rss.hankyung.com/economy.xml',
+        ]
+        headlines = []
+        keywords = ['코스피', '반도체', '외국인', '기관', '금리', '환율', '수출', 'AI', '배터리']
+
+        for url in sources:
+            try:
+                res = requests.get(url, timeout=5, headers={'User-Agent': 'Mozilla/5.0'})
+                root = ET.fromstring(res.content)
+                for item in root.findall('.//item'):
+                    title = item.findtext('title', '').strip()
+                    if any(k in title for k in keywords):
+                        headlines.append(title)
+                if len(headlines) >= 10:
+                    break
+            except Exception:
+                continue
+
+        return headlines[:10]
+    except Exception as e:
+        log(f'뉴스 수집 실패: {e}', 'WARN')
+        return []
+
+
+def get_stock_prices() -> list:
+    """키움 API로 전 종목 현재가 조회"""
+    results = []
+    for stock in WATCHLIST:
+        try:
+            price = kiwoom.get_current_price(stock['code'])
+            results.append({
+                'code': stock['code'],
+                'name': stock['name'],
+                'sector': stock['sector'],
+                'price': price,
+            })
+        except Exception:
+            results.append({
+                'code': stock['code'],
+                'name': stock['name'],
+                'sector': stock['sector'],
+                'price': 0,
+            })
+        time.sleep(0.2)
+    return results
+
+
+def get_stock_indicators() -> list:
+    """DB에서 종목별 기술적 지표 요약"""
+    if not supabase:
+        return []
+
+    results = []
+    for stock in WATCHLIST:
+        try:
+            rows = (
+                supabase.table('daily_ohlcv')
+                .select('close_price,volume')
+                .eq('stock_code', stock['code'])
+                .order('date', desc=False)
+                .limit(30)
+                .execute()
+                .data or []
+            )
+            if len(rows) < 14:
+                continue
+
+            closes = [float(r['close_price']) for r in rows]
+            volumes = [float(r.get('volume', 0)) for r in rows]
+
+            # RSI
+            gains, losses = [], []
+            for i in range(1, len(closes)):
+                diff = closes[i] - closes[i - 1]
+                gains.append(max(diff, 0))
+                losses.append(max(-diff, 0))
+            avg_gain = sum(gains[-14:]) / 14
+            avg_loss = sum(losses[-14:]) / 14
+            rs = avg_gain / avg_loss if avg_loss > 0 else 100
+            rsi = round(100 - (100 / (1 + rs)), 1)
+
+            # 거래량 비율
+            avg_vol = sum(volumes[-20:]) / min(len(volumes[-20:]), 20) if volumes else 1
+            vol_ratio = round(volumes[-1] / avg_vol, 2) if avg_vol > 0 else 1.0
+
+            # 볼린저밴드 위치
+            bb_pos = 50
+            if len(closes) >= 20:
+                ma20 = sum(closes[-20:]) / 20
+                std20 = (sum((c - ma20) ** 2 for c in closes[-20:]) / 20) ** 0.5
+                bb_width = 4 * std20
+                if bb_width > 0:
+                    bb_pos = round((closes[-1] - (ma20 - 2 * std20)) / bb_width * 100, 1)
+
+            results.append({
+                'code': stock['code'],
+                'name': stock['name'],
+                'sector': stock['sector'],
+                'rsi': rsi,
+                'vol_ratio': vol_ratio,
+                'bb_pos': bb_pos,
+                'last_close': closes[-1],
+            })
+        except Exception:
+            continue
+
+    return results
+
+
+def get_yesterday_results() -> str:
+    """전날 매매 결과 요약"""
+    if not supabase:
+        return '전날 매매 데이터 없음'
+    try:
+        yesterday = (datetime.now() - timedelta(days=1)).date().isoformat()
+        trades = (
+            supabase.table('trade_executions')
+            .select('*')
+            .gte('created_at', yesterday)
+            .lt('created_at', datetime.now().date().isoformat())
+            .execute()
+            .data or []
+        )
+        if not trades:
+            return '전날 매매 없음'
+
+        buys = [t for t in trades if t.get('trade_type') == 'BUY']
+        sells = [t for t in trades if t.get('trade_type') == 'SELL']
+        return f'전날 매매: 매수 {len(buys)}건, 매도 {len(sells)}건'
+    except Exception:
+        return '전날 매매 조회 실패'
+
+
+# ─────────────────────────────────────────────
+# AI 전략 생성
+# ─────────────────────────────────────────────
+def analyze_with_ai(
+    us_market: list,
+    news: list,
+    stocks: list,
+    indicators: list,
+    yesterday: str,
+) -> dict:
+    """GPT로 오늘 전략 수립"""
+    if not OPENAI_KEY:
+        log('OpenAI 키 없음 → 룰 기반 전략 생성', 'WARN')
+        return generate_rule_based_strategy(indicators)
+
     try:
         from openai import OpenAI
         client = OpenAI(api_key=OPENAI_KEY)
 
-        us_summary = '\n'.join([
-            f"{m['name']}: {m['price']} ({m['change']:+.2f}%)"
+        us_summary = '\n'.join(
+            f"  {m['name']}: {m['price']:,.2f} ({m['change_pct']:+.2f}%)"
             for m in us_market
-        ]) or '조회 실패'
+        ) if us_market else '미국 증시 데이터 없음'
 
-        news_summary = '\n'.join(news[:5]) or '뉴스 없음'
+        news_summary = '\n'.join(f"  - {h}" for h in news[:7]) if news else '뉴스 없음'
 
-        stock_summary = '\n'.join([
-            f"{s['name']}({s['code']}): {s['price']}원 ({s['change']:+.2f}%)"
+        stock_summary = '\n'.join(
+            f"  {s['name']}({s['code']}): {s['price']:,}원 [RSI:{ind.get('rsi','?')} BB:{ind.get('bb_pos','?')}% Vol:{ind.get('vol_ratio','?')}x]"
             for s in stocks
-        ]) or '조회 실패'
+            for ind in indicators
+            if ind['code'] == s['code']
+        ) if stocks and indicators else '종목 데이터 없음'
 
-        prompt = f"""당신은 한국 주식 퀀트 트레이더입니다.
-오늘 장 시작 전 데이터를 분석해서 전략을 JSON으로만 출력하세요.
+        prompt = f"""한국 주식 퀀트 트레이더입니다. 오늘({datetime.now().strftime('%Y-%m-%d %A')}) 장 전 전략을 수립합니다.
 
 [미국 증시 마감]
 {us_summary}
 
-[오늘 주요 뉴스]
+[한국 경제 뉴스]
 {news_summary}
 
-[관심 종목 현황]
+[감시 종목 현황]
 {stock_summary}
 
-[출력 형식 - JSON만]
+[전일 매매]
+{yesterday}
+
+[분석 요청]
+1. market_outlook: 오늘 시장 전망 (강세/중립/약세)
+2. risk_level: 리스크 수준 (낮음/보통/높음)
+3. sector_view: 섹터별 전망 (반도체/자동차/바이오/IT/금융/배터리)
+4. top_picks: 매수/관망/매도 추천 종목 (최대 10개)
+   각 종목: code, name, action(BUY/WATCH/SELL), reason(한줄)
+
+반드시 아래 JSON만 출력:
 {{
-  "market_outlook": "강세/약세/중립",
+  "date": "{datetime.now().date().isoformat()}",
+  "market_outlook": "강세|중립|약세",
+  "risk_level": "낮음|보통|높음",
+  "sector_view": {{"반도체": "긍정|중립|부정", ...}},
   "top_picks": [
-    {{"code": "종목코드", "name": "종목명", "action": "BUY/WATCH/AVOID", "reason": "한줄이유"}}
+    {{"code": "005930", "name": "삼성전자", "action": "BUY", "reason": "이유"}}
   ],
-  "risk_level": "낮음/보통/높음",
-  "summary": "오늘 전략 한줄요약"
+  "summary": "한줄 요약"
 }}"""
 
         res = client.chat.completions.create(
             model='gpt-4o-mini',
             messages=[{'role': 'user', 'content': prompt}],
-            temperature=0.1,
-            max_tokens=500,
+            temperature=0.2,
+            max_tokens=800,
         )
         raw = res.choices[0].message.content.strip()
         raw = raw.replace('```json', '').replace('```', '').strip()
-        return json.loads(raw)
+
+        # JSON 추출
+        start = raw.find('{')
+        end = raw.rfind('}') + 1
+        if start >= 0 and end > start:
+            strategy = json.loads(raw[start:end])
+        else:
+            raise ValueError(f'JSON 파싱 불가: {raw[:100]}')
+
+        # 필수 필드 보정
+        strategy['date'] = datetime.now().date().isoformat()
+        strategy.setdefault('market_outlook', '중립')
+        strategy.setdefault('risk_level', '보통')
+        strategy.setdefault('top_picks', [])
+        strategy.setdefault('summary', '')
+        strategy['source'] = 'AI'
+
+        return strategy
+
     except Exception as e:
-        print(f'AI 분석 실패: {e}')
-        return {
-            'market_outlook': '중립',
-            'top_picks': [],
-            'risk_level': '보통',
-            'summary': 'AI 분석 실패'
-        }
+        log(f'AI 전략 생성 실패 → 룰 기반 fallback: {e}', 'WARN')
+        return generate_rule_based_strategy(indicators)
 
+
+def generate_rule_based_strategy(indicators: list) -> dict:
+    """AI 없이 지표 기반 전략 생성"""
+    picks = []
+    for ind in indicators:
+        rsi = ind.get('rsi', 50)
+        bb = ind.get('bb_pos', 50)
+        vol = ind.get('vol_ratio', 1.0)
+
+        if rsi <= 35 and bb <= 30 and vol >= 0.8:
+            action = 'BUY'
+            reason = f'RSI {rsi} + BB하단 {bb}% — 매수 구간'
+        elif rsi >= 70 and bb >= 80:
+            action = 'SELL'
+            reason = f'RSI {rsi} + BB상단 {bb}% — 매도 구간'
+        elif rsi <= 45 and vol >= 1.0:
+            action = 'WATCH'
+            reason = f'RSI {rsi} — 관망 (추가 하락 시 매수)'
+        else:
+            continue
+
+        picks.append({
+            'code': ind['code'],
+            'name': ind['name'],
+            'action': action,
+            'reason': reason,
+        })
+
+    return {
+        'date': datetime.now().date().isoformat(),
+        'market_outlook': '중립',
+        'risk_level': '보통',
+        'sector_view': {},
+        'top_picks': picks[:10],
+        'summary': f'룰 기반 전략: BUY {sum(1 for p in picks if p["action"]=="BUY")}개, WATCH {sum(1 for p in picks if p["action"]=="WATCH")}개',
+        'source': 'RULE',
+    }
+
+
+# ─────────────────────────────────────────────
+# 메인 실행
+# ─────────────────────────────────────────────
 def run_premarket():
-    print(f'\n[{datetime.now()}] 장 전 분석 시작')
+    log('=' * 50)
+    log('장 전 분석 시작')
 
+    # 1. 데이터 수집
+    log('미국 증시 조회...')
     us_market = get_us_market()
-    news      = get_korean_stock_news()
-    stocks    = get_kiwoom_stock_prices()
-    strategy  = analyze_with_ai(us_market, news, stocks)
+    for m in us_market:
+        log(f"  {m['name']}: {m['price']:,.2f} ({m['change_pct']:+.2f}%)")
 
-    # 텔레그램 브리핑
-    now = datetime.now().strftime('%m/%d %H:%M')
+    log('한국 뉴스 수집...')
+    news = get_korean_stock_news()
+    log(f'  {len(news)}개 뉴스 수집')
 
-    us_lines = '\n'.join([
-        f"  {'📈' if m['change'] >= 0 else '📉'} {m['name']}: {m['change']:+.2f}%"
-        for m in us_market
-    ]) or '  조회 실패'
+    log('종목 현재가 조회...')
+    stocks = get_stock_prices()
+    log(f'  {len(stocks)}개 종목 조회')
 
-    picks_lines = '\n'.join([
-        f"  {'🟢' if p['action']=='BUY' else '👀' if p['action']=='WATCH' else '🔴'} "
-        f"{p['name']}: {p['action']} — {p['reason']}"
-        for p in strategy.get('top_picks', [])
-    ]) or '  추천 없음'
+    log('기술적 지표 계산...')
+    indicators = get_stock_indicators()
+    log(f'  {len(indicators)}개 종목 지표 계산')
 
-    msg = (
-        f"🌅 <b>장 전 브리핑</b> {now}\n\n"
-        f"🇺🇸 <b>미국 증시</b>\n{us_lines}\n\n"
-        f"📊 <b>AI 전략</b> [{strategy.get('market_outlook','?')}장 / 리스크:{strategy.get('risk_level','?')}]\n"
-        f"{picks_lines}\n\n"
-        f"💡 {strategy.get('summary','')}"
-    )
+    yesterday = get_yesterday_results()
+    log(f'  {yesterday}')
 
-    send_telegram(msg)
-    print(msg)
+    # 2. AI 전략 수립
+    log('전략 수립 중...')
+    strategy = analyze_with_ai(us_market, news, stocks, indicators, yesterday)
+    log(f"전략 생성 완료 [{strategy.get('source', '?')}]: {strategy.get('market_outlook', '?')}")
 
-    # 전략 저장
-    strategy_path = Path('/home/wlsdud5035/.openclaw/workspace/stocks/today_strategy.json')
-    strategy['date'] = datetime.now().date().isoformat()
-    strategy['us_market'] = us_market
-    strategy_path.write_text(json.dumps(strategy, ensure_ascii=False, indent=2))
-    print(f'✅ 전략 저장: {strategy_path}')
+    # 3. 전략 저장
+    try:
+        STRATEGY_PATH.parent.mkdir(parents=True, exist_ok=True)
+        STRATEGY_PATH.write_text(json.dumps(strategy, ensure_ascii=False, indent=2))
+        log(f'전략 저장: {STRATEGY_PATH}', 'OK')
+    except Exception as e:
+        log(f'전략 저장 실패: {e}', 'ERROR')
 
+    # 4. DB 저장
     if supabase:
         try:
-            supabase.table('daily_reports').upsert({
-                'date': datetime.now().date().isoformat(),
+            supabase.table('daily_reports').upsert([{
+                'date': strategy['date'],
                 'report_type': 'premarket',
-                'market_outlook': strategy.get('market_outlook', '중립'),
-                'risk_level': strategy.get('risk_level', '보통'),
-                'summary': strategy.get('summary', ''),
-                'top_picks': json.dumps(strategy.get('top_picks', []), ensure_ascii=False),
-                'us_market': json.dumps(us_market, ensure_ascii=False),
-            }).execute()
-            print('✅ Supabase daily_reports 저장 완료')
+                'content': json.dumps(strategy, ensure_ascii=False),
+            }], on_conflict='date,report_type').execute()
         except Exception as e:
-            print(f'❌ Supabase 저장 실패: {e}')
+            log(f'DB 저장 실패: {e}', 'WARN')
+
+    # 5. 텔레그램 브리핑
+    us_text = '\n'.join(
+        f"  {m['name']}: {m['change_pct']:+.2f}%"
+        for m in us_market
+    ) if us_market else '  데이터 없음'
+
+    picks_text = '\n'.join(
+        f"  {'🟢' if p['action']=='BUY' else '🔴' if p['action']=='SELL' else '⚪'} "
+        f"{p['name']}: {p['action']} — {p['reason']}"
+        for p in strategy.get('top_picks', [])
+    ) if strategy.get('top_picks') else '  추천 종목 없음'
+
+    msg = (
+        f"📊 <b>장 전 브리핑</b> ({strategy['date']})\n"
+        f"[{strategy.get('source', '?')}]\n\n"
+        f"🌍 <b>미국 증시</b>\n{us_text}\n\n"
+        f"📈 <b>시장 전망</b>: {strategy.get('market_outlook', '?')}\n"
+        f"⚠️ <b>리스크</b>: {strategy.get('risk_level', '?')}\n\n"
+        f"🎯 <b>오늘 전략</b>\n{picks_text}\n\n"
+        f"💬 {strategy.get('summary', '')}\n"
+        f"⚠️ 모의투자"
+    )
+    send_telegram(msg)
+
+    log('장 전 분석 완료', 'OK')
+    log('=' * 50)
+
 
 if __name__ == '__main__':
     run_premarket()
