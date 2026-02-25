@@ -70,9 +70,10 @@ RISK = {
     "take_profit": 0.10,         # 고정 익절 +10% (트레일링 보완용)
     "trailing_stop": 0.015,      # 트레일링 스탑 1.5%
     "trailing_activate": 0.01,   # 수익 1% 이상일 때만 트레일링 활성화
-    "min_confidence": 55,        # 최소 신뢰도 55%
+    "min_confidence": 70,        # 최소 신뢰도 70%
     "max_positions": 5,          # 최대 동시 5종목
     "max_daily_loss": -0.08,     # 일일 손실 한도 -8%
+    "max_trades_per_day": 2,     # 하루 신규 매수 최대 2건
     "split_ratios": [0.50, 0.30, 0.20],  # 1차에 50% 공격적
     "split_rsi_thresholds": [45, 38, 30],  # RSI 기준 완화
     "min_order_krw": 30000,      # 최소 주문금액
@@ -86,7 +87,7 @@ RISK = {
 
 # 룰 기반 매매 기준 (AI fallback) — v3 공격적
 RULES = {
-    "buy_rsi_max": 45,
+    "buy_rsi_max": 35,
     "buy_bb_max": 40,
     "buy_vol_min": 0.7,
     "sell_rsi_min": 65,
@@ -788,7 +789,7 @@ def get_trading_signal(
         from ml_model import get_ml_signal, MODEL_PATH  # 같은 디렉토리
         if MODEL_PATH.exists():
             ml = get_ml_signal(stock['code'])
-            if ml.get('action') == 'BUY' and ml.get('confidence', 0) >= 65:
+            if ml.get('action') == 'BUY' and ml.get('confidence', 0) >= 78:
                 log(
                     f"  ML 신호: {ml['action']} ({ml['confidence']:.1f}%) "
                     f"[{ml.get('source', 'ML_XGBOOST')}]",
@@ -800,7 +801,7 @@ def get_trading_signal(
                     'reason': f"ML 모델 매수확률 {ml['confidence']:.1f}%",
                     'source': 'ML_XGBOOST',
                 }
-            elif ml.get('confidence', 0) >= 50:
+            elif ml.get('confidence', 0) >= 65:
                 log(
                     f"  ML 애매: {ml.get('confidence', 0):.1f}% → AI 확인",
                     'INFO',
@@ -1240,6 +1241,24 @@ def run_trading_cycle():
     if check_daily_loss():
         log('🚨 일일 손실 한도 초과 — 사이클 스킵', 'WARN')
         return
+
+    # 오늘 신규 매수 건수 한도 체크
+    today = datetime.now().date().isoformat()
+    try:
+        today_buys = (
+            supabase.table('trade_executions')
+            .select('trade_id')
+            .eq('trade_type', 'BUY')
+            .gte('created_at', today)
+            .execute()
+            .data
+            or []
+        )
+        if len(today_buys) >= RISK['max_trades_per_day']:
+            log('오늘 매수 한도 도달 — 사이클 스킵', 'WARN')
+            return
+    except Exception as e:
+        log(f'오늘 매수 건수 조회 실패: {e}', 'WARN')
 
     # 보유 포지션 손절/익절 먼저 체크
     check_stop_loss_take_profit()
