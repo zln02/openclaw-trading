@@ -213,7 +213,9 @@ BTC_HTML = """<!DOCTYPE html>
     transition: border-color 0.2s;
   }
 
-  .stat-card:hover { border-color: var(--accent); }
+  .stat-card:hover { border-color: var(--accent); box-shadow: 0 0 12px rgba(0,212,255,0.08); }
+  .card:hover { border-color: rgba(0,212,255,0.2); }
+  .indicator-card:hover { border-color: rgba(0,212,255,0.2); box-shadow: 0 0 12px rgba(0,212,255,0.06); }
 
   .stat-label {
     font-size: 11px;
@@ -280,7 +282,7 @@ BTC_HTML = """<!DOCTYPE html>
   /* 인디케이터 바 */
   .indicators {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
     gap: 12px;
     margin-bottom: 20px;
   }
@@ -310,9 +312,9 @@ BTC_HTML = """<!DOCTYPE html>
   }
 
   .progress-bar {
-    height: 4px;
+    height: 6px;
     background: var(--border);
-    border-radius: 2px;
+    border-radius: 3px;
     overflow: hidden;
     margin-top: 8px;
   }
@@ -474,15 +476,21 @@ BTC_HTML = """<!DOCTYPE html>
   @media (max-width: 1200px) {
     .stats-grid { grid-template-columns: repeat(3, 1fr); }
     .content-grid { grid-template-columns: 1fr; }
-    .indicators { grid-template-columns: repeat(3, 1fr); }
   }
 
   @media (max-width: 768px) {
     main { padding: 12px; }
+    header { padding: 12px 16px; }
     .stats-grid { grid-template-columns: repeat(2, 1fr); }
     .btc-price { font-size: 28px; }
-    .indicators { grid-template-columns: 1fr; }
+    .indicators { grid-template-columns: 1fr 1fr; }
     .position-card { grid-template-columns: repeat(2, 1fr); }
+    .content-grid { gap: 12px; }
+  }
+
+  @media (max-width: 480px) {
+    .stats-grid { grid-template-columns: 1fr; }
+    .indicators { grid-template-columns: 1fr; }
   }
 
   /* 로딩 */
@@ -604,8 +612,8 @@ BTC_HTML = """<!DOCTYPE html>
         <div class="live-dot"></div>
         LIVE
       </div>
+      <span style="font-family:var(--mono);font-size:10px;color:var(--muted)" id="update-time"></span>
       <div class="header-time" id="clock">--:--:--</div>
-      <a href="/stocks" class="refresh-btn" style="text-decoration:none">📈 주식</a>
       <button class="refresh-btn" onclick="loadAll()">↻ 새로고침</button>
     </div>
   </header>
@@ -684,6 +692,29 @@ BTC_HTML = """<!DOCTYPE html>
         </div>
         <div class="stat-sub" id="ind-fg-label" style="margin-top:6px"></div>
       </div>
+      <div class="indicator-card" style="border:1px solid var(--accent);background:linear-gradient(135deg,var(--bg2),rgba(0,212,255,0.05))">
+        <div class="indicator-name" style="color:var(--accent)">복합 스코어 (매수 기준: 45)</div>
+        <div class="indicator-value" id="ind-comp" style="font-size:36px">--</div>
+        <div class="progress-bar">
+          <div class="progress-fill" id="ind-comp-bar" style="width:0%;background:var(--accent)"></div>
+        </div>
+        <div class="stat-sub" id="ind-comp-detail" style="margin-top:6px;font-family:var(--mono);font-size:11px"></div>
+      </div>
+      <div class="indicator-card">
+        <div class="indicator-name">일봉 RSI (Daily)</div>
+        <div class="indicator-value" id="ind-rsi-d">--</div>
+        <div class="progress-bar">
+          <div class="progress-fill" id="ind-rsi-d-bar" style="width:50%;background:var(--accent)"></div>
+        </div>
+        <div class="stat-sub" id="ind-rsi-d-label" style="margin-top:6px"></div>
+      </div>
+      <div class="indicator-card">
+        <div class="indicator-name">수익률</div>
+        <div style="display:flex;gap:12px;margin-top:8px">
+          <div><div class="stat-label">7일</div><div class="indicator-value" id="ind-ret7" style="font-size:18px">--</div></div>
+          <div><div class="stat-label">30일</div><div class="indicator-value" id="ind-ret30" style="font-size:18px">--</div></div>
+        </div>
+      </div>
     </div>
 
     <!-- 차트 + 포지션 -->
@@ -698,8 +729,8 @@ BTC_HTML = """<!DOCTYPE html>
             <button class="refresh-btn" onclick="setCandleInterval('minute60')" id="btn-1h">1시간</button>
           </div>
         </div>
-        <div id="candle-chart" style="width:100%;height:300px"></div>
-        <div id="volume-chart" style="width:100%;height:80px"></div>
+        <div id="candle-chart" style="width:100%;height:400px"></div>
+        <div id="volume-chart" style="width:100%;height:100px"></div>
       </div>
 
       <div class="card">
@@ -802,7 +833,7 @@ lwScript.onload = function() {
   const container = document.getElementById('candle-chart');
   candleChart = LightweightCharts.createChart(container, {
     width: container.clientWidth,
-    height: 300,
+    height: 400,
     layout: {
       background: { color: '#0f1422' },
       textColor: '#4a5068',
@@ -835,7 +866,7 @@ lwScript.onload = function() {
   const volContainer = document.getElementById('volume-chart');
   const volChart = LightweightCharts.createChart(volContainer, {
     width: volContainer.clientWidth,
-    height: 80,
+    height: 100,
     layout: { background: { color: '#0f1422' }, textColor: '#4a5068' },
     grid: {
       vertLines: { color: '#1e2537' },
@@ -852,7 +883,7 @@ lwScript.onload = function() {
   });
 
   setCandleInterval('minute5');
-  setInterval(loadCandles, 10000);
+  setInterval(loadCandles, 5000);
 };
 
 async function loadCandles() {
@@ -971,7 +1002,50 @@ function openUsDashboard() {
 }
 
 async function loadAll() {
-  await Promise.allSettled([loadStats(), loadTrades(), loadFG(), loadLogs(), loadSystem(), loadBrain()]);
+  await Promise.allSettled([loadStats(), loadTrades(), loadFG(), loadComposite(), loadLogs(), loadSystem(), loadBrain()]);
+}
+
+async function loadComposite() {
+  try {
+    const res = await fetch('/api/btc/composite');
+    if (!res.ok) return;
+    const d = await res.json();
+    if (d.error) return;
+    const c = d.composite || {};
+    const total = c.total || 0;
+    const threshold = d.buy_threshold || 45;
+
+    const el = document.getElementById('ind-comp');
+    el.textContent = total + '/100';
+    el.className = 'indicator-value ' + (total >= threshold ? 'positive' : total >= threshold - 10 ? '' : 'negative');
+
+    const bar = document.getElementById('ind-comp-bar');
+    bar.style.width = total + '%';
+    bar.style.background = total >= threshold ? 'var(--green)' : total >= threshold - 10 ? 'var(--yellow)' : 'var(--red)';
+
+    document.getElementById('ind-comp-detail').textContent =
+      'F&G:' + (c.fg||0) + ' RSI:' + (c.rsi||0) + ' BB:' + (c.bb||0) + ' Vol:' + (c.vol||0) + ' Trend:' + (c.trend||0) +
+      (total >= threshold ? ' → 매수 가능' : ' → 미달 (' + (threshold - total) + '점 부족)');
+
+    // 일봉 RSI
+    const rsiD = d.rsi_d || 50;
+    const rsiDEl = document.getElementById('ind-rsi-d');
+    rsiDEl.textContent = rsiD.toFixed(1);
+    rsiDEl.className = 'indicator-value ' + (rsiD >= 70 ? 'negative' : rsiD <= 35 ? 'positive' : '');
+    document.getElementById('ind-rsi-d-bar').style.width = rsiD + '%';
+    document.getElementById('ind-rsi-d-bar').style.background = rsiD >= 70 ? 'var(--red)' : rsiD <= 35 ? 'var(--green)' : 'var(--accent)';
+    document.getElementById('ind-rsi-d-label').textContent = rsiD >= 70 ? '과매수' : rsiD <= 35 ? '과매도' : '중립 (' + (d.trend||'') + ')';
+
+    // 수익률
+    const r7 = d.ret_7d || 0;
+    const r30 = d.ret_30d || 0;
+    const r7El = document.getElementById('ind-ret7');
+    r7El.textContent = (r7 >= 0 ? '+' : '') + r7.toFixed(1) + '%';
+    r7El.className = 'indicator-value ' + (r7 > 0 ? 'positive' : 'negative');
+    const r30El = document.getElementById('ind-ret30');
+    r30El.textContent = (r30 >= 0 ? '+' : '') + r30.toFixed(1) + '%';
+    r30El.className = 'indicator-value ' + (r30 > 0 ? 'positive' : 'negative');
+  } catch(e) { console.error('composite error', e); }
 }
 
 async function loadLogs() {
@@ -1130,8 +1204,8 @@ async function loadStats() {
         '<div><div class="stat-label">현재가</div><div style="font-family:var(--mono);font-size:18px;margin-top:4px;color:var(--accent)">' + fmt(d.last_price) + '원</div></div>' +
         '<div><div class="stat-label">수익률</div><div style="font-family:var(--mono);font-size:24px;margin-top:4px" class="' + (isPos ? 'positive' : 'negative') + '">' + (isPos ? '+' : '') + change + '%</div></div>' +
         '<div><div class="stat-label">투입금액</div><div style="font-family:var(--mono);font-size:18px;margin-top:4px">' + fmt(pos.entry_krw) + '원</div></div>' +
-        '<div><div class="stat-label">손절가</div><div style="font-family:var(--mono);font-size:14px;margin-top:4px;color:var(--red)">' + fmt(Math.round(pos.entry_price*0.98)) + '원</div></div>' +
-        '<div><div class="stat-label">익절가</div><div style="font-family:var(--mono);font-size:14px;margin-top:4px;color:var(--green)">' + fmt(Math.round(pos.entry_price*1.04)) + '원</div></div>' +
+        '<div><div class="stat-label">손절가 (-3%)</div><div style="font-family:var(--mono);font-size:14px;margin-top:4px;color:var(--red)">' + fmt(Math.round(pos.entry_price*0.97)) + '원</div></div>' +
+        '<div><div class="stat-label">익절가 (+15%)</div><div style="font-family:var(--mono);font-size:14px;margin-top:4px;color:var(--green)">' + fmt(Math.round(pos.entry_price*1.15)) + '원</div></div>' +
         '</div>';
       document.getElementById('position-body').innerHTML = posHtml;
       document.getElementById('pos-status').innerHTML = '<span class="action-pill buy">OPEN</span>';
@@ -1181,11 +1255,15 @@ async function loadTrades() {
   }
 }
 
-// 초기 로드 + 30초 자동 갱신
-loadAll();
+async function refreshAll() {
+  await loadAll();
+  const ut = document.getElementById('update-time');
+  if (ut) ut.textContent = '갱신 ' + new Date().toLocaleTimeString('ko-KR');
+}
+refreshAll();
 setTimeout(loadNews, 1500);
-setInterval(loadAll, 30000);
-setInterval(loadNews, 30000);
+setInterval(refreshAll, 10000);
+setInterval(loadNews, 60000);
 
 // 5초 후에도 상단 가격이 '--'면 연결 안내 (거래 테이블은 항상 표시)
 setTimeout(function(){

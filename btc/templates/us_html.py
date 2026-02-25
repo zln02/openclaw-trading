@@ -24,12 +24,15 @@ US_DASHBOARD_HTML = r'''<!DOCTYPE html>
   @keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.3;}}
   main{max-width:1400px;margin:0 auto;padding:24px;}
   .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px;}
-  @media(max-width:900px){.grid-2{grid-template-columns:1fr;}}
-  .card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:16px;overflow:hidden;}
+  @media(max-width:900px){.grid-2{grid-template-columns:1fr;}.pos-grid{grid-template-columns:1fr 1fr;}}
+  @media(max-width:600px){.pos-grid{grid-template-columns:1fr;}.idx-row{grid-template-columns:1fr 1fr;}main{padding:12px;}header{padding:12px 16px;}}
+  .card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:16px;overflow:hidden;transition:border-color 0.2s;}
+  .card:hover{border-color:rgba(0,212,255,0.15);}
   .card-title{font-size:13px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:12px;display:flex;align-items:center;gap:8px;}
   .card-title span{color:var(--accent);}
   .stat-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:20px;}
-  .stat-card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:14px 16px;text-align:center;}
+  .stat-card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:14px 16px;text-align:center;transition:border-color 0.2s,box-shadow 0.2s;}
+  .stat-card:hover{border-color:rgba(0,212,255,0.25);box-shadow:0 0 12px rgba(0,212,255,0.08);}
   .stat-label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px;}
   .stat-val{font-size:22px;font-weight:700;font-family:var(--mono);}
   .idx-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:20px;}
@@ -39,7 +42,7 @@ US_DASHBOARD_HTML = r'''<!DOCTYPE html>
   .idx-chg{font-size:13px;font-family:var(--mono);margin-top:2px;}
   .pos-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-bottom:16px;}
   .pos-card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:14px 16px;cursor:pointer;transition:all .2s;}
-  .pos-card:hover,.pos-card.active{border-color:var(--accent);background:rgba(0,212,255,0.04);}
+  .pos-card:hover,.pos-card.active{border-color:var(--accent);background:rgba(0,212,255,0.04);box-shadow:0 0 12px rgba(0,212,255,0.08);}
   .pos-sym{font-size:16px;font-weight:700;font-family:var(--mono);}
   .pos-detail{font-size:11px;color:var(--muted);font-family:var(--mono);margin-top:2px;}
   .pos-cur{font-size:14px;font-weight:600;font-family:var(--mono);margin-top:4px;}
@@ -49,9 +52,9 @@ US_DASHBOARD_HTML = r'''<!DOCTYPE html>
   .portfolio-bar .item{display:flex;flex-direction:column;gap:2px;}
   .portfolio-bar .label{color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:0.06em;}
   .portfolio-bar .val{font-weight:700;font-size:16px;}
-  .krw-sub{display:block;font-size:11px;color:var(--muted);font-weight:400;margin-top:1px;}
-  .pos-krw{font-size:10px;color:var(--muted);font-family:var(--mono);}
-  .chart-container{width:100%;height:300px;border-radius:8px;overflow:hidden;}
+  .krw-sub{display:block;font-size:12px;color:var(--yellow);font-weight:500;margin-top:2px;opacity:0.85;}
+  .pos-krw{font-size:11px;color:var(--yellow);font-family:var(--mono);opacity:0.8;}
+  .chart-container{width:100%;height:400px;border-radius:8px;overflow:hidden;}
   .chart-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;}
   .chart-tabs{display:flex;gap:4px;}
   .chart-tab{padding:4px 12px;border-radius:6px;font-size:11px;font-weight:600;color:var(--muted);cursor:pointer;background:transparent;border:1px solid var(--border);font-family:var(--mono);}
@@ -63,7 +66,7 @@ US_DASHBOARD_HTML = r'''<!DOCTYPE html>
   .filter-bar input,.filter-bar select{background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:6px 12px;color:var(--text);font-family:var(--mono);font-size:12px;outline:none;}
   .filter-bar input:focus,.filter-bar select:focus{border-color:var(--accent);}
   .filter-bar input{width:180px;}
-  .badge{display:inline-block;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;font-family:var(--mono);margin-left:4px;}
+  .badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700;font-family:var(--mono);margin-left:4px;}
   .badge-a{background:rgba(0,230,118,0.15);color:var(--green);}
   .badge-b{background:rgba(0,212,255,0.15);color:var(--accent);}
   .badge-c{background:rgba(255,214,0,0.15);color:var(--yellow);}
@@ -116,77 +119,77 @@ US_DASHBOARD_HTML = r'''<!DOCTYPE html>
   <main>
     <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:20px;">
       <div>
-        <h2 style="font-size:20px;font-weight:700;">&#x1F1FA;&#x1F1F8; US Momentum Auto-Trading <span class="ko">(&#xBBF8;&#xAD6D;&#xC8FC;&#xC2DD; &#xBAA8;&#xBA58;&#xD140; &#xC790;&#xB3D9;&#xB9E4;&#xB9E4;)</span></h2>
+        <h2 style="font-size:20px;font-weight:700;">&#x1F1FA;&#x1F1F8; &#xBBF8;&#xAD6D;&#xC8FC;&#xC2DD; &#xBAA8;&#xBA58;&#xD140; &#xC790;&#xB3D9;&#xB9E4;&#xB9E4;</h2>
         <div style="font-size:12px;color:var(--muted);font-family:var(--mono);margin-top:4px;" id="sub-header">Loading...</div>
       </div>
       <div style="font-family:var(--mono);font-size:11px;color:var(--muted);" id="last-update"></div>
     </div>
 
-    <!-- Market Indices (시장 지수) -->
+    <!-- 시장 지수 -->
     <div class="idx-row" id="idx-row"><div class="idx-card"><div class="idx-name">Loading...</div></div></div>
 
-    <!-- Stats (통계) -->
+    <!-- 통계 -->
     <div class="stat-row" id="stat-row"></div>
 
-    <!-- Portfolio (포트폴리오) -->
+    <!-- 포트폴리오 -->
     <div id="portfolio-section"></div>
 
-    <!-- Chart + Logs -->
+    <!-- 차트 + 로그 -->
     <div class="grid-2">
       <div class="card">
         <div class="chart-header">
-          <div class="card-title"><span>&#x1F4CA;</span> <span id="chart-title">Stock Chart (종목 차트)</span> <span class="chart-live-dot" id="chart-live-dot" style="display:none;"></span></div>
+          <div class="card-title"><span>&#x1F4CA;</span> <span id="chart-title">&#xC885;&#xBAA9; &#xCC28;&#xD2B8;</span> <span class="chart-live-dot" id="chart-live-dot" style="display:none;"></span></div>
           <div class="chart-tabs" id="chart-tabs">
-            <div class="chart-tab" data-period="1mo">1M</div>
-            <div class="chart-tab active" data-period="3mo">3M</div>
-            <div class="chart-tab" data-period="6mo">6M</div>
-            <div class="chart-tab" data-period="1y">1Y</div>
+            <div class="chart-tab" data-period="1mo">1&#xAC1C;&#xC6D4;</div>
+            <div class="chart-tab active" data-period="3mo">3&#xAC1C;&#xC6D4;</div>
+            <div class="chart-tab" data-period="6mo">6&#xAC1C;&#xC6D4;</div>
+            <div class="chart-tab" data-period="1y">1&#xB144;</div>
           </div>
         </div>
         <div class="chart-container" id="stock-chart"></div>
       </div>
       <div class="card">
-        <div class="card-title"><span>&#x1F4DD;</span> Agent Log (실시간 에이전트 로그)</div>
+        <div class="card-title"><span>&#x1F4DD;</span> &#xC2E4;&#xC2DC;&#xAC04; &#xC5D0;&#xC774;&#xC804;&#xD2B8; &#xB85C;&#xADF8;</div>
         <div class="log-viewer" id="log-viewer">Loading...</div>
       </div>
     </div>
 
-    <!-- Trade History (매매 내역) -->
+    <!-- 매매 내역 -->
     <div class="card" style="margin-bottom:20px;">
-      <div class="card-title"><span>&#x1F4B0;</span> Trade History (최근 매매 내역)</div>
+      <div class="card-title"><span>&#x1F4B0;</span> &#xCD5C;&#xADFC; &#xB9E4;&#xB9E4; &#xB0B4;&#xC5ED;</div>
       <div class="trade-list" id="trade-list">Loading...</div>
     </div>
 
-    <!-- Ranking Table (모멘텀 랭킹) -->
-    <div class="section-title"><span>&#x1F4CA;</span> Momentum Ranking (모멘텀 랭킹)</div>
+    <!-- 모멘텀 랭킹 -->
+    <div class="section-title"><span>&#x1F4CA;</span> &#xBAA8;&#xBA58;&#xD140; &#xB7AD;&#xD0B9;</div>
     <div class="filter-bar">
-      <input type="text" id="search-input" placeholder="종목 검색 (e.g. AAPL)">
+      <input type="text" id="search-input" placeholder="&#xC885;&#xBAA9; &#xAC80;&#xC0C9; (&#xC608;: AAPL)">
       <select id="grade-filter">
-        <option value="all">전체 등급 (All Grades)</option>
-        <option value="A">A 등급 (75+)</option>
-        <option value="B">B 등급 (60+)</option>
-        <option value="C">C 등급 (40+)</option>
-        <option value="D">D 등급 (&lt;40)</option>
+        <option value="all">&#xC804;&#xCCB4; &#xB4F1;&#xAE09;</option>
+        <option value="A">A &#xB4F1;&#xAE09; (75+)</option>
+        <option value="B">B &#xB4F1;&#xAE09; (60+)</option>
+        <option value="C">C &#xB4F1;&#xAE09; (40+)</option>
+        <option value="D">D &#xB4F1;&#xAE09; (&lt;40)</option>
       </select>
       <select id="sort-select">
-        <option value="score-desc">Score 높은순 (스코어)</option>
-        <option value="score-asc">Score 낮은순</option>
-        <option value="ret5-desc">5D Return 높은순 (5일 수익률)</option>
-        <option value="ret20-desc">20D Return 높은순 (20일 수익률)</option>
-        <option value="vol-desc">Volume Ratio 높은순 (거래량비)</option>
-        <option value="near-desc">Near High 높은순 (신고가 근접)</option>
+        <option value="score-desc">&#xC2A4;&#xCF54;&#xC5B4; &#xB192;&#xC740;&#xC21C;</option>
+        <option value="score-asc">&#xC2A4;&#xCF54;&#xC5B4; &#xB0AE;&#xC740;&#xC21C;</option>
+        <option value="ret5-desc">5&#xC77C; &#xC218;&#xC775;&#xB960; &#xB192;&#xC740;&#xC21C;</option>
+        <option value="ret20-desc">20&#xC77C; &#xC218;&#xC775;&#xB960; &#xB192;&#xC740;&#xC21C;</option>
+        <option value="vol-desc">&#xAC70;&#xB798;&#xB7C9;&#xBE44; &#xB192;&#xC740;&#xC21C;</option>
+        <option value="near-desc">&#xC2E0;&#xACE0;&#xAC00; &#xADFC;&#xC811; &#xB192;&#xC740;&#xC21C;</option>
       </select>
     </div>
     <table>
       <thead><tr>
         <th>#</th>
-        <th>Symbol (종목)</th>
-        <th>Score (점수)</th>
-        <th>Ret 5D (5일 수익률)</th>
-        <th>Ret 20D (20일 수익률)</th>
-        <th>Vol Ratio (거래량비)</th>
-        <th>Near High (신고가 근접)</th>
-        <th>Status (상태)</th>
+        <th>&#xC885;&#xBAA9;</th>
+        <th>&#xC2A4;&#xCF54;&#xC5B4;</th>
+        <th>5&#xC77C; &#xC218;&#xC775;&#xB960;</th>
+        <th>20&#xC77C; &#xC218;&#xC775;&#xB960;</th>
+        <th>&#xAC70;&#xB798;&#xB7C9;&#xBE44;</th>
+        <th>&#xC2E0;&#xACE0;&#xAC00; &#xADFC;&#xC811;</th>
+        <th>&#xC0C1;&#xD0DC;</th>
       </tr></thead>
       <tbody id="ranking-body"></tbody>
     </table>
@@ -261,13 +264,13 @@ async function loadPositions() {
     const pnlU = summary.total_pnl_usd||0;
     const cap = summary.virtual_capital||10000;
     let html = `
-      <div class="card-title"><span>&#x1F4BC;</span> Portfolio (보유 포지션)</div>
+      <div class="card-title"><span>&#x1F4BC;</span> \uBCF4\uC720 \uD3EC\uC9C0\uC158</div>
       <div class="portfolio-bar">
-        <div class="item"><div class="label">Capital (가상자본)</div><div class="val">$${cap.toLocaleString()}${krwTag(cap)}</div></div>
-        <div class="item"><div class="label">Invested (투자금)</div><div class="val">$${inv.toLocaleString('en',{maximumFractionDigits:0})}${krwTag(inv)}</div></div>
-        <div class="item"><div class="label">Value (평가금)</div><div class="val">$${cur.toLocaleString('en',{maximumFractionDigits:0})}${krwTag(cur)}</div></div>
-        <div class="item"><div class="label">Return (수익률)</div><div class="val" style="color:${tc}">${pnlSign(summary.total_pnl_pct)}${(summary.total_pnl_pct||0).toFixed(2)}%</div></div>
-        <div class="item"><div class="label">P&L (손익)</div><div class="val" style="color:${tc}">${pnlSign(pnlU)}$${pnlU.toFixed(0)}${krwTag(pnlU)}</div></div>
+        <div class="item"><div class="label">\uAC00\uC0C1\uC790\uBCF8</div><div class="val">$${cap.toLocaleString()}${krwTag(cap)}</div></div>
+        <div class="item"><div class="label">\uD22C\uC790\uAE08</div><div class="val">$${inv.toLocaleString('en',{maximumFractionDigits:0})}${krwTag(inv)}</div></div>
+        <div class="item"><div class="label">\uD3C9\uAC00\uAE08</div><div class="val">$${cur.toLocaleString('en',{maximumFractionDigits:0})}${krwTag(cur)}</div></div>
+        <div class="item"><div class="label">\uC218\uC775\uB960</div><div class="val" style="color:${tc}">${pnlSign(summary.total_pnl_pct)}${(summary.total_pnl_pct||0).toFixed(2)}%</div></div>
+        <div class="item"><div class="label">\uC190\uC775</div><div class="val" style="color:${tc}">${pnlSign(pnlU)}$${pnlU.toFixed(0)}${krwTag(pnlU)}</div></div>
       </div>
       <div class="pos-grid">`;
 
@@ -298,17 +301,17 @@ function updateStats(summary, posCount) {
   const sigCount = allSignals.length;
   const avgScore = sigCount ? (allSignals.reduce((a,b) => a + (b.score||0), 0) / sigCount).toFixed(1) : '0';
   el.innerHTML = `
-    <div class="stat-card"><div class="stat-label">Universe (유니버스)</div><div class="stat-val">${sigCount}</div></div>
-    <div class="stat-card"><div class="stat-label">Avg Score (평균점수)</div><div class="stat-val">${avgScore}</div></div>
-    <div class="stat-card"><div class="stat-label">Holdings (보유종목)</div><div class="stat-val" style="color:${posCount?'var(--green)':'var(--muted)'}">${posCount}</div></div>
-    <div class="stat-card"><div class="stat-label">Total Return (총수익률)</div><div class="stat-val" style="color:${pnlColor(summary.total_pnl_pct||0)}">${pnlSign(summary.total_pnl_pct||0)}${(summary.total_pnl_pct||0).toFixed(2)}%</div></div>
+    <div class="stat-card"><div class="stat-label">\uC720\uB2C8\uBC84\uC2A4</div><div class="stat-val">${sigCount}</div></div>
+    <div class="stat-card"><div class="stat-label">\uD3C9\uADE0 \uC2A4\uCF54\uC5B4</div><div class="stat-val">${avgScore}</div></div>
+    <div class="stat-card"><div class="stat-label">\uBCF4\uC720\uC885\uBAA9</div><div class="stat-val" style="color:${posCount?'var(--green)':'var(--muted)'}">${posCount}</div></div>
+    <div class="stat-card"><div class="stat-label">\uCD1D \uC218\uC775\uB960</div><div class="stat-val" style="color:${pnlColor(summary.total_pnl_pct||0)}">${pnlSign(summary.total_pnl_pct||0)}${(summary.total_pnl_pct||0).toFixed(2)}%</div></div>
   `;
 }
 
 // ─── Chart (종목 차트) — 실시간 갱신 ───
 function selectSymbol(sym) {
   currentChartSymbol = sym;
-  document.getElementById('chart-title').textContent = sym + ' Chart (' + sym + ' 차트)';
+  document.getElementById('chart-title').textContent = sym + ' 차트';
   document.querySelectorAll('.pos-card').forEach(c => c.classList.remove('active'));
   document.querySelectorAll('.pos-card').forEach(c => {
     if (c.querySelector('.pos-sym')?.textContent === sym) c.classList.add('active');
@@ -335,7 +338,7 @@ async function loadChart(symbol, period) {
       rightPriceScale: { borderColor: '#1e2537' },
       timeScale: { borderColor: '#1e2537', timeVisible: false },
       width: container.clientWidth,
-      height: 300,
+      height: 400,
     });
 
     candleSeries = stockChart.addCandlestickSeries({
@@ -384,7 +387,7 @@ async function refreshChartData() {
 
 function startChartAutoRefresh() {
   if (chartRefreshTimer) clearInterval(chartRefreshTimer);
-  chartRefreshTimer = setInterval(refreshChartData, 10000);
+  chartRefreshTimer = setInterval(refreshChartData, 5000);
 }
 
 document.getElementById('chart-tabs').addEventListener('click', e => {
@@ -420,12 +423,12 @@ async function loadTrades() {
     const res = await fetch('/api/us/trades');
     const trades = await res.json();
     const el = document.getElementById('trade-list');
-    if (!trades.length) { el.innerHTML = '<div style="color:var(--muted);padding:20px;text-align:center;">매매 내역 없음 (No trades yet)</div>'; return; }
+    if (!trades.length) { el.innerHTML = '<div style="color:var(--muted);padding:20px;text-align:center;">\uB9E4\uB9E4 \uB0B4\uC5ED \uC5C6\uC74C</div>'; return; }
     el.innerHTML = trades.map(t => {
       const isBuy = t.trade_type === 'BUY';
       const cls = isBuy ? 'trade-buy' : 'trade-sell';
       const icon = isBuy ? '&#x1F7E2;' : '&#x1F534;';
-      const typeKo = isBuy ? 'BUY (매수)' : 'SELL (매도)';
+      const typeKo = isBuy ? '\uB9E4\uC218' : '\uB9E4\uB3C4';
       const time = (t.created_at || '').replace('T', ' ').slice(0, 19);
       const reason = t.reason || t.exit_reason || '';
       const total = (t.price||0) * (t.quantity||0);
@@ -450,8 +453,8 @@ async function loadSignals() {
     allSignals = data.items || [];
     const runDate = data.run_date || '';
     document.getElementById('sub-header').textContent =
-      (runDate ? 'Scan (스캔): ' + runDate + ' · ' : '') +
-      'Universe (유니버스) ' + allSignals.length + '종 · Avg (평균) ' +
+      (runDate ? '\uC2A4\uCE94: ' + runDate + ' \xB7 ' : '') +
+      '\uC720\uB2C8\uBC84\uC2A4 ' + allSignals.length + '\uC885 \xB7 \uD3C9\uADE0 ' +
       (allSignals.length ? (allSignals.reduce((a,b) => a + (b.score||0), 0) / allSignals.length).toFixed(1) : '0');
     renderTable();
   } catch(e) { console.error('signals', e); }
@@ -475,7 +478,7 @@ function renderTable() {
 
   const tbody = document.getElementById('ranking-body');
   if (!filtered.length) {
-    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--muted);padding:40px;">결과 없음 (No results)</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--muted);padding:40px;">\uACB0\uACFC \uC5C6\uC74C</td></tr>';
     return;
   }
 
@@ -488,7 +491,7 @@ function renderTable() {
     const isHolding = holdingSymbols.has(sym);
     const rowCls = isHolding ? 'holding-row' : '';
     const sc = s >= 70 ? 'var(--accent)' : s >= 50 ? 'var(--green)' : s >= 35 ? 'var(--yellow)' : 'var(--red)';
-    const status = isHolding ? '<span style="color:var(--accent);font-weight:700;">HOLDING (보유중)</span>' : '';
+    const status = isHolding ? '<span style="color:var(--accent);font-weight:700;">\uBCF4\uC720\uC911</span>' : '';
     return `<tr class="${rowCls}" style="cursor:pointer" onclick="selectSymbol('${sym}')">
       <td>${i+1}</td>
       <td style="font-family:var(--mono);font-weight:600">${sym}</td>
@@ -510,16 +513,16 @@ document.getElementById('sort-select').addEventListener('change', renderTable);
 async function init() {
   await loadFx();
   await Promise.all([loadMarket(), loadSignals(), loadPositions(), loadLogs(), loadTrades()]);
-  document.getElementById('last-update').textContent = 'Updated: ' + new Date().toLocaleTimeString('ko-KR');
+  document.getElementById('last-update').textContent = '\uAC31\uC2E0: ' + new Date().toLocaleTimeString('ko-KR');
 }
 
 init();
 setInterval(async () => {
   await Promise.all([loadPositions(), loadLogs(), loadTrades()]);
-  document.getElementById('last-update').textContent = 'Updated: ' + new Date().toLocaleTimeString('ko-KR');
-}, 30000);
-setInterval(loadMarket, 120000);
-setInterval(loadSignals, 300000);
+  document.getElementById('last-update').textContent = '\uAC31\uC2E0: ' + new Date().toLocaleTimeString('ko-KR');
+}, 10000);
+setInterval(loadMarket, 60000);
+setInterval(loadSignals, 120000);
 setInterval(loadFx, 300000);
 </script>
 </body>
