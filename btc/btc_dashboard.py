@@ -1366,6 +1366,15 @@ STOCKS_HTML = """<!DOCTYPE html>
   .negative{color:var(--red);}
   .neutral{color:var(--accent);}
   .industry-badge{display:inline-block;font-size:10px;font-family:var(--mono);padding:2px 6px;border-radius:3px;background:rgba(0,212,255,0.1);color:var(--accent);margin-bottom:6px;}
+  .indicator-badges{display:flex;gap:4px;margin-top:6px;flex-wrap:wrap;}
+  .badge{font-size:10px;padding:2px 6px;border-radius:3px;font-weight:bold;}
+  .badge.rsi{background:#1a1a2e;color:#00d4ff;border:1px solid #00d4ff33;}
+  .badge.macd{background:#1a1a2e;color:#ff6b6b;border:1px solid #ff6b6b33;}
+  .badge.bb{background:#1a1a2e;color:#ffd93d;border:1px solid #ffd93d33;}
+  .badge.vol{background:#1a1a2e;color:#6bcb77;border:1px solid #6bcb7733;}
+  .badge.rsi.oversold{color:#ff4444;border-color:#ff444433;}
+  .badge.rsi.low{color:#ffa500;border-color:#ffa50033;}
+  .badge.rsi.overbought{color:#ff0000;border-color:#ff000033;}
   .chart-section{display:grid;grid-template-columns:1fr 320px;gap:16px;margin-bottom:20px;}
   .trade-table{width:100%;border-collapse:collapse;}
   .trade-table th{font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);padding:10px 12px;text-align:left;border-bottom:1px solid var(--border);font-weight:600;}
@@ -1540,9 +1549,38 @@ async function loadStocks() {
         '<div class="stock-change ' + (isPos ? 'positive' : 'negative') + '">' +
           (isPos ? '▲' : '▼') + ' ' + Math.abs(s.change).toFixed(2) + '%' +
         '</div>' +
+        '<div class="indicator-badges">' +
+        '<span class="badge rsi" id="rsi-' + s.code + '">RSI --</span>' +
+        '<span class="badge macd" id="macd-' + s.code + '">MACD --</span>' +
+        '<span class="badge bb" id="bb-' + s.code + '">BB --</span>' +
+        '<span class="badge vol" id="vol-' + s.code + '">Vol --</span>' +
+        '</div>' +
         '</div>';
     }).join('');
+    stocks.forEach(function(s){ loadStockIndicators(s.code); });
   } catch(e) { console.error('stocks error', e); }
+}
+
+async function loadStockIndicators(code) {
+  try {
+    const res = await fetch('/api/stocks/indicators/' + code);
+    const data = await res.json();
+    if (data.error) return;
+    var rsiEl = document.getElementById('rsi-' + code);
+    var macdEl = document.getElementById('macd-' + code);
+    var bbEl = document.getElementById('bb-' + code);
+    var volEl = document.getElementById('vol-' + code);
+    if (rsiEl) {
+      rsiEl.textContent = 'RSI ' + data.rsi;
+      rsiEl.className = 'badge rsi';
+      if (data.rsi <= 30) rsiEl.classList.add('oversold');
+      else if (data.rsi <= 45) rsiEl.classList.add('low');
+      else if (data.rsi >= 70) rsiEl.classList.add('overbought');
+    }
+    if (macdEl) macdEl.textContent = 'MACD ' + (data.macd > 0 ? '+' : '') + data.macd;
+    if (bbEl) bbEl.textContent = 'BB ' + data.bb_pos + '%';
+    if (volEl) volEl.textContent = 'Vol ' + data.vol_ratio + 'x';
+  } catch(e) { console.log('지표 로드 실패:', code); }
 }
 
 function setStockInterval(interval) {
@@ -1962,6 +2000,75 @@ async def get_stock_chart(code: str, interval: str = Query("1d")):
     except Exception as e:
         print(f"[ERROR] stock chart: {e}")
         return []
+
+
+@app.get("/api/stocks/indicators/{code}")
+async def get_stock_indicators(code: str):
+    """종목별 기술적 지표 반환 (RSI, MACD, BB, vol_ratio)"""
+    if not supabase:
+        return {"error": "Supabase 미연결"}
+    try:
+        rows = (
+            supabase.table("daily_ohlcv")
+            .select("close_price,volume,date")
+            .eq("stock_code", code)
+            .order("date", desc=False)
+            .limit(30)
+            .execute()
+            .data or []
+        )
+        if len(rows) < 14:
+            return {"error": "데이터 부족"}
+
+        closes = [float(r["close_price"]) for r in rows]
+        volumes = [float(r.get("volume") or 0) for r in rows]
+
+        # RSI(14)
+        gains, losses = [], []
+        for i in range(1, len(closes)):
+            diff = closes[i] - closes[i - 1]
+            gains.append(max(diff, 0))
+            losses.append(max(-diff, 0))
+        avg_gain = sum(gains[-14:]) / 14
+        avg_loss = sum(losses[-14:]) / 14
+        rs = avg_gain / avg_loss if avg_loss > 0 else 100
+        rsi = round(100 - (100 / (1 + rs)), 1)
+
+        # MACD(12,26)
+        def ema(data, period):
+            k = 2 / (period + 1)
+            e = data[0]
+            for d in data[1:]:
+                e = d * k + e * (1 - k)
+            return e
+
+        ema12 = ema(closes, 12)
+        ema26 = ema(closes, 26)
+        macd = round(ema12 - ema26, 0)
+
+        # BB(20)
+        ma20 = sum(closes[-20:]) / 20 if len(closes) >= 20 else closes[-1]
+        std20 = (sum((c - ma20) ** 2 for c in closes[-20:]) / 20) ** 0.5 if len(closes) >= 20 else 0
+        bb_upper = round(ma20 + 2 * std20, 0)
+        bb_lower = round(ma20 - 2 * std20, 0)
+        bb_pos = round((closes[-1] - bb_lower) / (bb_upper - bb_lower) * 100, 1) if (bb_upper - bb_lower) > 0 else 50
+
+        # 거래량 비율
+        avg_vol = sum(volumes[-20:]) / min(len(volumes[-20:]), 20)
+        vol_ratio = round(volumes[-1] / avg_vol, 2) if avg_vol > 0 else 1.0
+
+        return {
+            "rsi": rsi,
+            "macd": macd,
+            "bb_upper": bb_upper,
+            "bb_lower": bb_lower,
+            "bb_pos": bb_pos,
+            "vol_ratio": vol_ratio,
+            "ma20": round(ma20, 0),
+        }
+    except Exception as e:
+        print(f"[ERROR] stock indicators: {e}")
+        return {"error": str(e)}
 
 
 @app.get("/api/stocks/strategy")
