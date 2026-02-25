@@ -65,29 +65,29 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 kiwoom = KiwoomClient()
 
 RISK = {
-    "invest_ratio": 0.10,       # 종목당 총 투자비율 (잔고의 10%)
-    "stop_loss": -0.03,         # 손절 -3%
-    "take_profit": 0.06,        # 익절 +6%
-    "trailing_stop": 0.02,      # 트레일링 스탑 2% (고점 대비)
-    "min_confidence": 65,        # 최소 신뢰도
-    "max_positions": 3,          # 최대 동시 보유 종목
-    "max_daily_loss": -0.05,     # 일일 손실 한도 -5%
-    "split_ratios": [0.40, 0.35, 0.25],  # 1/2/3차 분할매수 비율 (합 = 1.0)
-    "split_rsi_thresholds": [40, 35, 28],  # RSI 기준
-    "min_order_krw": 50000,      # 최소 주문금액
-    "cooldown_minutes": 30,      # 같은 종목 재매수 쿨다운
+    "invest_ratio": 0.25,        # 종목당 잔고의 25% (공격적)
+    "stop_loss": -0.02,          # 손절 -2% (빠른 손절)
+    "take_profit": 0.05,         # 익절 +5%
+    "trailing_stop": 0.015,      # 트레일링 스탑 1.5%
+    "min_confidence": 55,        # 최소 신뢰도 55%
+    "max_positions": 5,          # 최대 동시 5종목
+    "max_daily_loss": -0.08,     # 일일 손실 한도 -8%
+    "split_ratios": [0.50, 0.30, 0.20],  # 1차에 50% 공격적
+    "split_rsi_thresholds": [45, 38, 30],  # RSI 기준 완화
+    "min_order_krw": 30000,      # 최소 주문금액
+    "cooldown_minutes": 15,      # 쿨다운 15분
 }
 
-# 룰 기반 매매 기준 (AI fallback)
+# 룰 기반 매매 기준 (AI fallback) — v3 공격적
 RULES = {
-    "buy_rsi_max": 40,
-    "buy_bb_max": 30,        # BB 위치 30% 이하에서만 매수
-    "buy_vol_min": 0.8,       # 최소 거래량 비율
-    "sell_rsi_min": 70,
-    "sell_bb_min": 80,        # BB 위치 80% 이상에서 매도
-    "block_vol_below": 0.5,   # 거래량 급감 차단
-    "block_bb_above": 80,     # BB 상단 차단
-    "block_kospi_above": 75,  # 코스피 과열 차단
+    "buy_rsi_max": 45,
+    "buy_bb_max": 40,
+    "buy_vol_min": 0.7,
+    "sell_rsi_min": 65,
+    "sell_bb_min": 75,
+    "block_vol_below": 0.3,
+    "block_bb_above": 85,
+    "block_kospi_above": 80,
 }
 
 # ─────────────────────────────────────────────
@@ -619,26 +619,30 @@ def analyze_with_ai(
         kospi_msg = (kospi or {}).get('msg', '중립')
         weekly_trend = (weekly or {}).get('trend', 'UNKNOWN')
 
-        prompt = f"""한국 주식 퀀트 트레이더입니다.
-아래 데이터로 매매 신호를 JSON으로만 출력하세요.
+        prompt = f"""당신은 연평균 수익률 50% 이상의 한국 주식 상위 1% 퀀트 트레이더입니다.
+현재 모의투자 환경이므로 공격적으로 수익을 추구합니다.
 
 [종목] {stock['name']} ({stock['code']})
 [현재가] {indicators.get('price', 0):,.0f}원
-[RSI] {indicators.get('rsi', 50)}
+[RSI] {indicators.get('rsi', 50)} — 45 이하면 매수 적극 고려
 [MACD] {indicators.get('macd', 0)} (히스토그램: {indicators.get('macd_histogram', 0)})
 [거래량] {indicators.get('vol_label', '정보없음')}
-[볼린저밴드] 위치: {indicators.get('bb_pos', 50)}% (0=하단, 100=상단)
+[볼린저밴드] 위치: {indicators.get('bb_pos', 50)}% — 40% 이하면 매수 구간
 [보유 여부] {'보유 중' if has_position else '미보유'}
 [장 전 전략] {pick_info}
-[시장 전망] {strategy.get('market_outlook', '중립')} / 리스크: {strategy.get('risk_level', '보통')}
 [코스피] {kospi_msg}
 [주봉 추세] {weekly_trend}
 [뉴스] {news if news else '없음'}
+[데이터 소스] {indicators.get('data_source', '?')} ({indicators.get('data_points', '?')}봉)
 
-[매매 규칙]
-BUY: RSI≤40 + MACD양수 + BB≤30%. 거래량≤0.5배→금지. BB≥80%→금지. 주봉DOWNTREND→금지. 코스피RSI≥75→금지.
-SELL: RSI≥70 OR (MACD음수 + BB≥80%)
-HOLD: 조건 미충족
+[매매 원칙 — 공격적 모의투자]
+- 모의투자이므로 적극적으로 BUY 판단. 확률 55% 이상이면 매수.
+- RSI 45 이하 + 아무 양수 시그널 하나 → BUY (MACD 양수, 거래량 증가, BB 하단, 뉴스 긍정 중 1개)
+- RSI 35 이하면 거의 무조건 BUY (공포 매수)
+- 거래량 2배 이상 급등 + RSI 50 이하 → BUY (모멘텀)
+- SELL: RSI 65 이상 + MACD 음수 전환 시에만
+- 주봉 DOWNTREND여도 RSI 30 이하면 역발상 BUY 허용
+- 단, 거래량 0.3배 이하는 어떤 경우에도 BUY 금지
 
 반드시 아래 JSON만 출력:
 {{"action":"BUY|SELL|HOLD","confidence":0~100,"reason":"한줄이유"}}"""

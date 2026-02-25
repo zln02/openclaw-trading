@@ -60,28 +60,59 @@ kiwoom = KiwoomClient()
 
 STRATEGY_PATH = Path('/home/wlsdud5035/.openclaw/workspace/stocks/today_strategy.json')
 
-# 감시 종목
+# 감시 종목 TOP50 (v3)
 WATCHLIST = [
-    {"code": "005930", "name": "삼성전자",     "sector": "반도체"},
-    {"code": "000660", "name": "SK하이닉스",   "sector": "반도체"},
-    {"code": "042700", "name": "한미반도체",   "sector": "반도체장비"},
-    {"code": "005380", "name": "현대차",       "sector": "자동차"},
-    {"code": "000270", "name": "기아",         "sector": "자동차"},
-    {"code": "068270", "name": "셀트리온",     "sector": "바이오"},
-    {"code": "035420", "name": "NAVER",        "sector": "IT"},
-    {"code": "035720", "name": "카카오",       "sector": "IT"},
-    {"code": "051910", "name": "LG화학",       "sector": "화학"},
-    {"code": "006400", "name": "삼성SDI",      "sector": "배터리"},
-    {"code": "003670", "name": "포스코퓨처엠", "sector": "2차전지"},
-    {"code": "373220", "name": "LG에너지솔루션","sector": "배터리"},
-    {"code": "055550", "name": "신한지주",     "sector": "금융"},
-    {"code": "105560", "name": "KB금융",       "sector": "금융"},
-    {"code": "034730", "name": "SK",           "sector": "지주"},
-    {"code": "012330", "name": "현대모비스",   "sector": "자동차부품"},
-    {"code": "066570", "name": "LG전자",       "sector": "전자"},
-    {"code": "028260", "name": "삼성물산",     "sector": "건설"},
+    {"code": "005930", "name": "삼성전자",       "sector": "반도체"},
+    {"code": "000660", "name": "SK하이닉스",     "sector": "반도체"},
+    {"code": "042700", "name": "한미반도체",     "sector": "반도체장비"},
+    {"code": "403870", "name": "HPSP",           "sector": "반도체장비"},
+    {"code": "005380", "name": "현대차",         "sector": "자동차"},
+    {"code": "000270", "name": "기아",           "sector": "자동차"},
+    {"code": "012330", "name": "현대모비스",     "sector": "자동차부품"},
+    {"code": "068270", "name": "셀트리온",       "sector": "바이오"},
     {"code": "207940", "name": "삼성바이오로직스","sector": "바이오"},
-    {"code": "003550", "name": "LG",           "sector": "지주"},
+    {"code": "326030", "name": "SK바이오팜",     "sector": "바이오"},
+    {"code": "145020", "name": "휴젤",           "sector": "바이오"},
+    {"code": "035420", "name": "NAVER",          "sector": "IT"},
+    {"code": "035720", "name": "카카오",         "sector": "IT"},
+    {"code": "259960", "name": "크래프톤",       "sector": "게임"},
+    {"code": "263750", "name": "펄어비스",       "sector": "게임"},
+    {"code": "051910", "name": "LG화학",         "sector": "화학"},
+    {"code": "006400", "name": "삼성SDI",        "sector": "배터리"},
+    {"code": "003670", "name": "포스코퓨처엠",   "sector": "2차전지"},
+    {"code": "373220", "name": "LG에너지솔루션", "sector": "배터리"},
+    {"code": "247540", "name": "에코프로비엠",   "sector": "2차전지"},
+    {"code": "086520", "name": "에코프로",       "sector": "2차전지"},
+    {"code": "055550", "name": "신한지주",       "sector": "금융"},
+    {"code": "105560", "name": "KB금융",         "sector": "금융"},
+    {"code": "316140", "name": "우리금융지주",   "sector": "금융"},
+    {"code": "024110", "name": "기업은행",       "sector": "금융"},
+    {"code": "066570", "name": "LG전자",         "sector": "전자"},
+    {"code": "009150", "name": "삼성전기",       "sector": "전자부품"},
+    {"code": "000100", "name": "유한양행",       "sector": "제약"},
+    {"code": "096770", "name": "SK이노베이션",   "sector": "에너지"},
+    {"code": "010950", "name": "S-Oil",          "sector": "에너지"},
+    {"code": "005490", "name": "POSCO홀딩스",    "sector": "철강"},
+    {"code": "028260", "name": "삼성물산",       "sector": "건설"},
+    {"code": "000720", "name": "현대건설",       "sector": "건설"},
+    {"code": "006360", "name": "GS건설",         "sector": "건설"},
+    {"code": "034730", "name": "SK",             "sector": "지주"},
+    {"code": "003550", "name": "LG",             "sector": "지주"},
+    {"code": "030200", "name": "KT",             "sector": "통신"},
+    {"code": "017670", "name": "SK텔레콤",       "sector": "통신"},
+    {"code": "032640", "name": "LG유플러스",     "sector": "통신"},
+    {"code": "004170", "name": "신세계",         "sector": "유통"},
+    {"code": "069960", "name": "현대백화점",     "sector": "유통"},
+    {"code": "051900", "name": "LG생활건강",     "sector": "소비재"},
+    {"code": "090430", "name": "아모레퍼시픽",   "sector": "소비재"},
+    {"code": "012450", "name": "한화에어로스페이스","sector": "방산"},
+    {"code": "047810", "name": "한국항공우주",   "sector": "방산"},
+    {"code": "329180", "name": "현대로템",       "sector": "방산"},
+    {"code": "009540", "name": "HD한국조선해양", "sector": "조선"},
+    {"code": "010140", "name": "삼성중공업",     "sector": "조선"},
+    {"code": "042660", "name": "한화오션",       "sector": "조선"},
+    {"code": "454910", "name": "두산로보틱스",   "sector": "로봇"},
+    {"code": "443060", "name": "레인보우로보틱스","sector": "로봇"},
 ]
 
 US_INDICES = [
@@ -315,7 +346,9 @@ def analyze_with_ai(
             if ind['code'] == s['code']
         ) if stocks and indicators else '종목 데이터 없음'
 
-        prompt = f"""한국 주식 퀀트 트레이더입니다. 오늘({datetime.now().strftime('%Y-%m-%d %A')}) 장 전 전략을 수립합니다.
+        prompt = f"""당신은 연평균 수익률 50% 이상의 상위 1% 한국 주식 퀀트 트레이더입니다.
+현재 모의투자 환경이므로 최대한 공격적으로 수익을 추구합니다.
+50개 종목 중 오늘 수익 가능성이 가장 높은 종목을 선별합니다. 보수적 판단은 하지 마세요. 기회가 보이면 BUY로 추천합니다.
 
 [미국 증시 마감]
 {us_summary}
@@ -323,18 +356,25 @@ def analyze_with_ai(
 [한국 경제 뉴스]
 {news_summary}
 
-[감시 종목 현황]
+[감시 종목 현황 (50종목)]
 {stock_summary}
 
 [전일 매매]
 {yesterday}
 
+[분석 원칙]
+1. 50개 전체 스캐닝 후 상위 10개만 추천 (나머지는 무시)
+2. RSI 45 이하 종목은 적극 BUY 추천
+3. 섹터 모멘텀이 살아있으면 해당 섹터 종목 우선
+4. 미국 증시 긍정 → 반도체/IT 공격 매수
+5. 미국 증시 부정 → 방어주(금융/통신) 또는 역발상 매수
+6. 최소 BUY 3개, WATCH 3개 이상 추천
+
 [분석 요청]
 1. market_outlook: 오늘 시장 전망 (강세/중립/약세)
 2. risk_level: 리스크 수준 (낮음/보통/높음)
-3. sector_view: 섹터별 전망 (반도체/자동차/바이오/IT/금융/배터리)
-4. top_picks: 매수/관망/매도 추천 종목 (최대 10개)
-   각 종목: code, name, action(BUY/WATCH/SELL), reason(한줄)
+3. sector_view: 섹터별 전망
+4. top_picks: 상위 10개만 — code, name, action(BUY/WATCH/SELL), reason(한줄)
 
 반드시 아래 JSON만 출력:
 {{
