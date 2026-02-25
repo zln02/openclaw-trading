@@ -8,88 +8,51 @@ BTC 자동매매 에이전트 — 최종 완성본
 import os, json, sys, requests
 from datetime import datetime
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from common.env_loader import load_env
+from common.telegram import send_telegram as _tg_send
+from common.supabase_client import get_supabase
+
+load_env()
+
 import pyupbit
 from openai import OpenAI
-from supabase import create_client
 from btc_news_collector import get_news_summary
-
-# ── 실행 시 .env / openclaw.json 로드 (cron·쉘에서 바로 실행해도 동작) ──
-_OPENCLAW_ROOT = Path(__file__).resolve().parents[2]  # .openclaw
-if _OPENCLAW_ROOT.joinpath("openclaw.json").exists():
-    try:
-        with open(_OPENCLAW_ROOT / "openclaw.json", encoding="utf-8") as f:
-            data = json.load(f)
-        for k, v in (data.get("env") or {}).items():
-            if k != "shellEnv" and isinstance(v, str):
-                os.environ.setdefault(k, v)
-    except Exception:
-        pass
-for _env_path in [_OPENCLAW_ROOT / ".env", _OPENCLAW_ROOT / "workspace" / ".env"]:
-    if not _env_path.exists():
-        continue
-    try:
-        with open(_env_path, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    k, _, v = line.partition("=")
-                    k, v = k.strip(), v.strip().strip("'\"").replace("\\n", "\n")
-                    if k:
-                        os.environ.setdefault(k, v)
-    except Exception as e:
-        print(f"[WARN] .env 로드 실패 {_env_path}: {e}", file=sys.stderr)
 
 # ── 환경변수 ──────────────────────────────────────
 UPBIT_ACCESS  = os.environ.get("UPBIT_ACCESS_KEY", "")
 UPBIT_SECRET  = os.environ.get("UPBIT_SECRET_KEY", "")
-SUPABASE_URL  = os.environ.get("SUPABASE_URL", "")
-SUPABASE_KEY  = os.environ.get("SUPABASE_SECRET_KEY", "")
 OPENAI_KEY    = os.environ.get("OPENAI_API_KEY", "")
-TG_TOKEN      = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-TG_CHAT       = os.environ.get("TELEGRAM_CHAT_ID", "")
 DRY_RUN       = os.environ.get("DRY_RUN", "0") == "1"
 
-if not all([UPBIT_ACCESS, UPBIT_SECRET, SUPABASE_URL, SUPABASE_KEY, OPENAI_KEY]):
-    print("⚠️ 필수 환경변수 없음: .env 및 openclaw.json env 로드 후 실행하세요.", file=sys.stderr)
+if not all([UPBIT_ACCESS, UPBIT_SECRET, OPENAI_KEY]):
+    print("필수 환경변수 없음: UPBIT keys + OPENAI_API_KEY 필요", file=sys.stderr)
     sys.exit(1)
 upbit   = pyupbit.Upbit(UPBIT_ACCESS, UPBIT_SECRET)
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+supabase = get_supabase()
 client  = OpenAI(api_key=OPENAI_KEY)
 
 # ── 리스크 설정 ───────────────────────────────────
 RISK = {
-    # 분할매수 비율 / RSI 기준
-    "split_ratios":    [0.30, 0.30, 0.30],   # 1차/2차/3차 매수 비율
-    "split_rsi":       [45,   38,   30  ],   # 각 차수 RSI 조건
-    # 리스크 관리
-    "invest_ratio":     0.30,                # BTC는 단일 자산이므로 30%
-    "stop_loss":       -0.03,                # 손절 -3% (변동성 고려)
-    "take_profit":      0.15,                # 고정 익절 15% (트레일링 보완용)
-    "trailing_stop":    0.02,                # 고점 대비 2% 하락 시 트레일링 스탑
-    "trailing_activate":0.015,               # 수익 1.5% 이상일 때만 트레일링 활성화
-    "max_daily_loss":  -0.10,                # 일일 손실 한도 -10%
-    "min_confidence":   70,                  # 최소 신뢰도 70%
-    "max_trades_per_day": 3,                 # 하루 신규 매수 최대 3건
-    "fee_buy":          0.001,               # 매수 수수료 0.1%
-    "fee_sell":         0.001,               # 매도 수수료 0.1%
+    "split_ratios":    [0.30, 0.30, 0.30],
+    "split_rsi":       [50,   42,   35  ],   # 완화: 45/38/30 -> 50/42/35
+    "invest_ratio":     0.30,
+    "stop_loss":       -0.03,
+    "take_profit":      0.15,
+    "trailing_stop":    0.02,
+    "trailing_activate":0.015,
+    "max_daily_loss":  -0.10,
+    "min_confidence":   65,                  # 완화: 70 -> 65
+    "max_trades_per_day": 3,
+    "fee_buy":          0.001,
+    "fee_sell":         0.001,
 }
 
 # ── 텔레그램 ──────────────────────────────────────
 def send_telegram(msg: str):
-    if not TG_TOKEN or not TG_CHAT:
-        if not TG_TOKEN:
-            print("⚠️ TELEGRAM_BOT_TOKEN 없음 — 텔레그램 미발송", file=sys.stderr)
-        else:
-            print("⚠️ TELEGRAM_CHAT_ID 없음 — .openclaw/.env 에 TELEGRAM_CHAT_ID=채팅ID 추가 후 cron 재실행", file=sys.stderr)
-        return
-    try:
-        requests.post(
-            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-            json={"chat_id": TG_CHAT, "text": msg, "parse_mode": "HTML"},
-            timeout=5
-        )
-    except Exception as e:
-        print(f"텔레그램 전송 실패: {e}")
+    _tg_send(msg)
 
 # ── 시장 데이터 ───────────────────────────────────
 def get_market_data():
@@ -128,6 +91,18 @@ def get_volume_analysis(df) -> dict:
         cur   = df["volume"].iloc[-1]
         avg20 = df["volume"].rolling(20).mean().iloc[-1]
         ratio = round(cur / avg20, 2) if avg20 > 0 else 1.0
+
+        # 5분봉 거래량이 비정상적으로 0일 때 1시간봉으로 fallback
+        if ratio < 0.01:
+            try:
+                h_df = pyupbit.get_ohlcv("KRW-BTC", interval="minute60", count=30)
+                if h_df is not None and not h_df.empty:
+                    h_cur = h_df["volume"].iloc[-1]
+                    h_avg = h_df["volume"].rolling(20).mean().iloc[-1]
+                    if h_avg > 0:
+                        ratio = round(h_cur / h_avg, 2)
+            except Exception:
+                pass
 
         if ratio >= 2.0:
             label = "🔥 거래량 급등 (강한 신호)"
@@ -344,9 +319,9 @@ def analyze_with_ai(indicators, news_summary, fg, htf, volume) -> dict:
 
 # ── 분할 매수 단계 ────────────────────────────────
 def get_split_stage(rsi: float) -> int:
-    if rsi <= 30: return 3
-    if rsi <= 38: return 2
-    if rsi <= 45: return 1
+    if rsi <= 35: return 3
+    if rsi <= 42: return 2
+    if rsi <= 50: return 1
     return 0
 
 # ── 주문 실행 ─────────────────────────────────────
@@ -354,13 +329,15 @@ def execute_trade(signal, indicators, fg=None, volume=None) -> dict:
 
     # ── 코드 레벨 강제 필터 ──
     if signal["action"] == "BUY":
-        if indicators["rsi"] > 45:
-            print(f"⚠️ RSI {indicators['rsi']} > 45 — BUY 차단")
+        if indicators["rsi"] > 55:
+            print(f"⚠️ RSI {indicators['rsi']} > 55 — BUY 차단")
             return {"result": "BLOCKED_RSI"}
-        if fg and fg["value"] > 55:
-            print(f"⚠️ F&G {fg['value']} > 55 — BUY 차단")
+        if fg and fg["value"] > 60:
+            print(f"⚠️ F&G {fg['value']} > 60 — BUY 차단")
             return {"result": "BLOCKED_FG"}
-        if volume and volume["ratio"] <= 0.5:
+        # Extreme Fear(<20)이면 거래량 필터 면제
+        is_extreme_fear = fg and fg["value"] <= 20
+        if volume and volume["ratio"] <= 0.3 and not is_extreme_fear:
             print(f"⚠️ 거래량 {volume['ratio']}배 급감 — BUY 차단")
             return {"result": "BLOCKED_VOLUME"}
 
@@ -529,31 +506,55 @@ def run_trading_cycle():
     kimchi = get_kimchi_premium()
     print(f"김치 프리미엄: {kimchi:+.2f}%" if kimchi is not None else "김치 프리미엄: 조회 실패")
 
-    signal = analyze_with_ai(indicators, news, fg, htf, volume)
-
-    # 공포 극복: F&G 10 이하 + RSI 25 이하 + 거래량 ≥0.8배
+    # ── 룰 기반 1차 필터 (AI 전에 먼저 판단) ──
     fg_value, rsi = fg["value"], indicators["rsi"]
     volume_ratio = volume["ratio"]
-    if fg_value <= 10 and rsi <= 25 and volume_ratio >= 0.8:
-        print("🚨 극도 공포 + 과매도 + 거래량 정상 → 신뢰도 강제 상향")
-        if signal["action"] == "BUY":
-            signal["confidence"] = max(signal["confidence"], 80)
-        elif signal["action"] == "HOLD":
-            signal["action"] = "BUY"
-            signal["confidence"] = 75
-            signal["reason"] = signal.get("reason", "") + " [공포극복 전략 발동]"
-    elif fg_value <= 10 and rsi <= 25 and volume_ratio < 0.8:
-        print(f"⚠️ 극도 공포 + 과매도지만 거래량 부족({volume_ratio}배) — 공포극복 미발동")
+    rule_signal = None
 
-    # 변동성 폭발: 거래량 평균의 3배 이상
+    # 1) Extreme Fear 공격 매수: F&G <= 20 + RSI <= 40
+    if fg_value <= 20 and rsi <= 40 and htf["trend"] != "DOWNTREND":
+        conf = 80 if fg_value <= 10 else 75 if fg_value <= 15 else 70
+        rule_signal = {
+            "action": "BUY", "confidence": conf,
+            "reason": f"극도공포 F&G={fg_value}, RSI={rsi:.0f} [룰기반]"
+        }
+        print(f"🚨 룰기반 공포매수 발동: F&G={fg_value}, RSI={rsi:.0f}")
+
+    # 2) 기술적 과매도 매수: RSI <= 30 + BB 하단 + 상승/횡보 추세
+    elif rsi <= 30 and htf["trend"] in ("UPTREND", "SIDEWAYS"):
+        bb_lower = indicators.get("bb_lower", 0)
+        price = indicators["price"]
+        if bb_lower > 0 and price <= bb_lower * 1.01:
+            rule_signal = {
+                "action": "BUY", "confidence": 72,
+                "reason": f"과매도+BB하단 RSI={rsi:.0f} [룰기반]"
+            }
+
+    # 3) 기술적 과매수 매도 (포지션 있을 때): RSI >= 75 + 하락 추세
+    elif rsi >= 75 and htf["trend"] == "DOWNTREND":
+        rule_signal = {
+            "action": "SELL", "confidence": 75,
+            "reason": f"과매수+하락추세 RSI={rsi:.0f} [룰기반]"
+        }
+
+    # AI 분석 (룰 기반이 BUY/SELL을 발동하지 않은 경우에만)
+    if rule_signal and rule_signal["action"] != "HOLD":
+        signal = rule_signal
+        print(f"📋 룰 기반 신호 사용: {signal['action']} conf={signal['confidence']}")
+    else:
+        signal = analyze_with_ai(indicators, news, fg, htf, volume)
+
+    # ── 보조 전략 (AI 결과에 추가 보정) ──
+
+    # 변동성 폭발: 거래량 3배 이상
     if volume_ratio >= 3.0:
-        print(f"💥 거래량 폭발 감지 ({volume_ratio:.1f}배) → 공격적 진입")
+        print(f"💥 거래량 폭발 감지 ({volume_ratio:.1f}배)")
         if signal["action"] == "BUY":
             signal["confidence"] = max(signal["confidence"], 75)
         elif signal["action"] == "HOLD" and indicators["macd"] > 0 and rsi < 60:
             signal["action"] = "BUY"
             signal["confidence"] = 70
-            signal["reason"] = signal.get("reason", "") + " [변동성 폭발 전략 발동]"
+            signal["reason"] = signal.get("reason", "") + " [변동성 폭발]"
 
     # 김치 프리미엄 활용
     if kimchi is not None:

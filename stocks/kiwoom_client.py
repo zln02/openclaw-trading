@@ -408,8 +408,18 @@ class KiwoomAPIClient:
         order_type: str,
         quantity: int,
         price: int = 0,
+        market: str = "KRX",
     ) -> Dict:
-        """주식 주문 (buy/sell). 시장가 시 price=0. 실패 시 예외 발생."""
+        """
+        주식 주문 (buy/sell). 시장가 시 price=0. 실패 시 예외 발생.
+
+        Args:
+            stock_code: 종목 코드 (국내: '005930', 해외/기타: 'AAPL_NX' 등)
+            order_type: 'buy' 또는 'sell'
+            quantity: 주문 수량
+            price: 지정가 (0이면 시장가)
+            market: 거래소 구분 (기본 'KRX', 필요 시 문서 기준으로 'NXT', 'SOR' 등)
+        """
         if order_type not in ("buy", "sell"):
             raise ValueError(f"order_type은 'buy' 또는 'sell': {order_type}")
         if quantity < 1:
@@ -424,7 +434,7 @@ class KiwoomAPIClient:
         acnt_prdt_cd = (self.account_no or "")[8:] if len(self.account_no or "") > 8 else "01"
 
         body = {
-            "dmst_stex_tp": "KRX",
+            "dmst_stex_tp": market,
             "acnt_no": acnt_no,
             "acnt_prdt_cd": acnt_prdt_cd,
             "stk_cd": stock_code,
