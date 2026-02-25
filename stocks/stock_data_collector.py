@@ -154,8 +154,6 @@ def collect_top50():
             'stock_code': s['code'],
             'stock_name': s['name'],
             'industry': s.get('industry', ''),
-            'market': 'KOSPI',
-            'updated_at': datetime.now().isoformat(),
         })
 
     try:
@@ -349,47 +347,63 @@ def get_dart_corp_code(stock_code: str) -> str:
 
 
 def get_dart_financials(corp_code: str, stock_code: str) -> dict:
-    """DART에서 재무제표 조회"""
+    """DART에서 재무제표 조회 (직전 연도 → 직전-1년까지 폴백)"""
     if not DART_KEY or not corp_code:
         return {}
     try:
-        year = datetime.now().year - 1
-        url = (
-            f'https://opendart.fss.or.kr/api/fnlttSinglAcntAll.json'
-            f'?crtfc_key={DART_KEY}'
-            f'&corp_code={corp_code}'
-            f'&bsns_year={year}'
-            f'&reprt_code=11011'  # 사업보고서
-            f'&fs_div=CFS'  # 연결재무제표
-        )
-        res = requests.get(url, timeout=15)
-        data = res.json()
+        base_year = datetime.now().year - 1
+        years = [base_year, base_year - 1]
 
-        if data.get('status') != '000':
-            return {}
+        for year in years:
+            url = (
+                f'https://opendart.fss.or.kr/api/fnlttSinglAcntAll.json'
+                f'?crtfc_key={DART_KEY}'
+                f'&corp_code={corp_code}'
+                f'&bsns_year={year}'
+                f'&reprt_code=11011'  # 사업보고서
+                f'&fs_div=CFS'  # 연결재무제표
+            )
+            res = requests.get(url, timeout=15)
+            data = res.json()
 
-        items = data.get('list', [])
-        result = {}
-        key_items = {
-            '매출액': 'revenue',
-            '영업이익': 'operating_profit',
-            '당기순이익': 'net_income',
-            '자산총계': 'total_assets',
-            '부채총계': 'total_liabilities',
-            '자본총계': 'total_equity',
-        }
-        for item in items:
-            name = item.get('account_nm', '')
-            for kr, en in key_items.items():
-                if kr in name:
-                    val = item.get('thstrm_amount', '0').replace(',', '')
-                    try:
-                        result[en] = int(val)
-                    except ValueError:
-                        result[en] = 0
-                    break
+            status = data.get('status')
+            if status != '000':
+                # 013: 조회된 데이터 없음 (아직 사업보고서 미제출인 경우가 많음)
+                msg = data.get('message', '')
+                log(f'DART 응답 {stock_code} {year}: status={status} message={msg}', 'WARN')
+                # 데이터 없음(013)이면 이전 연도로 폴백 시도, 그 외 에러는 바로 중단
+                if status == '013':
+                    continue
+                return {}
 
-        return result
+            items = data.get('list', [])
+            result = {}
+            key_items = {
+                '매출액': 'revenue',
+                '영업이익': 'operating_profit',
+                '당기순이익': 'net_income',
+                '자산총계': 'total_assets',
+                '부채총계': 'total_liabilities',
+                '자본총계': 'total_equity',
+            }
+            for item in items:
+                name = item.get('account_nm', '')
+                for kr, en in key_items.items():
+                    if kr in name:
+                        val = item.get('thstrm_amount', '0').replace(',', '')
+                        try:
+                            result[en] = int(val)
+                        except ValueError:
+                            result[en] = 0
+                        break
+
+            if result:
+                # 어떤 연도에서라도 유효 데이터가 나오면 즉시 반환
+                result['fiscal_year'] = year
+                return result
+
+        # 모든 연도에서 유효 데이터가 없으면 빈 dict
+        return {}
 
     except Exception as e:
         log(f'DART 재무제표 조회 실패 {stock_code}: {e}', 'ERROR')

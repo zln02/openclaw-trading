@@ -1,48 +1,70 @@
 {
-  "market_outlook": "약세",
+  "date": "2026-02-25",
+  "market_outlook": "중립",
+  "risk_level": "보통",
+  "sector_view": {},
   "top_picks": [
     {
       "code": "005930",
       "name": "삼성전자",
-      "action": "BUY",
-      "reason": "미국 증시 하락에도 불구하고 강세 유지"
+      "action": "SELL",
+      "reason": "RSI 74.1 + BB상단 103.8% — 매도 구간"
     },
     {
-      "code": "000660",
-      "name": "SK하이닉스",
-      "action": "BUY",
-      "reason": "상승세 지속, 반도체 수요 증가 기대"
-    },
-    {
-      "code": "042700",
-      "name": "한미반도체",
+      "code": "403870",
+      "name": "HPSP",
       "action": "WATCH",
-      "reason": "상승세지만 변동성 주의 필요"
+      "reason": "RSI 38.5 — 관망 (추가 하락 시 매수)"
+    },
+    {
+      "code": "000270",
+      "name": "기아",
+      "action": "SELL",
+      "reason": "RSI 76.4 + BB상단 98.2% — 매도 구간"
+    },
+    {
+      "code": "068270",
+      "name": "셀트리온",
+      "action": "SELL",
+      "reason": "RSI 79.4 + BB상단 92.2% — 매도 구간"
+    },
+    {
+      "code": "105560",
+      "name": "KB금융",
+      "action": "SELL",
+      "reason": "RSI 82.9 + BB상단 80.1% — 매도 구간"
+    },
+    {
+      "code": "024110",
+      "name": "기업은행",
+      "action": "SELL",
+      "reason": "RSI 76.6 + BB상단 80.3% — 매도 구간"
+    },
+    {
+      "code": "066570",
+      "name": "LG전자",
+      "action": "SELL",
+      "reason": "RSI 77.3 + BB상단 92.3% — 매도 구간"
+    },
+    {
+      "code": "009150",
+      "name": "삼성전기",
+      "action": "SELL",
+      "reason": "RSI 85.4 + BB상단 111.0% — 매도 구간"
+    },
+    {
+      "code": "000100",
+      "name": "유한양행",
+      "action": "SELL",
+      "reason": "RSI 70.3 + BB상단 87.9% — 매도 구간"
+    },
+    {
+      "code": "096770",
+      "name": "SK이노베이션",
+      "action": "SELL",
+      "reason": "RSI 75.4 + BB상단 101.3% — 매도 구간"
     }
   ],
-  "risk_level": "보통",
-  "summary": "미국 증시 하락에도 일부 종목 강세, 반도체 관련주 주목",
-  "date": "2026-02-24",
-  "us_market": [
-    {
-      "name": "S&P500",
-      "price": 6837.75,
-      "change": -1.04
-    },
-    {
-      "name": "나스닥",
-      "price": 22627.27,
-      "change": -1.13
-    },
-    {
-      "name": "엔비디아",
-      "price": 191.55,
-      "change": 0.91
-    },
-    {
-      "name": "TSMC",
-      "price": 370.04,
-      "change": -0.13
-    }
-  ]
+  "summary": "룰 기반 전략: BUY 0개, WATCH 1개",
+  "source": "RULE"
 }

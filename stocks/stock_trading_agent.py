@@ -77,6 +77,10 @@ RISK = {
     "min_order_krw": 30000,      # 최소 주문금액
     "cooldown_minutes": 15,      # 쿨다운 15분
     "min_hours_between_splits": 4,  # 분할매수 간 최소 간격(시간)
+    # 매매 비용 (수수료/거래세)
+    "fee_buy": 0.00015,          # 매수 수수료 0.015%
+    "fee_sell": 0.00015,         # 매도 수수료 0.015%
+    "tax_sell": 0.0018,          # 매도 거래세 0.18%
 }
 
 # 룰 기반 매매 기준 (AI fallback) — v3 공격적
@@ -818,7 +822,10 @@ def execute_buy(
     if invest_krw < RISK['min_order_krw']:
         return {'result': 'INSUFFICIENT_KRW', 'available': invest_krw}
 
-    quantity = int(invest_krw / price)
+    # 매수 수수료 예비분 제외 후 실투입금 기준으로 수량 계산
+    fee_reserve = invest_krw * RISK['fee_buy']
+    actual_invest = max(0, invest_krw - fee_reserve)
+    quantity = int(actual_invest / price)
     if quantity < 1:
         return {'result': 'INSUFFICIENT_KRW'}
 
@@ -890,7 +897,11 @@ def execute_sell(stock: dict, signal: dict, indicators: dict, reason_prefix: str
     if not price or not avg_entry:
         return {'result': 'NO_PRICE'}
 
-    pnl_pct = (price - avg_entry) / avg_entry * 100
+    raw_pnl_pct = (price - avg_entry) / avg_entry
+    # 왕복 비용(수수료+거래세) 차감 후 실수익률
+    fee_cost = RISK['fee_buy'] + RISK['fee_sell'] + RISK['tax_sell']
+    net_pnl_pct = raw_pnl_pct - fee_cost
+    pnl_pct = net_pnl_pct * 100
     pnl_krw = (price - avg_entry) * total_qty
 
     # ── 실제 주문 ──
@@ -941,7 +952,7 @@ def execute_sell(stock: dict, signal: dict, indicators: dict, reason_prefix: str
         f"{emoji} <b>{name} 매도</b>\n"
         f"💰 {price:,.0f}원 × {total_qty}주\n"
         f"📊 평균단가: {avg_entry:,.0f}원\n"
-        f"📈 수익률: {pnl_pct:+.2f}% ({pnl_krw:+,.0f}원)\n"
+        f"📈 수익률(비용 포함): {pnl_pct:+.2f}% ({pnl_krw:+,.0f}원)\n"
         f"📝 {reason_prefix}{signal.get('reason', '') if isinstance(signal, dict) else ''}\n"
         f"⚠️ 모의투자"
     )
@@ -999,21 +1010,34 @@ def check_stop_loss_take_profit():
             if not avg_entry:
                 continue
 
-            chg = (price - avg_entry) / avg_entry
+            # 비용 차감 전후 수익률 계산
+            raw_pnl_pct = (price - avg_entry) / avg_entry
+            fee_cost = RISK['fee_buy'] + RISK['fee_sell'] + RISK['tax_sell']
+            net_pnl_pct = raw_pnl_pct - fee_cost
             total_qty = sum(int(p['quantity']) for p in pos_list)
             name = pos_list[0].get('stock_name', code)
 
             stock = {'code': code, 'name': name}
 
-            # 손절
-            if chg <= RISK['stop_loss']:
-                log(f'{name} 손절 발동: {chg*100:.2f}%', 'TRADE')
-                execute_sell(stock, {}, {'price': price}, reason_prefix='🛑 손절: ')
+            # 손절 (비용 포함 실수익률 기준)
+            if net_pnl_pct <= RISK['stop_loss']:
+                log(f'{name} 손절 발동(비용 포함): {net_pnl_pct*100:.2f}%', 'TRADE')
+                execute_sell(
+                    stock,
+                    {},
+                    {'price': price},
+                    reason_prefix=f'🛑 손절(비용 포함 {net_pnl_pct*100:.2f}%): ',
+                )
 
-            # 익절
-            elif chg >= RISK['take_profit']:
-                log(f'{name} 익절 발동: {chg*100:.2f}%', 'TRADE')
-                execute_sell(stock, {}, {'price': price}, reason_prefix='✅ 익절: ')
+            # 익절 (비용 포함 실수익률 기준)
+            elif net_pnl_pct >= RISK['take_profit']:
+                log(f'{name} 익절 발동(비용 포함): {net_pnl_pct*100:.2f}%', 'TRADE')
+                execute_sell(
+                    stock,
+                    {},
+                    {'price': price},
+                    reason_prefix=f'✅ 익절(비용 포함 {net_pnl_pct*100:.2f}%): ',
+                )
 
             time.sleep(0.3)
 
@@ -1027,6 +1051,13 @@ def check_stop_loss_take_profit():
 def run_trading_cycle():
     global _cache
     _cache = {}  # 사이클마다 캐시 리셋
+
+    # STOP 플래그 체크 (텔레그램 /stop 명령으로 생성)
+    stop_flag = Path(__file__).parent / 'STOP_TRADING'
+    if stop_flag.exists():
+        log('⛔ STOP_TRADING 플래그 감지 → 매매 사이클 스킵', 'WARN')
+        send_telegram('⛔ STOP_TRADING 플래그 감지 → 이번 사이클 스킵됨\n/resume 으로 재개')
+        return
 
     if not is_market_open():
         log('장 외 시간 — 스킵')
