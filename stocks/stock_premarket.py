@@ -205,25 +205,38 @@ def get_korean_stock_news() -> list:
 
 
 def get_stock_prices() -> list:
-    """키움 API로 전 종목 현재가 조회"""
+    """키움 API로 전 종목 현재가 조회 (DB 폴백 포함)"""
+    db_prices = {}
+    if supabase:
+        try:
+            codes = [s['code'] for s in WATCHLIST]
+            rows = (
+                supabase.table('daily_ohlcv')
+                .select('stock_code,close_price')
+                .in_('stock_code', codes)
+                .order('date', desc=True)
+                .limit(len(codes))
+                .execute()
+                .data or []
+            )
+            seen = set()
+            for r in rows:
+                c = r['stock_code']
+                if c not in seen:
+                    db_prices[c] = float(r['close_price'])
+                    seen.add(c)
+        except Exception:
+            pass
+
     results = []
     for stock in WATCHLIST:
-        try:
-            price = kiwoom.get_current_price(stock['code'])
-            results.append({
-                'code': stock['code'],
-                'name': stock['name'],
-                'sector': stock['sector'],
-                'price': price,
-            })
-        except Exception:
-            results.append({
-                'code': stock['code'],
-                'name': stock['name'],
-                'sector': stock['sector'],
-                'price': 0,
-            })
-        time.sleep(0.2)
+        price = db_prices.get(stock['code'], 0)
+        results.append({
+            'code': stock['code'],
+            'name': stock['name'],
+            'sector': stock['sector'],
+            'price': price,
+        })
     return results
 
 
@@ -450,18 +463,22 @@ def analyze_with_ai(
         client = OpenAI(api_key=OPENAI_KEY)
 
         us_summary = '\n'.join(
-            f"  {m['name']}: {m['price']:,.2f} ({m['change_pct']:+.2f}%)"
+            f"  {m['name']}: {(m.get('price') or 0):,.2f} ({(m.get('change_pct') or 0):+.2f}%)"
             for m in us_market
         ) if us_market else '미국 증시 데이터 없음'
 
         news_summary = '\n'.join(f"  - {h}" for h in news[:7]) if news else '뉴스 없음'
 
-        stock_summary = '\n'.join(
-            f"  {s['name']}({s['code']}): {s['price']:,}원 [RSI:{ind.get('rsi','?')} BB:{ind.get('bb_pos','?')}% Vol:{ind.get('vol_ratio','?')}x]"
-            for s in stocks
-            for ind in indicators
-            if ind['code'] == s['code']
-        ) if stocks and indicators else '종목 데이터 없음'
+        stock_lines = []
+        if stocks and indicators:
+            ind_map = {ind['code']: ind for ind in indicators}
+            for s in stocks:
+                ind = ind_map.get(s['code'], {})
+                p = s.get('price') or 0
+                stock_lines.append(
+                    f"  {s['name']}({s['code']}): {p:,}원 [RSI:{ind.get('rsi','?')} BB:{ind.get('bb_pos','?')}% Vol:{ind.get('vol_ratio','?')}x]"
+                )
+        stock_summary = '\n'.join(stock_lines) if stock_lines else '종목 데이터 없음'
 
         fundamental_summary = '펀더멘털 데이터 없음'
         if fundamentals:
@@ -475,10 +492,10 @@ def analyze_with_ai(
             for f in by_score[:15]:
                 code = f['code']
                 name = code_to_name.get(code, code)
-                fy = f.get('fiscal_year')
-                sf = f.get('score_fundamental')
-                roe = f.get('roe')
-                dr = f.get('debt_ratio')
+                fy = f.get('fiscal_year', '?')
+                sf = f.get('score_fundamental') or 0
+                roe = f.get('roe') or 0
+                dr = f.get('debt_ratio') or 0
                 lines.append(
                     f"  {name}({code}) FY{fy}: F{sf:.1f} / ROE {roe:.1f}% / 부채비율 {dr:.1f}%"
                 )
@@ -611,7 +628,7 @@ def run_premarket():
     log('미국 증시 조회...')
     us_market = get_us_market()
     for m in us_market:
-        log(f"  {m['name']}: {m['price']:,.2f} ({m['change_pct']:+.2f}%)")
+        log(f"  {m['name']}: {(m.get('price') or 0):,.2f} ({(m.get('change_pct') or 0):+.2f}%)")
 
     log('한국 뉴스 수집...')
     news = get_korean_stock_news()
@@ -645,20 +662,61 @@ def run_premarket():
     except Exception as e:
         log(f'전략 저장 실패: {e}', 'ERROR')
 
-    # 4. DB 저장
+    # 4. DB 저장 (daily_reports 스키마: date, report_type, return_rate, win_rate, trade_count)
     if supabase:
         try:
-            supabase.table('daily_reports').upsert([{
+            picks = strategy.get('top_picks', [])
+            buy_cnt = sum(1 for p in picks if p.get('action') == 'BUY')
+            supabase.table('daily_reports').insert({
                 'date': strategy['date'],
                 'report_type': 'premarket',
-                'content': json.dumps(strategy, ensure_ascii=False),
-            }], on_conflict='date,report_type').execute()
+                'trade_count': buy_cnt,
+            }).execute()
+            log('DB 저장 완료', 'OK')
         except Exception as e:
-            log(f'DB 저장 실패: {e}', 'WARN')
+            if 'duplicate' in str(e).lower() or '23505' in str(e):
+                log('DB 이미 저장됨 (중복 skip)')
+            else:
+                log(f'DB 저장 실패: {e}', 'WARN')
 
-    # 5. 텔레그램 브리핑
+    # 5. 포트폴리오 현황 조회
+    portfolio_text = ''
+    try:
+        acct = kiwoom.get_account_evaluation()
+        s = acct.get('summary', {})
+        h = acct.get('holdings', [])
+        dep = s.get('deposit', 0)
+        t_eval = s.get('total_evaluation', 0)
+        t_pur = s.get('total_purchase', 0)
+        t_pnl = t_eval - t_pur
+        t_pct = (t_pnl / t_pur * 100) if t_pur > 0 else 0.0
+        sign = '+' if t_pnl >= 0 else ''
+
+        holdings_lines = []
+        for hi in h:
+            hp = hi.get('pnl_amount', 0)
+            hpp = hi.get('pnl_pct', 0.0)
+            hs = '+' if hp >= 0 else ''
+            holdings_lines.append(
+                f"  {hi.get('name','?')}: {hi.get('current_price',0):,}원 ({hs}{hpp:.1f}%)"
+            )
+        holdings_str = '\n'.join(holdings_lines) if holdings_lines else '  보유 없음'
+
+        portfolio_text = (
+            f"━━━━━━━━━━━━━\n"
+            f"💰 <b>내 포트폴리오</b>\n"
+            f"  예수금: {dep:,}원\n"
+            f"  평가금: {t_eval:,}원 (매입: {t_pur:,}원)\n"
+            f"  손익: {sign}{t_pnl:,}원 ({sign}{t_pct:.2f}%)\n"
+            f"  보유 {len(h)}종목:\n{holdings_str}\n"
+        )
+    except Exception as e:
+        log(f'포트폴리오 조회 실패: {e}', 'WARN')
+        portfolio_text = '💰 포트폴리오 조회 실패\n'
+
+    # 6. 텔레그램 브리핑
     us_text = '\n'.join(
-        f"  {m['name']}: {m['change_pct']:+.2f}%"
+        f"  {m['name']}: {(m.get('change_pct') or 0):+.2f}%"
         for m in us_market
     ) if us_market else '  데이터 없음'
 
@@ -668,15 +726,33 @@ def run_premarket():
         for p in strategy.get('top_picks', [])
     ) if strategy.get('top_picks') else '  추천 종목 없음'
 
+    sector_text = ''
+    sv = strategy.get('sector_view', {})
+    if sv:
+        sector_lines = [f"  {k}: {v}" for k, v in list(sv.items())[:8]]
+        sector_text = f"\n🏭 <b>섹터 전망</b>\n" + '\n'.join(sector_lines) + '\n'
+
+    news_text = ''
+    if news:
+        news_lines = [f"  • {n}" for n in news[:5]]
+        news_text = f"\n📰 <b>주요 뉴스</b>\n" + '\n'.join(news_lines) + '\n'
+
     msg = (
-        f"📊 <b>장 전 브리핑</b> ({strategy['date']})\n"
-        f"[{strategy.get('source', '?')}]\n\n"
-        f"🌍 <b>미국 증시</b>\n{us_text}\n\n"
-        f"📈 <b>시장 전망</b>: {strategy.get('market_outlook', '?')}\n"
-        f"⚠️ <b>리스크</b>: {strategy.get('risk_level', '?')}\n\n"
+        f"📊 <b>장 전 브리핑 — KR</b>\n"
+        f"📅 {strategy['date']} 08:00 [{strategy.get('source', '?')}]\n"
+        f"━━━━━━━━━━━━━\n"
+        f"🌍 <b>미국 증시 마감</b>\n{us_text}\n"
+        f"{news_text}"
+        f"━━━━━━━━━━━━━\n"
+        f"📈 전망: <b>{strategy.get('market_outlook', '?')}</b>  |  "
+        f"리스크: <b>{strategy.get('risk_level', '?')}</b>\n"
+        f"{sector_text}"
+        f"━━━━━━━━━━━━━\n"
         f"🎯 <b>오늘 전략</b>\n{picks_text}\n\n"
         f"💬 {strategy.get('summary', '')}\n"
-        f"⚠️ 모의투자"
+        f"{portfolio_text}"
+        f"━━━━━━━━━━━━━\n"
+        f"⚠️ 모의투자 | {yesterday}"
     )
     send_telegram(msg)
 

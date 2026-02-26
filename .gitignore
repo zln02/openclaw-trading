@@ -1,18 +1,28 @@
-.env
-*.log
+# Python
 __pycache__/
 *.pyc
 *.pyo
 *.pkl
-.DS_Store
-logs/
 *.egg-info/
+
+# Virtual environments
 .venv/
 venv/
+secretary/.venv/
+
+# Environment / secrets
+.env
+*.log
+brain/kiwoom_token.json
+
+# OS
+.DS_Store
 node_modules/
+
+# Backups
 *.bak
 *.v1.*
+
+# Excluded directories
 archive/
-secretary/.venv/
-brain/kiwoom_token.json
-/home/wlsdud5035/.openclaw/openclaw.json
+logs/

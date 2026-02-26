@@ -55,6 +55,17 @@ STOCKS_HTML = """<!DOCTYPE html>
   .badge.rsi.oversold{color:#ff4444;border-color:#ff444433;}
   .badge.rsi.low{color:#ffa500;border-color:#ffa50033;}
   .badge.rsi.overbought{color:#ff0000;border-color:#ff000033;}
+  .badge.live{background:rgba(0,230,118,0.1);color:#00e676;border:1px solid #00e67633;animation:pulse-live 2s infinite;}
+  @keyframes pulse-live{0%,100%{opacity:1}50%{opacity:0.5}}
+  .chart-loading{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(15,20,34,0.8);z-index:10;transition:opacity 0.3s;}
+  .chart-loading.hidden{opacity:0;pointer-events:none;}
+  .spinner{width:32px;height:32px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin 0.8s linear infinite;}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .stock-card{transition:border-color 0.2s,transform 0.15s,box-shadow 0.2s;}
+  .stock-card:active{transform:scale(0.98);}
+  .stock-price{transition:color 0.3s;}
+  .price-flash-up{color:#00e676 !important;transition:color 0s !important;}
+  .price-flash-down{color:#ff3d57 !important;transition:color 0s !important;}
   .stock-card.holding{border:1px solid #ff444466;box-shadow:0 0 8px rgba(255,68,68,0.15);}
   .stock-card.holding::before{content:'🏦 보유';position:absolute;top:4px;right:6px;font-size:9px;color:#ff8800;background:#ff880020;padding:1px 5px;border-radius:3px;}
   .chart-section{display:grid;grid-template-columns:1fr 320px;gap:16px;margin-bottom:20px;}
@@ -74,13 +85,18 @@ STOCKS_HTML = """<!DOCTYPE html>
   .interval-btn{background:transparent;border:1px solid var(--border);color:var(--muted);font-family:var(--mono);font-size:11px;padding:3px 10px;border-radius:4px;cursor:pointer;transition:all 0.2s;}
   .interval-btn:hover{color:var(--text);border-color:var(--accent);}
   .interval-btn.active{color:var(--accent);border-color:var(--accent);background:rgba(0,212,255,0.08);}
-  .portfolio-bar{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:16px;}
-  .port-card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:20px;text-align:center;transition:border-color 0.2s,box-shadow 0.2s;}
+  .portfolio-bar{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px;}
+  .port-card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:16px 20px;text-align:center;transition:border-color 0.2s,box-shadow 0.2s;}
   .port-card:hover{border-color:rgba(0,212,255,0.25);box-shadow:0 0 16px rgba(0,212,255,0.08);}
-  .port-label{font-size:11px;color:var(--muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:1px;font-weight:600;}
+  .port-card.accent{border-color:rgba(0,212,255,0.3);background:linear-gradient(135deg,rgba(0,212,255,0.04),transparent);}
+  .port-label{font-size:10px;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:1px;font-weight:600;}
   .port-value{font-family:var(--mono);font-size:20px;font-weight:700;color:var(--text);}
   .port-value.kr-up{color:var(--red);}
   .port-value.kr-dn{color:#4488ff;}
+  .port-sub{font-size:11px;color:var(--muted);margin-top:4px;font-family:var(--mono);}
+  .port-sub.kr-up{color:#ff4444;}
+  .port-sub.kr-dn{color:#4488ff;}
+  .port-row2{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px;}
   .pnl-gauge{height:4px;background:var(--border);border-radius:2px;margin-top:4px;overflow:hidden;}
   .pnl-gauge-fill{height:100%;border-radius:2px;transition:width 0.5s ease;}
   .holdings-section{background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:16px;}
@@ -103,6 +119,27 @@ STOCKS_HTML = """<!DOCTYPE html>
   .filter-btn{background:transparent;border:1px solid var(--border);color:var(--muted);font-size:12px;padding:6px 12px;border-radius:6px;cursor:pointer;transition:all 0.2s;}
   .filter-btn:hover{color:var(--accent);border-color:var(--accent);}
   .filter-btn.active{color:var(--accent);border-color:var(--accent);background:rgba(0,212,255,0.08);}
+  .log-tab{background:transparent;border:1px solid var(--border);color:var(--muted);font-size:11px;padding:3px 10px;border-radius:4px;cursor:pointer;transition:all 0.2s;}
+  .log-tab:hover{color:var(--accent);border-color:var(--accent);}
+  .log-tab.active{color:#fff;border-color:var(--accent);background:var(--accent);}
+  .market-summary-bar{display:flex;gap:24px;align-items:center;padding:12px 16px;margin-bottom:16px;background:var(--bg2);border:1px solid var(--border);border-radius:10px;flex-wrap:wrap;}
+  .market-summary-item{display:flex;align-items:center;gap:10px;font-family:var(--mono);}
+  .ms-name{font-size:12px;color:var(--muted);font-weight:600;}
+  .ms-price{font-size:15px;font-weight:700;}
+  .ms-change{font-size:12px;font-weight:600;}
+  .ms-change.up{color:var(--green);}
+  .ms-change.dn{color:var(--red);}
+  .view-btn{background:transparent;border:1px solid var(--border);color:var(--muted);font-size:11px;padding:4px 10px;border-radius:4px;cursor:pointer;}
+  .view-btn:hover,.view-btn.active{color:var(--accent);border-color:var(--accent);background:rgba(0,212,255,0.08);}
+  .tv-table{width:100%;border-collapse:collapse;font-size:13px;}
+  .tv-table th{text-align:left;padding:8px;color:var(--muted);border-bottom:1px solid var(--border);font-size:11px;}
+  .tv-table td{padding:8px;border-bottom:1px solid var(--border);}
+  .tv-table tr:hover{background:rgba(255,255,255,0.03);}
+  .tv-table .up{color:var(--red);}
+  .tv-table .down{color:#089981;}
+  .section-head{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.12em;margin-bottom:10px;display:flex;align-items:center;gap:8px;}
+  .section-head::after{content:'';flex:1;height:1px;background:var(--border);}
+  .market-summary-bar.second{background:var(--bg3);}
 </style>
 </head>
 <body>
@@ -129,7 +166,17 @@ STOCKS_HTML = """<!DOCTYPE html>
   </header>
 
   <main>
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+    <div class="section-head">시장 요약</div>
+    <div id="market-summary-bar" class="market-summary-bar">
+      <div class="market-summary-item"><span class="ms-name">KOSPI</span><span class="ms-price" id="ms-kospi-price">--</span><span class="ms-change" id="ms-kospi-change">--</span></div>
+      <div class="market-summary-item"><span class="ms-name">KOSDAQ</span><span class="ms-price" id="ms-kosdaq-price">--</span><span class="ms-change" id="ms-kosdaq-change">--</span></div>
+    </div>
+    <div id="market-summary-world" class="market-summary-bar second" style="margin-top:8px;">
+      <div class="market-summary-item"><span class="ms-name">S&P 500</span><span class="ms-price" id="ms-sp500-price">--</span><span class="ms-change" id="ms-sp500-change">--</span></div>
+      <div class="market-summary-item"><span class="ms-name">나스닥100</span><span class="ms-price" id="ms-ndx-price">--</span><span class="ms-change" id="ms-ndx-change">--</span></div>
+      <div class="market-summary-item"><span class="ms-name">USD/KRW</span><span class="ms-price" id="ms-usdkrw-price">--</span><span class="ms-change" id="ms-usdkrw-change">--</span></div>
+    </div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;margin-top:20px;">
       <h2 style="font-size:18px;margin:0;">📊 주식 모의투자 대시보드</h2>
       <div style="display:flex;align-items:center;gap:10px;">
         <span id="market-status" style="font-size:12px;color:var(--muted);"></span>
@@ -137,22 +184,59 @@ STOCKS_HTML = """<!DOCTYPE html>
       </div>
     </div>
 
+    <div class="section-head" style="margin-top:24px;">내 포트폴리오</div>
     <div id="portfolio-summary" class="portfolio-bar">
-      <div class="port-card"><div class="port-label">총 자산</div><div class="port-value" id="total-asset">--</div></div>
-      <div class="port-card"><div class="port-label">총 평가</div><div class="port-value" id="total-eval">--</div></div>
-      <div class="port-card"><div class="port-label">예수금</div><div class="port-value" id="deposit">--</div></div>
-      <div class="port-card"><div class="port-label">누적 수익률</div><div class="port-value" id="cum-pnl">--</div></div>
-      <div class="port-card"><div class="port-label">오늘 수익</div><div class="port-value" id="today-pnl">--</div></div>
+      <div class="port-card accent">
+        <div class="port-label">추정 총 자산</div>
+        <div class="port-value" id="total-asset">--</div>
+      </div>
+      <div class="port-card">
+        <div class="port-label">총 매입금</div>
+        <div class="port-value" id="total-purchase">--</div>
+        <div class="port-sub" id="total-purchase-sub"></div>
+      </div>
+      <div class="port-card">
+        <div class="port-label">총 평가금</div>
+        <div class="port-value" id="total-eval">--</div>
+        <div class="port-sub" id="total-eval-sub"></div>
+      </div>
+      <div class="port-card">
+        <div class="port-label">누적 수익</div>
+        <div class="port-value" id="cum-pnl">--</div>
+        <div class="port-sub" id="cum-pnl-sub"></div>
+      </div>
+    </div>
+    <div class="port-row2">
+      <div class="port-card">
+        <div class="port-label">예수금 (현금)</div>
+        <div class="port-value" id="deposit">--</div>
+      </div>
+      <div class="port-card">
+        <div class="port-label">오늘 수익</div>
+        <div class="port-value" id="today-pnl">--</div>
+        <div class="port-sub" id="today-pnl-sub"></div>
+      </div>
+      <div class="port-card">
+        <div class="port-label">보유종목 수</div>
+        <div class="port-value" id="pos-count-big">0</div>
+        <div class="port-sub">/ 5 종목</div>
+      </div>
+      <div class="port-card">
+        <div class="port-label">현금 비중</div>
+        <div class="port-value" id="cash-ratio">--</div>
+      </div>
     </div>
 
+    <div class="section-head" style="margin-top:24px;">보유 종목</div>
     <div class="holdings-section">
-      <h3>🏦 보유종목 (<span id="pos-count">0</span>/5)</h3>
+      <h3>🏦 보유종목 (<span id="pos-count">0</span>/<span id="max-pos">5</span>)</h3>
       <table class="holdings-table">
-        <thead><tr><th>종목</th><th>수량</th><th>평균단가</th><th>현재가</th><th>평가액</th><th>수익률</th><th>차수</th></tr></thead>
+        <thead><tr><th>종목</th><th>수량</th><th>평균단가</th><th>현재가</th><th>투입금</th><th>평가액</th><th>수익률</th><th>비중</th></tr></thead>
         <tbody id="holdings-body"></tbody>
       </table>
     </div>
 
+    <div class="section-head" style="margin-top:24px;">종목 차트 · 일별 수익</div>
     <div style="display:grid;grid-template-columns:320px 1fr;gap:16px;margin-bottom:16px;">
       <div class="daily-pnl-section">
         <h3>📈 일별 수익 추이 (7일)</h3>
@@ -169,7 +253,10 @@ STOCKS_HTML = """<!DOCTYPE html>
             <button type="button" class="interval-btn active" data-interval="1d" onclick="setStockInterval('1d')">일봉</button>
           </div>
         </div>
-        <div id="stock-candle-chart" style="width:100%;height:400px"></div>
+        <div style="position:relative">
+          <div id="chart-loading" class="chart-loading hidden"><div class="spinner"></div></div>
+          <div id="stock-candle-chart" style="width:100%;height:400px"></div>
+        </div>
         <div id="stock-volume-chart" style="width:100%;height:100px"></div>
         <div id="rsi-chart-container" style="height:80px;margin-top:4px;position:relative;display:none;">
           <canvas id="rsi-chart"></canvas>
@@ -190,6 +277,7 @@ STOCKS_HTML = """<!DOCTYPE html>
     </div>
     </div>
 
+    <div class="section-head" style="margin-top:24px;">오늘 전략</div>
     <div id="strategy-bar" class="strategy-bar">
       <span>🎯 오늘 전략:</span>
       <span id="strat-outlook">--</span>
@@ -197,10 +285,11 @@ STOCKS_HTML = """<!DOCTYPE html>
       <span id="strat-picks">--</span>
     </div>
 
+    <div class="section-head" style="margin-top:24px;">종목 스캐너</div>
     <div class="card">
       <div class="card-header">
         <div class="scanner-header">
-          <h3 class="card-title">📋 종목 스캐너 (TOP50)</h3>
+          <h3 class="card-title">📋 TOP50 · 등락률/거래량/RSI</h3>
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
             <div class="scanner-filters">
               <button type="button" class="filter-btn active" data-filter="all">전체</button>
@@ -215,6 +304,11 @@ STOCKS_HTML = """<!DOCTYPE html>
               <option value="rsi_desc">RSI 높은순</option>
               <option value="vol_desc">거래량 높은순</option>
             </select>
+            <div class="scanner-views" style="display:flex;gap:4px;">
+              <button type="button" class="view-btn active" data-view="grid" onclick="setScannerView('grid')">그리드</button>
+              <button type="button" class="view-btn" data-view="heatmap" onclick="setScannerView('heatmap')">히트맵</button>
+              <button type="button" class="view-btn" data-view="table" onclick="setScannerView('table')">테이블</button>
+            </div>
           </div>
         </div>
       </div>
@@ -222,6 +316,8 @@ STOCKS_HTML = """<!DOCTYPE html>
         <div class="stock-grid" id="stock-grid">
           <div style="color:var(--muted);padding:20px;font-size:13px">로딩 중...</div>
         </div>
+        <div id="heatmap-container" style="display:none;flex-wrap:wrap;gap:6px;"></div>
+        <div id="stock-table-wrap" style="display:none;overflow:auto;"><table class="tv-table" id="stock-table"><thead><tr><th>종목</th><th>현재가</th><th>등락률</th><th>RSI</th><th>거래량</th></tr></thead><tbody></tbody></table></div>
       </div>
     </div>
 
@@ -237,11 +333,17 @@ STOCKS_HTML = """<!DOCTYPE html>
 
     <div style="display:grid;grid-template-columns:1fr 400px;gap:16px;margin-bottom:20px">
       <div class="card">
-        <div class="card-header">
-          <span class="card-title">📋 실시간 로그 (stock_trading)</span>
-          <span style="font-family:var(--mono);font-size:11px;color:var(--muted)" id="stock-log-time"></span>
+        <div class="card-header" style="flex-wrap:wrap;gap:8px">
+          <span class="card-title">📋 실시간 로그</span>
+          <div style="display:flex;gap:4px;align-items:center">
+            <button class="log-tab active" onclick="switchLogSource('all',this)">전체</button>
+            <button class="log-tab" onclick="switchLogSource('trading',this)">매매</button>
+            <button class="log-tab" onclick="switchLogSource('check',this)">체크</button>
+            <button class="log-tab" onclick="switchLogSource('premarket',this)">프리마켓</button>
+            <span style="font-family:var(--mono);font-size:11px;color:var(--muted);margin-left:8px" id="stock-log-time"></span>
+          </div>
         </div>
-        <div class="card-body" style="height:300px;overflow:auto">
+        <div class="card-body" style="height:350px;overflow:auto">
           <pre id="stock-log-viewer" style="margin:0;font-size:12px;line-height:1.8;color:var(--text);white-space:pre-wrap;word-break:break-all"></pre>
         </div>
       </div>
@@ -302,24 +404,139 @@ const fmt = n => n ? Number(n).toLocaleString('ko-KR') : '--';
 let stocksData = [];
 let holdingCodes = [];
 
+async function loadMarketSummary() {
+  try {
+    const res = await fetch('/api/stocks/market-summary');
+    const data = await res.json();
+    var map = [
+      ['kospi', 'ms-kospi', true],
+      ['kosdaq', 'ms-kosdaq', true],
+      ['sp500', 'ms-sp500', false],
+      ['nasdaq', 'ms-ndx', false],
+      ['usdkrw', 'ms-usdkrw', true]
+    ];
+    map.forEach(function(m) {
+      var key = m[0], prefix = m[1], isKr = m[2];
+      var d = data[key];
+      if (!d) return;
+      var priceEl = document.getElementById(prefix + '-price');
+      var changeEl = document.getElementById(prefix + '-change');
+      if (priceEl) priceEl.textContent = isKr ? (d.price || 0).toLocaleString('ko-KR') : (d.price || 0).toLocaleString('en-US', {maximumFractionDigits: 2});
+      if (changeEl) {
+        var sign = (d.change_pct || 0) >= 0 ? '+' : '';
+        changeEl.textContent = sign + (d.change_pct || 0) + '%';
+        changeEl.className = 'ms-change ' + ((d.change_pct || 0) >= 0 ? 'up' : 'dn');
+      }
+    });
+  } catch(e) { console.error('market-summary', e); }
+}
+
+function setScannerView(view) {
+  document.querySelectorAll('.view-btn').forEach(function(b){ b.classList.toggle('active', b.getAttribute('data-view') === view); });
+  document.getElementById('stock-grid').style.display = view === 'grid' ? 'grid' : 'none';
+  document.getElementById('heatmap-container').style.display = view === 'heatmap' ? 'flex' : 'none';
+  document.getElementById('stock-table-wrap').style.display = view === 'table' ? 'block' : 'none';
+  if (view === 'heatmap' && stocksData.length) renderHeatmap(stocksData);
+  if (view === 'table' && stocksData.length) renderStockTable(stocksData);
+}
+function renderHeatmap(stocks) {
+  var c = document.getElementById('heatmap-container');
+  c.innerHTML = '';
+  (stocks || []).forEach(function(s) {
+    var change = parseFloat(s.change) || 0;
+    var size = Math.max(60, Math.min(140, 80 + Math.abs(change) * 8));
+    var bg = change >= 3 ? '#f23645' : change >= 1 ? '#f2364588' : change >= 0 ? '#f236451a' : change >= -1 ? '#0899811a' : change >= -3 ? '#08998188' : '#089981';
+    var el = document.createElement('div');
+    el.style.cssText = 'width:' + size + 'px;height:' + (size*0.7) + 'px;background:' + bg + ';border-radius:4px;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;font-size:11px;';
+    el.innerHTML = '<div style="font-weight:bold">' + (s.name || s.code) + '</div><div>' + (change >= 0 ? '+' : '') + change.toFixed(1) + '%</div>';
+    el.onclick = function(){ selectStock(s.code, s.name || ''); };
+    c.appendChild(el);
+  });
+}
+function renderStockTable(stocks) {
+  var tbody = document.querySelector('#stock-table tbody');
+  if (!tbody) return;
+  var sorted = (stocks || []).slice().sort(function(a,b){ return (parseFloat(b.change)||0) - (parseFloat(a.change)||0); });
+  tbody.innerHTML = sorted.map(function(s) {
+    var change = parseFloat(s.change) || 0;
+    var cls = change >= 0 ? 'up' : 'down';
+    var rsi = parseFloat(s.rsi) || 50;
+    return '<tr onclick="selectStock(\'' + s.code + '\',\'' + (s.name||'').replace(/'/g, "\\'") + '\')" style="cursor:pointer"><td><b>' + (s.name||s.code) + '</b><br><small style="color:var(--muted)">' + s.code + '</small></td><td>' + (s.price||0).toLocaleString('ko-KR') + '</td><td class="' + cls + '">' + (change >= 0 ? '+' : '') + change.toFixed(2) + '%</td><td>' + rsi.toFixed(0) + '</td><td>' + (s.volume ? (s.volume/1e6).toFixed(1) + 'M' : '--') + '</td></tr>';
+  }).join('');
+}
+
 async function loadPortfolio() {
   try {
     const res = await fetch('/api/stocks/portfolio');
     const data = await res.json();
     if (data.error && !data.positions) return;
-    document.getElementById('total-asset').textContent = (data.estimated_asset || 0).toLocaleString('ko-KR') + '원';
-    document.getElementById('total-eval').textContent = (data.total_evaluation || 0).toLocaleString('ko-KR') + '원';
-    document.getElementById('deposit').textContent = (data.deposit || 0).toLocaleString('ko-KR') + '원';
-    var cumEl = document.getElementById('cum-pnl');
+
+    var positions = data.positions || [];
+    var deposit = data.deposit || 0;
+    var totalEval = data.total_evaluation || 0;
+    var estimated = data.estimated_asset || 0;
+    var totalPurchase = data.total_purchase || 0;
+    var cumPnl = data.cumulative_pnl || 0;
     var cumPct = data.cumulative_pnl_pct || 0;
-    cumEl.textContent = (cumPct >= 0 ? '+' : '') + cumPct + '%';
-    cumEl.className = 'port-value ' + (cumPct >= 0 ? 'kr-up' : 'kr-dn');
-    var todayEl = document.getElementById('today-pnl');
     var todayPnl = data.today_pnl || 0;
+    var todayPct = data.today_pnl_pct || 0;
+
+    if (!estimated) estimated = deposit + totalEval;
+    if (!totalPurchase && positions.length) {
+      totalPurchase = positions.reduce(function(s,p){ return s + (p.avg_entry||0) * (p.quantity||0); }, 0);
+    }
+    if (!totalEval && positions.length) {
+      totalEval = positions.reduce(function(s,p){ return s + (p.evaluation||0); }, 0);
+    }
+    var holdingPnl = totalEval - totalPurchase;
+    var holdingPnlPct = totalPurchase > 0 ? (holdingPnl / totalPurchase * 100) : 0;
+
+    // 1행: 추정자산, 총매입, 총평가, 누적수익
+    document.getElementById('total-asset').textContent = estimated.toLocaleString('ko-KR') + '원';
+
+    document.getElementById('total-purchase').textContent = totalPurchase.toLocaleString('ko-KR') + '원';
+    var tpSub = document.getElementById('total-purchase-sub');
+    if (tpSub) tpSub.textContent = positions.length + '종목 보유중';
+
+    document.getElementById('total-eval').textContent = totalEval.toLocaleString('ko-KR') + '원';
+    var teSub = document.getElementById('total-eval-sub');
+    if (teSub) {
+      var sign = holdingPnl >= 0 ? '+' : '';
+      teSub.textContent = sign + holdingPnl.toLocaleString('ko-KR') + '원 (' + sign + holdingPnlPct.toFixed(2) + '%)';
+      teSub.className = 'port-sub ' + (holdingPnl >= 0 ? 'kr-up' : 'kr-dn');
+    }
+
+    var cumEl = document.getElementById('cum-pnl');
+    cumEl.textContent = (cumPnl >= 0 ? '+' : '') + cumPnl.toLocaleString('ko-KR') + '원';
+    cumEl.className = 'port-value ' + (cumPnl >= 0 ? 'kr-up' : 'kr-dn');
+    var cumSub = document.getElementById('cum-pnl-sub');
+    if (cumSub) {
+      cumSub.textContent = (cumPct >= 0 ? '+' : '') + cumPct + '%';
+      cumSub.className = 'port-sub ' + (cumPct >= 0 ? 'kr-up' : 'kr-dn');
+    }
+
+    // 2행: 예수금, 오늘수익, 보유종목 수, 현금비중
+    document.getElementById('deposit').textContent = deposit.toLocaleString('ko-KR') + '원';
+
+    var todayEl = document.getElementById('today-pnl');
     todayEl.textContent = (todayPnl >= 0 ? '+' : '') + todayPnl.toLocaleString('ko-KR') + '원';
     todayEl.className = 'port-value ' + (todayPnl >= 0 ? 'kr-up' : 'kr-dn');
-    holdingCodes = (data.positions || []).map(function(p){ return p.code; });
-    renderHoldings(data.positions || [], data.max_positions || 5);
+    var todaySub = document.getElementById('today-pnl-sub');
+    if (todaySub) {
+      todaySub.textContent = (todayPct >= 0 ? '+' : '') + todayPct + '%';
+      todaySub.className = 'port-sub ' + (todayPnl >= 0 ? 'kr-up' : 'kr-dn');
+    }
+
+    document.getElementById('pos-count-big').textContent = positions.length;
+    var cashRatio = estimated > 0 ? (deposit / estimated * 100).toFixed(1) : '--';
+    document.getElementById('cash-ratio').textContent = cashRatio + '%';
+
+    holdingCodes = positions.map(function(p){
+      var c = p.code || '';
+      return c.replace(/^A/, '');
+    });
+    renderHoldings(positions, data.max_positions || 5);
+
     var statusEl = document.getElementById('market-status');
     if (statusEl) {
       if (data.is_market_open) {
@@ -335,39 +552,48 @@ async function loadPortfolio() {
 
 function renderHoldings(positions, maxPos) {
   document.getElementById('pos-count').textContent = positions.length;
+  var maxPosEl = document.getElementById('max-pos');
+  if (maxPosEl) maxPosEl.textContent = maxPos || 5;
   var tbody = document.getElementById('holdings-body');
   if (!positions.length) {
-    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--muted);padding:20px;">보유종목 없음</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--muted);padding:20px;">보유종목 없음</td></tr>';
     return;
   }
+
+  var totalCost = positions.reduce(function(s,p){ return s+((p.avg_entry||0)*(p.quantity||0));},0);
+  var totalEval = positions.reduce(function(s,p){ return s+(p.evaluation||0);},0);
+  var totalPnl = positions.reduce(function(s,p){ return s+(p.pnl_amount||0);},0);
+
   tbody.innerHTML = positions.map(function(p) {
     var pnlClass = p.pnl_pct >= 0 ? 'pnl-pos' : 'pnl-neg';
     var pnlSign = p.pnl_pct >= 0 ? '+' : '';
     var liveTag = p.is_live ? '' : ' <span style="color:#ff8800;font-size:9px;">(종가)</span>';
-    return '<tr onclick="selectStock(\\'' + p.code + '\\',\\'' + (p.name || '').replace(/'/g, "\\'") + '\\')" style="cursor:pointer">' +
-      '<td>' + (p.name || p.code) + '</td>' +
-      '<td>' + p.quantity + '주</td>' +
-      '<td>' + (p.avg_entry || 0).toLocaleString('ko-KR') + '</td>' +
-      '<td>' + (p.current_price || 0).toLocaleString('ko-KR') + liveTag + '</td>' +
-      '<td>' + (p.evaluation || 0).toLocaleString('ko-KR') + '</td>' +
-      '<td class="' + pnlClass + '">' + pnlSign + (p.pnl_pct || 0) + '%<br><small>(' + pnlSign + (p.pnl_amount || 0).toLocaleString('ko-KR') + '원)</small>' +
-      '<div class="pnl-gauge"><div class="pnl-gauge-fill" style="width:' + Math.min(Math.abs(p.pnl_pct || 0) * 5, 100) + '%;background:' + (p.pnl_pct >= 0 ? 'var(--red)' : '#4488ff') + '"></div></div></td>' +
-      '<td>' + (p.split_count || 1) + '차</td></tr>';
+    var cost = (p.avg_entry||0) * (p.quantity||0);
+    var weight = totalEval > 0 ? ((p.evaluation||0) / totalEval * 100).toFixed(1) : '0';
+    var splitBadge = (p.split_count||1) > 1 ? '<span style="color:#ffa500;font-size:9px;margin-left:4px;">' + (p.split_count||1) + '차</span>' : '';
+    return '<tr onclick="selectStock(\\'' + p.code + '\\',\\'' + (p.name||'').replace(/'/g,"\\\\'") + '\\')" style="cursor:pointer">' +
+      '<td>' + (p.name||p.code) + splitBadge + '</td>' +
+      '<td>' + (p.quantity||0).toLocaleString('ko-KR') + '주</td>' +
+      '<td>' + (p.avg_entry||0).toLocaleString('ko-KR') + '</td>' +
+      '<td>' + (p.current_price||0).toLocaleString('ko-KR') + liveTag + '</td>' +
+      '<td>' + cost.toLocaleString('ko-KR') + '</td>' +
+      '<td>' + (p.evaluation||0).toLocaleString('ko-KR') + '</td>' +
+      '<td class="' + pnlClass + '">' + pnlSign + (p.pnl_pct||0) + '%<br><small>(' + pnlSign + (p.pnl_amount||0).toLocaleString('ko-KR') + '원)</small>' +
+      '<div class="pnl-gauge"><div class="pnl-gauge-fill" style="width:' + Math.min(Math.abs(p.pnl_pct||0)*5,100) + '%;background:' + (p.pnl_pct>=0?'var(--red)':'#4488ff') + '"></div></div></td>' +
+      '<td>' + weight + '%</td></tr>';
   }).join('');
 
-  var totalCost = positions.reduce(function(s, p) { return s + ((p.avg_entry || 0) * (p.quantity || 0)); }, 0);
-  var totalEval = positions.reduce(function(s, p) { return s + (p.evaluation || 0); }, 0);
-  var totalPnl = positions.reduce(function(s, p) { return s + (p.pnl_amount || 0); }, 0);
   var totalPnlPct = totalCost > 0 ? (totalPnl / totalCost * 100).toFixed(2) : 0;
   var pnlClass = totalPnl >= 0 ? 'pnl-pos' : 'pnl-neg';
   var sign = totalPnl >= 0 ? '+' : '';
-  tbody.innerHTML += '<tr style="border-top: 1px solid #ffffff30; font-weight: bold;">' +
+  tbody.innerHTML += '<tr style="border-top:2px solid #ffffff20;font-weight:bold;background:rgba(255,255,255,0.02);">' +
     '<td>합계</td>' +
     '<td>' + positions.length + '종목</td>' +
     '<td></td><td></td>' +
-    '<td>' + totalEval.toLocaleString('ko-KR') + '원</td>' +
+    '<td>' + totalCost.toLocaleString('ko-KR') + '</td>' +
+    '<td>' + totalEval.toLocaleString('ko-KR') + '</td>' +
     '<td class="' + pnlClass + '">' + sign + totalPnlPct + '%<br><small>(' + sign + totalPnl.toLocaleString('ko-KR') + '원)</small></td>' +
-    '<td>' + positions.length + '/' + (maxPos || 5) + '</td></tr>';
+    '<td>100%</td></tr>';
 }
 
 let dailyPnlChart = null, dailyPnlSeries = null;
@@ -448,6 +674,8 @@ function sortStocks(by) {
   cards.forEach(function(card){ container.appendChild(card); });
 }
 
+var prevPrices = {};
+
 async function loadStocks() {
   try {
     var res = await fetch('/api/stocks/overview');
@@ -462,59 +690,135 @@ async function loadStocks() {
       return;
     }
 
-    grid.innerHTML = stocks.map(function(s) {
-      var isPos = s.change >= 0;
-      var selected = selectedCode === s.code ? ' selected' : '';
-      var isHolding = holdingCodes.indexOf(s.code) >= 0;
-      return '<div class="stock-card' + (isHolding ? ' holding' : '') + selected + '" onclick="selectStock(\\'' + s.code + '\\',\\'' + (s.name || '').replace(/'/g, "\\'") + '\\')" data-rsi="50" data-vol="1" data-holding="' + isHolding + '" data-change="' + (s.change || 0) + '">' +
-        '<div class="industry-badge">' + (s.industry || '') + '</div>' +
-        '<div class="stock-name">' + s.name + '</div>' +
-        '<div class="stock-price">' + fmt(Math.round(s.price)) + '원</div>' +
-        '<div class="stock-change ' + (isPos ? 'positive' : 'negative') + '">' +
-          (isPos ? '▲' : '▼') + ' ' + Math.abs(s.change).toFixed(2) + '%' +
-        '</div>' +
-        '<div class="indicator-badges">' +
-        '<span class="badge rsi" id="rsi-' + s.code + '">RSI --</span>' +
-        '<span class="badge macd" id="macd-' + s.code + '">MACD --</span>' +
-        '<span class="badge bb" id="bb-' + s.code + '">BB --</span>' +
-        '<span class="badge vol" id="vol-' + s.code + '">Vol --</span>' +
-        '</div>' +
-        '</div>';
-    }).join('');
-    stocks.forEach(function(s){ loadStockIndicators(s.code); });
-    document.querySelectorAll('.filter-btn').forEach(function(btn){
-      btn.onclick = function(){ filterStocks(btn.getAttribute('data-filter')); };
+    var existingCards = grid.querySelectorAll('.stock-card');
+    var isFirstLoad = existingCards.length === 0;
+
+    if (isFirstLoad) {
+      grid.innerHTML = stocks.map(function(s) {
+        return buildStockCard(s);
+      }).join('');
+      document.querySelectorAll('.filter-btn').forEach(function(btn){
+        btn.onclick = function(){ filterStocks(btn.getAttribute('data-filter')); };
+      });
+      queueIndicators(stocks);
+    } else {
+      stocks.forEach(function(s) {
+        var card = grid.querySelector('[data-code="' + s.code + '"]');
+        if (!card) return;
+        var priceEl = card.querySelector('.stock-price');
+        if (priceEl) {
+          var oldPrice = prevPrices[s.code] || 0;
+          var newPrice = Math.round(s.price);
+          if (oldPrice && newPrice !== oldPrice) {
+            priceEl.classList.remove('price-flash-up','price-flash-down');
+            void priceEl.offsetWidth;
+            priceEl.classList.add(newPrice > oldPrice ? 'price-flash-up' : 'price-flash-down');
+            setTimeout(function(){ priceEl.classList.remove('price-flash-up','price-flash-down'); }, 1500);
+          }
+          priceEl.textContent = fmt(newPrice) + '원';
+        }
+        var changeEl = card.querySelector('.stock-change');
+        if (changeEl) {
+          var isP = s.change >= 0;
+          changeEl.textContent = (isP ? '▲' : '▼') + ' ' + Math.abs(s.change).toFixed(2) + '%';
+          changeEl.className = 'stock-change ' + (isP ? 'positive' : 'negative');
+        }
+        updateCardIndicators(card, s);
+        card.setAttribute('data-change', s.change || 0);
+        var isHolding = holdingCodes.indexOf(s.code) >= 0;
+        card.classList.toggle('holding', isHolding);
+        card.setAttribute('data-holding', isHolding);
+      });
+    }
+
+    stocks.forEach(function(s) {
+      prevPrices[s.code] = Math.round(s.price);
     });
+
+    if (selectedCode) {
+      var selCard = grid.querySelector('[data-code="' + selectedCode + '"]');
+      if (selCard) {
+        grid.querySelectorAll('.stock-card').forEach(function(c){ c.classList.remove('selected'); });
+        selCard.classList.add('selected');
+      }
+    }
   } catch(e) { console.error('stocks error', e); }
 }
 
-async function loadStockIndicators(code) {
-  try {
-    var res = await fetch('/api/stocks/indicators/' + code);
-    var data = await res.json();
-    if (data.error) return;
-    var rsiEl = document.getElementById('rsi-' + code);
-    if (rsiEl) {
-      var card = rsiEl.closest('.stock-card');
-      if (card) {
-        card.setAttribute('data-rsi', data.rsi != null ? data.rsi : 50);
-        card.setAttribute('data-vol', data.vol_ratio != null ? data.vol_ratio : 1);
-      }
+function buildStockCard(s) {
+  var isPos = s.change >= 0;
+  var selected = selectedCode === s.code ? ' selected' : '';
+  var isHolding = holdingCodes.indexOf(s.code) >= 0;
+  var liveTag = s.is_live ? '<span class="badge live">LIVE</span>' : '';
+  return '<div class="stock-card' + (isHolding ? ' holding' : '') + selected + '" data-code="' + s.code + '" onclick="selectStock(\\'' + s.code + '\\',\\'' + (s.name || '').replace(/'/g, "\\\\'") + '\\')" data-rsi="50" data-vol="1" data-holding="' + isHolding + '" data-change="' + (s.change||0) + '">' +
+    '<div style="display:flex;justify-content:space-between;align-items:center;">' +
+      '<div class="industry-badge">' + (s.industry || '') + '</div>' +
+      liveTag +
+    '</div>' +
+    '<div class="stock-name">' + s.name + '</div>' +
+    '<div class="stock-price">' + fmt(Math.round(s.price)) + '원</div>' +
+    '<div class="stock-change ' + (isPos ? 'positive' : 'negative') + '">' +
+      (isPos ? '▲' : '▼') + ' ' + Math.abs(s.change).toFixed(2) + '%' +
+    '</div>' +
+    '<div class="indicator-badges">' +
+      '<span class="badge rsi">RSI --</span>' +
+      '<span class="badge macd">MACD --</span>' +
+      '<span class="badge bb">BB --</span>' +
+      '<span class="badge vol">Vol --</span>' +
+    '</div></div>';
+}
+
+function updateCardIndicators(card, data) {
+  var badges = card.querySelectorAll('.indicator-badges .badge');
+  if (badges.length >= 4) {
+    if (data.rsi != null) {
+      badges[0].textContent = 'RSI ' + data.rsi;
+      badges[0].className = 'badge rsi';
+      if (data.rsi <= 30) badges[0].classList.add('oversold');
+      else if (data.rsi <= 45) badges[0].classList.add('low');
+      else if (data.rsi >= 70) badges[0].classList.add('overbought');
     }
-    var macdEl = document.getElementById('macd-' + code);
-    var bbEl = document.getElementById('bb-' + code);
-    var volEl = document.getElementById('vol-' + code);
-    if (rsiEl) {
-      rsiEl.textContent = 'RSI ' + data.rsi;
-      rsiEl.className = 'badge rsi';
-      if (data.rsi <= 30) rsiEl.classList.add('oversold');
-      else if (data.rsi <= 45) rsiEl.classList.add('low');
-      else if (data.rsi >= 70) rsiEl.classList.add('overbought');
+    if (data.macd != null) badges[1].textContent = 'MACD ' + (data.macd > 0 ? '+' : '') + data.macd;
+    if (data.bb_pos != null) badges[2].textContent = 'BB ' + data.bb_pos + '%';
+    if (data.vol_ratio != null) badges[3].textContent = 'Vol ' + data.vol_ratio + 'x';
+  }
+  card.setAttribute('data-rsi', data.rsi != null ? data.rsi : 50);
+  card.setAttribute('data-vol', data.vol_ratio != null ? data.vol_ratio : 1);
+}
+
+var indicatorQueue = [];
+var indicatorLoading = false;
+
+async function loadIndicatorsBatch() {
+  if (indicatorLoading || indicatorQueue.length === 0) return;
+  indicatorLoading = true;
+  var batch = indicatorQueue.splice(0, 5);
+  await Promise.allSettled(batch.map(function(code) {
+    return fetch('/api/stocks/indicators/' + code)
+      .then(function(r){ return r.json(); })
+      .then(function(data) {
+        if (data.error) return;
+        var grid = document.getElementById('stock-grid');
+        var card = grid ? grid.querySelector('[data-code="' + code + '"]') : null;
+        if (card) updateCardIndicators(card, data);
+      })
+      .catch(function(){});
+  }));
+  indicatorLoading = false;
+  if (indicatorQueue.length > 0) {
+    setTimeout(loadIndicatorsBatch, 200);
+  } else {
+    var activeFilter = document.querySelector('.scanner-filters .filter-btn.active');
+    if (activeFilter) {
+      var f = activeFilter.getAttribute('data-filter');
+      if (f && f !== 'all') filterStocks(f);
     }
-    if (macdEl) macdEl.textContent = 'MACD ' + (data.macd > 0 ? '+' : '') + data.macd;
-    if (bbEl) bbEl.textContent = 'BB ' + data.bb_pos + '%';
-    if (volEl) volEl.textContent = 'Vol ' + data.vol_ratio + 'x';
-  } catch(e) { console.log('지표 로드 실패:', code); }
+  }
+}
+
+function queueIndicators(stocks) {
+  indicatorQueue = stocks.map(function(s){ return s.code; });
+  loadIndicatorsBatch();
 }
 
 function setStockInterval(interval) {
@@ -522,7 +826,7 @@ function setStockInterval(interval) {
   document.querySelectorAll('.interval-btn').forEach(btn => {
     btn.classList.toggle('active', btn.getAttribute('data-interval') === interval);
   });
-  if (selectedCode) loadStockChart(selectedCode);
+  if (selectedCode) loadStockChart(selectedCode, false);
 }
 
 function computeBBRSI(candles) {
@@ -558,13 +862,20 @@ function computeBBRSI(candles) {
   return candles;
 }
 
-async function loadStockChart(code) {
+var chartLoadingEl = null;
+function showChartLoading(show) {
+  if (!chartLoadingEl) chartLoadingEl = document.getElementById('chart-loading');
+  if (chartLoadingEl) chartLoadingEl.classList.toggle('hidden', !show);
+}
+
+async function loadStockChart(code, silent) {
   if (!code || !stockSeries || !stockVolSeries) return;
+  if (!silent) showChartLoading(true);
   try {
     const res = await fetch('/api/stocks/chart/' + code + '?interval=' + encodeURIComponent(currentStockInterval));
     const raw = await res.json();
     var candles = raw.candles && raw.candles.length ? raw.candles : (Array.isArray(raw) ? raw : []);
-    if (!candles.length) return;
+    if (!candles.length) { showChartLoading(false); return; }
     if (candles[0].bb_upper == null && candles[0].rsi == null) candles = computeBBRSI(candles);
 
     stockSeries.setData(candles.map(d => ({
@@ -594,16 +905,30 @@ async function loadStockChart(code) {
     const prev = candles.length > 1 ? candles[candles.length - 2] : null;
     const chg = prev ? ((last.close - prev.close) / prev.close * 100).toFixed(2) : 0;
     const isPos = chg >= 0;
+
+    var livePrice = null;
+    try {
+      var priceRes = await fetch('/api/stocks/price/' + code);
+      var priceData = await priceRes.json();
+      if (priceData.is_live && priceData.price > 0) livePrice = priceData.price;
+    } catch(e) {}
+
+    var displayPrice = livePrice || Math.round(last.close);
+    var displayChg = livePrice && prev ? ((livePrice - prev.close) / prev.close * 100).toFixed(2) : chg;
+    var dispPos = displayChg >= 0;
+    var liveTag = livePrice ? '<span style="color:#00e676;font-size:10px;margin-left:6px">● LIVE</span>' : '';
+
     document.getElementById('stock-detail').innerHTML =
       '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">' +
-      '<div><div class="stat-label">현재가</div><div class="stat-value neutral">' + fmt(Math.round(last.close)) + '원</div></div>' +
-      '<div><div class="stat-label">전일대비</div><div class="stat-value ' + (isPos?'positive':'negative') + '">' + (isPos?'+':'') + chg + '%</div></div>' +
+      '<div><div class="stat-label">현재가' + liveTag + '</div><div class="stat-value neutral" style="font-size:24px">' + fmt(displayPrice) + '원</div></div>' +
+      '<div><div class="stat-label">전일대비</div><div class="stat-value ' + (dispPos?'positive':'negative') + '" style="font-size:24px">' + (dispPos?'+':'') + displayChg + '%</div></div>' +
       '<div><div class="stat-label">고가</div><div class="stat-value" style="font-size:16px;color:var(--green)">' + fmt(Math.round(last.high)) + '원</div></div>' +
       '<div><div class="stat-label">저가</div><div class="stat-value" style="font-size:16px;color:var(--red)">' + fmt(Math.round(last.low)) + '원</div></div>' +
       '<div><div class="stat-label">거래량</div><div class="stat-value" style="font-size:16px">' + fmt(last.volume) + '</div></div>' +
-      '<div><div class="stat-label">종목코드</div><div class="stat-value" style="font-size:16px">' + code + '</div></div>' +
+      '<div><div class="stat-label">종목코드</div><div class="stat-value" style="font-size:16px;color:var(--muted)">' + code + '</div></div>' +
       '</div>';
   } catch(e) { console.error('chart error', e); }
+  showChartLoading(false);
 }
 
 function drawRSIChart(candles) {
@@ -668,8 +993,9 @@ async function selectStock(code, name) {
   document.getElementById('chart-title').textContent = name + ' 차트';
 
   document.querySelectorAll('.stock-card').forEach(el => el.classList.remove('selected'));
-  var t = event && event.currentTarget;
-  if (t) t.classList.add('selected');
+  var grid = document.getElementById('stock-grid');
+  var card = grid ? grid.querySelector('[data-code="' + code + '"]') : null;
+  if (card) card.classList.add('selected');
 
   await loadStockChart(code);
 }
@@ -719,17 +1045,37 @@ async function loadStrategy() {
 }
 
 setInterval(function(){ var c=document.getElementById('clock'); if(c) c.textContent=new Date().toLocaleTimeString('ko-KR'); }, 1000);
+
+loadMarketSummary();
 loadPortfolio().then(function(){ loadStocks(); });
 loadStrategy();
 loadDailyPnL();
+
 setInterval(loadPortfolio, 15000);
-setInterval(loadStocks, 30000);
+setInterval(loadMarketSummary, 60000);
+setInterval(loadStocks, 10000);
 setInterval(loadDailyPnL, 120000);
-setInterval(function(){ if (stocksData.length) stocksData.forEach(function(s){ loadStockIndicators(s.code); }); }, 30000);
+
+setInterval(function(){
+  if (selectedCode) loadStockChart(selectedCode, true);
+}, 15000);
+
+setInterval(function(){
+  if (stocksData.length) queueIndicators(stocksData);
+}, 60000);
+
+var currentLogSource = 'all';
+
+function switchLogSource(source, btn) {
+  currentLogSource = source;
+  document.querySelectorAll('.log-tab').forEach(function(b){ b.classList.remove('active'); });
+  if (btn) btn.classList.add('active');
+  loadStockLogs();
+}
 
 async function loadStockLogs() {
   try {
-    const res = await fetch('/api/stocks/logs');
+    const res = await fetch('/api/stocks/logs?source=' + currentLogSource);
     const d = await res.json();
     const el = document.getElementById('stock-log-viewer');
     const timeEl = document.getElementById('stock-log-time');
@@ -740,21 +1086,28 @@ async function loadStockLogs() {
       .replace(/>/g,'&gt;');
 
     const cls = line => {
-      if (/매수|BUY/.test(line)) return 'color:var(--green)';
-      if (/매도|SELL|손절/.test(line)) return 'color:var(--red)';
-      if (/ERROR|실패/.test(line)) return 'color:var(--red)';
-      if (/사이클 시작/.test(line)) return 'color:var(--accent)';
-      if (/HOLD|SKIP/.test(line)) return 'color:var(--muted)';
-      if (/익절/.test(line)) return 'color:var(--green)';
+      if (/매수|BUY|💰/.test(line)) return 'color:var(--green);font-weight:600';
+      if (/매도|SELL|손절/.test(line)) return 'color:var(--red);font-weight:600';
+      if (/ERROR|실패|❌/.test(line)) return 'color:var(--red)';
+      if (/WARN|⚠️/.test(line)) return 'color:#f0ad4e';
+      if (/사이클 시작|═/.test(line)) return 'color:var(--accent);font-weight:600';
+      if (/HOLD|SKIP|장 외/.test(line)) return 'color:var(--muted);font-size:11px';
+      if (/익절|✅/.test(line)) return 'color:var(--green)';
+      if (/전략|브리핑/.test(line)) return 'color:#9b59b6';
       return 'color:var(--text)';
     };
 
-    el.innerHTML = (d.lines || [])
+    var lines = d.lines || [];
+    if (currentLogSource === 'all') {
+      lines = lines.filter(function(l) { return !/장 외 시간/.test(l) && !/초기화 완료/.test(l); });
+    }
+
+    el.innerHTML = lines
       .map(l => '<span style="' + cls(l) + '">' + escape(l) + '</span>')
       .join('\\n') || '(비어 있음)';
     el.scrollTop = el.scrollHeight;
   } catch(e) {
-    const v = document.getElementById('stock-log-viewer');
+    var v = document.getElementById('stock-log-viewer');
     if (v) v.textContent = '로딩 실패';
   }
 }

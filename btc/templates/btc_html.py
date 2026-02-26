@@ -717,7 +717,57 @@ BTC_HTML = """<!DOCTYPE html>
       </div>
     </div>
 
-    <!-- 차트 + 포지션 -->
+    <!-- 포트폴리오 요약 -->
+    <div class="card" style="margin-bottom:20px">
+      <div class="card-header">
+        <span class="card-title">💼 BTC 포트폴리오</span>
+        <span class="stat-sub" id="btc-port-update"></span>
+      </div>
+      <div class="card-body">
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:20px;" id="btc-port-summary">
+          <div style="text-align:center;">
+            <div class="stat-label">추정 총 자산</div>
+            <div class="stat-value" id="btc-estimated" style="font-size:22px;">--</div>
+          </div>
+          <div style="text-align:center;">
+            <div class="stat-label">보유 BTC 평가</div>
+            <div class="stat-value" id="btc-total-eval" style="font-size:22px;">--</div>
+            <div class="stat-sub" id="btc-total-eval-sub"></div>
+          </div>
+          <div style="text-align:center;">
+            <div class="stat-label">미실현 수익</div>
+            <div class="stat-value" id="btc-unrealized" style="font-size:22px;">--</div>
+            <div class="stat-sub" id="btc-unrealized-pct"></div>
+          </div>
+          <div style="text-align:center;">
+            <div class="stat-label">실현 수익 (확정)</div>
+            <div class="stat-value" id="btc-realized" style="font-size:22px;">--</div>
+            <div class="stat-sub" id="btc-realized-sub"></div>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;">
+          <div style="text-align:center;">
+            <div class="stat-label">KRW 잔고</div>
+            <div class="stat-value" id="btc-krw" style="font-size:18px;">--</div>
+          </div>
+          <div style="text-align:center;">
+            <div class="stat-label">총 투입금</div>
+            <div class="stat-value" id="btc-invested" style="font-size:18px;">--</div>
+          </div>
+          <div style="text-align:center;">
+            <div class="stat-label">BTC 현재가</div>
+            <div class="stat-value" id="btc-cur-price" style="font-size:18px;color:var(--accent);">--</div>
+          </div>
+          <div style="text-align:center;">
+            <div class="stat-label">승률</div>
+            <div class="stat-value" id="btc-winrate" style="font-size:18px;">--</div>
+            <div class="stat-sub" id="btc-winrate-sub"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 차트 + OPEN 포지션 -->
     <div class="content-grid">
       <div class="card">
         <div class="card-header">
@@ -735,12 +785,39 @@ BTC_HTML = """<!DOCTYPE html>
 
       <div class="card">
         <div class="card-header">
-          <span class="card-title">현재 포지션</span>
+          <span class="card-title">현재 보유 포지션</span>
           <span class="stat-sub" id="pos-status"></span>
         </div>
         <div class="card-body" id="position-body">
           <div class="position-empty">포지션 없음<br><span style="font-size:11px">다음 BUY 신호 대기 중</span></div>
         </div>
+      </div>
+    </div>
+
+    <!-- CLOSED 포지션 히스토리 -->
+    <div class="card" style="margin-bottom:20px;">
+      <div class="card-header">
+        <span class="card-title">📜 매매 이력 (CLOSED)</span>
+        <span class="stat-sub" id="closed-count">0건</span>
+      </div>
+      <div style="overflow-x:auto;">
+        <table class="trade-table" style="width:100%">
+          <thead>
+            <tr>
+              <th>진입일</th>
+              <th>청산일</th>
+              <th>진입가</th>
+              <th>청산가</th>
+              <th>투입금</th>
+              <th>수익</th>
+              <th>수익률</th>
+              <th>청산사유</th>
+            </tr>
+          </thead>
+          <tbody id="closed-tbody">
+            <tr><td colspan="8" style="text-align:center;color:var(--muted);padding:20px;">로딩 중...</td></tr>
+          </tbody>
+        </table>
       </div>
     </div>
 
@@ -1002,7 +1079,162 @@ function openUsDashboard() {
 }
 
 async function loadAll() {
-  await Promise.allSettled([loadStats(), loadTrades(), loadFG(), loadComposite(), loadLogs(), loadSystem(), loadBrain()]);
+  await Promise.allSettled([loadStats(), loadTrades(), loadFG(), loadComposite(), loadLogs(), loadSystem(), loadBrain(), loadBtcPortfolio()]);
+}
+
+async function loadBtcPortfolio() {
+  try {
+    const res = await fetch('/api/btc/portfolio');
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data.error) return;
+    const s = data.summary || {};
+    const openPos = data.open_positions || [];
+    const closedPos = data.closed_positions || [];
+
+    // 포트폴리오 요약
+    var el;
+    el = document.getElementById('btc-estimated');
+    if (el) el.textContent = fmt(s.estimated_asset) + '원';
+
+    el = document.getElementById('btc-total-eval');
+    if (el) el.textContent = fmt(s.total_eval) + '원';
+    el = document.getElementById('btc-total-eval-sub');
+    if (el) el.textContent = openPos.length + '개 포지션 보유중';
+
+    el = document.getElementById('btc-unrealized');
+    if (el) {
+      var ur = s.unrealized_pnl || 0;
+      el.textContent = (ur >= 0 ? '+' : '') + fmt(Math.round(ur)) + '원';
+      el.className = 'stat-value ' + (ur >= 0 ? 'positive' : 'negative');
+    }
+    el = document.getElementById('btc-unrealized-pct');
+    if (el) {
+      var urp = s.unrealized_pnl_pct || 0;
+      el.textContent = (urp >= 0 ? '+' : '') + urp.toFixed(2) + '%';
+      el.className = 'stat-sub ' + (urp >= 0 ? 'positive' : 'negative');
+    }
+
+    el = document.getElementById('btc-realized');
+    if (el) {
+      var rp = s.realized_pnl || 0;
+      el.textContent = (rp >= 0 ? '+' : '') + fmt(Math.round(rp)) + '원';
+      el.className = 'stat-value ' + (rp >= 0 ? 'positive' : 'negative');
+    }
+    el = document.getElementById('btc-realized-sub');
+    if (el) el.textContent = s.wins + '승 ' + s.losses + '패';
+
+    el = document.getElementById('btc-krw');
+    if (el) el.textContent = fmt(Math.round(s.krw_balance || 0)) + '원';
+
+    el = document.getElementById('btc-invested');
+    if (el) el.textContent = fmt(s.total_invested) + '원';
+
+    el = document.getElementById('btc-cur-price');
+    if (el) el.textContent = fmt(s.btc_price_krw) + '원';
+
+    el = document.getElementById('btc-winrate');
+    if (el) el.textContent = (s.winrate || 0).toFixed(1) + '%';
+    el = document.getElementById('btc-winrate-sub');
+    if (el) el.textContent = (s.closed_count || 0) + '건 완료';
+
+    el = document.getElementById('btc-port-update');
+    if (el) el.textContent = new Date().toLocaleTimeString('ko-KR');
+
+    // OPEN 포지션 렌더링
+    var posBody = document.getElementById('position-body');
+    var posStatus = document.getElementById('pos-status');
+    if (posBody && openPos.length > 0) {
+      var totalInvested = openPos.reduce(function(a,p){ return a + (p.entry_krw||0); }, 0);
+      var totalEval = openPos.reduce(function(a,p){ return a + (p.eval_krw||0); }, 0);
+      var totalPnl = totalEval - totalInvested;
+      var totalPct = totalInvested > 0 ? (totalPnl / totalInvested * 100) : 0;
+      var isTotalPos = totalPnl >= 0;
+
+      var posHtml = '<div style="background:rgba(255,255,255,0.03);border-radius:8px;padding:12px 16px;margin-bottom:12px">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">' +
+          '<span style="font-size:13px;color:var(--muted)">' + openPos.length + '개 포지션 합계</span>' +
+          '<span style="font-family:var(--mono);font-size:20px;font-weight:700" class="' + (isTotalPos?'positive':'negative') + '">' + (isTotalPos?'+':'') + totalPct.toFixed(2) + '%</span>' +
+        '</div>' +
+        '<div style="display:flex;justify-content:space-between;font-family:var(--mono);font-size:13px">' +
+          '<span style="color:var(--muted)">투입 ' + fmt(Math.round(totalInvested)) + '원</span>' +
+          '<span style="color:var(--muted)">평가 ' + fmt(Math.round(totalEval)) + '원</span>' +
+          '<span class="' + (isTotalPos?'positive':'negative') + '">' + (isTotalPos?'+':'') + fmt(Math.round(totalPnl)) + '원</span>' +
+        '</div>' +
+      '</div>';
+
+      openPos.forEach(function(pos, idx) {
+        var change = pos.pnl_pct || 0;
+        var isPos = change >= 0;
+        var entryTime = (pos.entry_time||'').replace('T',' ');
+        var held = '';
+        if (entryTime) {
+          try {
+            var diff = Date.now() - new Date(pos.entry_time).getTime();
+            var hrs = Math.floor(diff / 3600000);
+            var mins = Math.floor((diff % 3600000) / 60000);
+            held = hrs > 0 ? hrs + '시간 ' + mins + '분' : mins + '분';
+          } catch(e){}
+        }
+
+        posHtml += '<div style="background:linear-gradient(135deg, rgba(255,255,255,0.02), rgba(255,255,255,0.05));border:1px solid ' + (isPos ? 'rgba(0,255,136,0.15)' : 'rgba(255,68,68,0.15)') + ';border-radius:10px;padding:14px 16px;margin-bottom:8px">' +
+          '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">' +
+            '<span style="font-size:12px;color:var(--muted);background:rgba(255,255,255,0.06);padding:2px 8px;border-radius:4px">#' + (idx+1) + ' / ' + (held || entryTime) + ' 보유</span>' +
+            '<span style="font-family:var(--mono);font-size:22px;font-weight:700" class="' + (isPos?'positive':'negative') + '">' + (isPos?'+':'') + change.toFixed(2) + '%</span>' +
+          '</div>' +
+          '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">' +
+            '<div><div style="font-size:11px;color:var(--muted);margin-bottom:2px">진입가</div><div style="font-family:var(--mono);font-size:14px">' + fmt(Math.round(pos.entry_price)) + '</div></div>' +
+            '<div><div style="font-size:11px;color:var(--muted);margin-bottom:2px">현재가</div><div style="font-family:var(--mono);font-size:14px;color:var(--accent)">' + fmt(pos.current_price_krw) + '</div></div>' +
+            '<div><div style="font-size:11px;color:var(--muted);margin-bottom:2px">손익</div><div style="font-family:var(--mono);font-size:14px" class="' + (isPos?'positive':'negative') + '">' + (isPos?'+':'') + fmt(pos.pnl_krw) + '원</div></div>' +
+          '</div>' +
+          '<div style="display:flex;justify-content:space-between;margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.05);font-size:12px">' +
+            '<span style="color:var(--muted)">투입 ' + fmt(Math.round(pos.entry_krw)) + '원 → 평가 ' + fmt(pos.eval_krw) + '원</span>' +
+            '<span><span style="color:var(--red)">SL -3%</span> <span style="color:var(--muted)">/</span> <span style="color:var(--green)">TP +15%</span></span>' +
+          '</div>' +
+        '</div>';
+      });
+
+      posBody.innerHTML = posHtml;
+      if (posStatus) posStatus.innerHTML = '<span class="action-pill buy">' + openPos.length + ' OPEN</span>';
+    } else if (posBody && openPos.length === 0) {
+      posBody.innerHTML = '<div class="position-empty">포지션 없음<br><span style="font-size:11px">다음 BUY 신호 대기 중</span></div>';
+      if (posStatus) posStatus.innerHTML = '<span class="action-pill hold">대기</span>';
+    }
+
+    // CLOSED 히스토리 테이블
+    var closedTbody = document.getElementById('closed-tbody');
+    var closedCountEl = document.getElementById('closed-count');
+    if (closedCountEl) closedCountEl.textContent = closedPos.length + '건';
+    if (closedTbody) {
+      if (closedPos.length === 0) {
+        var emptyMsg = openPos.length > 0
+          ? '현재 ' + openPos.length + '개 포지션 보유중 — 매도(청산) 완료 시 이력에 표시됩니다'
+          : '아직 매매 이력이 없습니다';
+        closedTbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--muted);padding:30px 20px;font-size:13px;line-height:1.6;">' + emptyMsg + '</td></tr>';
+      } else {
+        closedTbody.innerHTML = closedPos.map(function(p) {
+          var isPos = (p.pnl || 0) >= 0;
+          var cls = isPos ? 'positive' : 'negative';
+          var sign = isPos ? '+' : '';
+          var reason = p.exit_reason || '-';
+          if (reason === 'stop_loss') reason = '🔴 손절';
+          else if (reason === 'take_profit') reason = '🟢 익절';
+          else if (reason === 'signal') reason = '📊 시그널';
+          return '<tr>' +
+            '<td>' + (p.entry_time || '-').replace('T', ' ').substring(0,16) + '</td>' +
+            '<td>' + (p.exit_time || '-').replace('T', ' ').substring(0,16) + '</td>' +
+            '<td style="font-family:var(--mono)">' + fmt(Math.round(p.entry_price)) + '</td>' +
+            '<td style="font-family:var(--mono)">' + fmt(Math.round(p.exit_price)) + '</td>' +
+            '<td style="font-family:var(--mono)">' + fmt(Math.round(p.entry_krw)) + '원</td>' +
+            '<td style="font-family:var(--mono)" class="' + cls + '">' + sign + fmt(Math.round(p.pnl)) + '원</td>' +
+            '<td style="font-family:var(--mono)" class="' + cls + '">' + sign + (p.pnl_pct || 0).toFixed(2) + '%</td>' +
+            '<td>' + reason + '</td></tr>';
+        }).join('');
+      }
+    }
+  } catch(e) {
+    console.error('btc portfolio error', e);
+  }
 }
 
 async function loadComposite() {
@@ -1194,25 +1426,7 @@ async function loadStats() {
     macdEl.className = 'indicator-value ' + (macd > 0 ? 'positive' : 'negative');
     document.getElementById('ind-macd-label').textContent = macd > 0 ? '상승 전환 ↑' : '하락 중 ↓';
 
-    // 포지션
-    if (d.position) {
-      const pos = d.position;
-      const change = ((d.last_price - pos.entry_price) / pos.entry_price * 100).toFixed(2);
-      const isPos = change >= 0;
-      const posHtml = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">' +
-        '<div><div class="stat-label">진입가</div><div style="font-family:var(--mono);font-size:18px;margin-top:4px">' + fmt(pos.entry_price) + '원</div></div>' +
-        '<div><div class="stat-label">현재가</div><div style="font-family:var(--mono);font-size:18px;margin-top:4px;color:var(--accent)">' + fmt(d.last_price) + '원</div></div>' +
-        '<div><div class="stat-label">수익률</div><div style="font-family:var(--mono);font-size:24px;margin-top:4px" class="' + (isPos ? 'positive' : 'negative') + '">' + (isPos ? '+' : '') + change + '%</div></div>' +
-        '<div><div class="stat-label">투입금액</div><div style="font-family:var(--mono);font-size:18px;margin-top:4px">' + fmt(pos.entry_krw) + '원</div></div>' +
-        '<div><div class="stat-label">손절가 (-3%)</div><div style="font-family:var(--mono);font-size:14px;margin-top:4px;color:var(--red)">' + fmt(Math.round(pos.entry_price*0.97)) + '원</div></div>' +
-        '<div><div class="stat-label">익절가 (+15%)</div><div style="font-family:var(--mono);font-size:14px;margin-top:4px;color:var(--green)">' + fmt(Math.round(pos.entry_price*1.15)) + '원</div></div>' +
-        '</div>';
-      document.getElementById('position-body').innerHTML = posHtml;
-      document.getElementById('pos-status').innerHTML = '<span class="action-pill buy">OPEN</span>';
-    } else {
-      document.getElementById('position-body').innerHTML = '<div class="position-empty">포지션 없음<br><span style="font-size:11px">다음 BUY 신호 대기 중</span></div>';
-      document.getElementById('pos-status').innerHTML = '<span class="action-pill hold">대기</span>';
-    }
+    // 포지션은 loadBtcPortfolio()에서 전체 렌더링 (충돌 방지)
 
   } catch(e) {
     console.error('stats error', e);

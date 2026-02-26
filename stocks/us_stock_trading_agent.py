@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-미국 주식 모멘텀 자동매매 에이전트 v1.0
+미국 주식 자동매매 에이전트 v2.0 (Top-tier Quant)
 
-국내 stock_trading_agent.py 구조를 그대로 가져와서 미주용으로 확장.
-- 모멘텀 스코어 상위 종목 자동 매수
-- 손절/익절/트레일링 스탑 자동 청산
-- Supabase DB 기록 (us_trade_executions)
-- 텔레그램 알림
-- yfinance 데이터 기반 (RSI/BB/거래량)
+v2 변경사항:
+- [NEW] 멀티팩터 스코어 (모멘텀+밸류+퀄리티) — 기존 순수 모멘텀에서 확장
+- [NEW] 어닝 캘린더 필터 — 발표 5일 전 매수 차단
+- [NEW] 변동성 조절 포지션 사이징
+- [NEW] 섹터 분산 (동일 섹터 max 2종목)
+- [IMPROVE] 복합 스코어에 밸류/퀄리티 반영
 
 실행:
     .venv/bin/python stocks/us_stock_trading_agent.py          # 매매 사이클
@@ -44,28 +44,38 @@ supabase = get_supabase()
 # 리스크 설정 (미주용)
 # ─────────────────────────────────────────────
 RISK = {
-    "stop_loss": -0.035,         # 손절 -3.5% (비용 포함 실질 -3%)
-    "take_profit": 0.10,         # 익절 +10%
-    "trailing_stop": 0.02,       # 트레일링 2%
-    "trailing_activate": 0.025,  # 수익 2.5% 이상에서 트레일링 활성화
+    "stop_loss": -0.035,
+    "take_profit": 0.10,
+    "partial_tp_pct": 0.06,
+    "partial_tp_ratio": 0.50,
+    "trailing_stop": 0.02,
+    "trailing_activate": 0.025,
+    "trailing_adaptive": True,
     "max_positions": 5,
     "max_trades_per_day": 3,
-    "min_score": 50,             # 55 -> 50 완화
+    "min_score": 50,
     "min_order_usd": 50,
     "fee_rate": 0.001,
-    "timecut_days": 12,          # 10 -> 12일로 확대
+    "timecut_days": 12,
     "virtual_capital": 10000,
-    # 모멘텀 등급별 차등 포지션 사이징
-    "invest_ratio_A": 0.30,      # A등급: 자본의 30%
-    "invest_ratio_B": 0.20,      # B등급: 자본의 20%
-    "invest_ratio_C": 0.15,      # C등급: 자본의 15%
+    "invest_ratio_A": 0.30,
+    "invest_ratio_B": 0.20,
+    "invest_ratio_C": 0.15,
+    "market_regime_filter": True,
+    "vix_max": 35,
+    "relative_strength": True,
+    "multifactor": True,          # 밸류+퀄리티 팩터 반영
+    "earnings_filter": True,      # 어닝 5일 전 매수 차단
+    "max_sector_positions": 2,    # 동일 섹터 최대 2종목
+    "volatility_sizing": True,    # ATR 기반 포지션 사이징
 }
 
 RULES = {
-    "buy_composite_min": 50,     # 55 -> 50 하향
+    "buy_composite_min": 50,
     "buy_rsi_hard_max": 80,
     "buy_vol_hard_min": 0.3,
     "sell_rsi_min": 78,
+    "momentum_accel_bonus": True,
 }
 
 US_TRADE_TABLE = "us_trade_executions"
@@ -89,6 +99,80 @@ def is_us_market_open() -> bool:
     now = datetime.now()
     h = now.hour
     return h >= 23 or h < 6
+
+
+# ─────────────────────────────────────────────
+# 시장 레짐 필터 (SPY 200MA + VIX)
+# ─────────────────────────────────────────────
+_regime_cache: Dict[str, any] = {}
+
+
+def get_market_regime() -> dict:
+    """SPY 200일 이동평균 기반 시장 레짐 판단 + VIX."""
+    if "regime" in _regime_cache:
+        return _regime_cache["regime"]
+    try:
+        spy = yf.Ticker("SPY")
+        spy_hist = spy.history(period="1y")
+        if spy_hist is None or len(spy_hist) < 200:
+            return {"regime": "UNKNOWN", "spy_above_200ma": True, "vix": 20}
+
+        close = spy_hist["Close"]
+        ma200 = float(close.rolling(200).mean().iloc[-1])
+        ma50 = float(close.rolling(50).mean().iloc[-1])
+        current = float(close.iloc[-1])
+        above_200 = current > ma200
+        above_50 = current > ma50
+
+        vix_val = 20.0
+        try:
+            vix = yf.Ticker("^VIX")
+            vix_hist = vix.history(period="5d")
+            if vix_hist is not None and not vix_hist.empty:
+                vix_val = float(vix_hist["Close"].iloc[-1])
+        except Exception:
+            pass
+
+        if above_200 and above_50:
+            regime = "BULL"
+        elif above_200 and not above_50:
+            regime = "CORRECTION"
+        elif not above_200 and above_50:
+            regime = "RECOVERY"
+        else:
+            regime = "BEAR"
+
+        result = {
+            "regime": regime,
+            "spy_price": current,
+            "spy_ma200": round(ma200, 2),
+            "spy_ma50": round(ma50, 2),
+            "spy_above_200ma": above_200,
+            "vix": round(vix_val, 1),
+        }
+        _regime_cache["regime"] = result
+        return result
+    except Exception as e:
+        log(f"시장 레짐 조회 실패: {e}", "WARN")
+        return {"regime": "UNKNOWN", "spy_above_200ma": True, "vix": 20}
+
+
+def calc_relative_strength(symbol: str, days: int = 20) -> float:
+    """종목의 SPY 대비 상대강도. 1.0 이상이면 아웃퍼폼."""
+    try:
+        data = yf.download([symbol, "SPY"], period=f"{days + 5}d", progress=False)
+        if data.empty:
+            return 1.0
+        close = data["Close"]
+        if symbol not in close.columns or "SPY" not in close.columns:
+            return 1.0
+        sym_ret = float(close[symbol].iloc[-1] / close[symbol].iloc[-days] - 1)
+        spy_ret = float(close["SPY"].iloc[-1] / close["SPY"].iloc[-days] - 1)
+        if spy_ret == 0:
+            return 1.0
+        return round(sym_ret / spy_ret if spy_ret > 0 else sym_ret - spy_ret + 1, 2)
+    except Exception:
+        return 1.0
 
 
 # ─────────────────────────────────────────────
@@ -240,7 +324,7 @@ def update_highest_price(symbol: str, new_high: float) -> None:
 # 매매 로직
 # ─────────────────────────────────────────────
 def should_buy(symbol: str, score: float, indicators: dict) -> dict:
-    """매수 판단: 복합 스코어 시스템 (모멘텀 강도 + 기술적 분석 가중합)."""
+    """매수 판단: 복합 스코어 + 마켓 레짐 + 상대강도 + 멀티팩터 + 어닝."""
     rsi = indicators.get("rsi", 50)
     bb_pos = indicators.get("bb_pos", 50)
     vol_ratio = indicators.get("vol_ratio", 1.0)
@@ -253,56 +337,111 @@ def should_buy(symbol: str, score: float, indicators: dict) -> dict:
     if vol_ratio < RULES["buy_vol_hard_min"]:
         return {"action": "HOLD", "reason": f"거래량 급감 ({vol_ratio:.2f}x)"}
 
+    # 마켓 레짐 필터
+    if RISK.get("market_regime_filter"):
+        regime = get_market_regime()
+        if regime["regime"] == "BEAR":
+            return {"action": "HOLD", "reason": f"BEAR 마켓 (SPY < 200MA, VIX: {regime['vix']})"}
+        if regime.get("vix", 20) > RISK.get("vix_max", 35):
+            return {"action": "HOLD", "reason": f"VIX 과열 ({regime['vix']:.0f} > {RISK['vix_max']})"}
+
+    # v2: 어닝 캘린더 필터
+    if RISK.get("earnings_filter"):
+        try:
+            from common.market_data import check_earnings_proximity
+            earnings = check_earnings_proximity(symbol, days=5)
+            if earnings.get("near_earnings"):
+                days_to = earnings.get("days_to_earnings", "?")
+                return {"action": "HOLD", "reason": f"어닝 {days_to}일 전 — 매수 차단"}
+        except Exception:
+            pass
+
     cs = 0
     reasons = []
 
-    # 1) 모멘텀 등급 (45점 만점)
+    # 1) 모멘텀 등급 (35점) — 비중 줄임 (팩터 추가)
     if score >= 75:
-        cs += 45; reasons.append(f"모멘텀A({score:.0f})")
+        cs += 35; reasons.append(f"모멘텀A({score:.0f})")
     elif score >= 65:
-        cs += 32; reasons.append(f"모멘텀B({score:.0f})")
+        cs += 25; reasons.append(f"모멘텀B({score:.0f})")
     elif score >= 55:
-        cs += 22; reasons.append(f"모멘텀C({score:.0f})")
+        cs += 18; reasons.append(f"모멘텀C({score:.0f})")
     elif score >= 50:
-        cs += 15; reasons.append(f"모멘텀D({score:.0f})")
+        cs += 12; reasons.append(f"모멘텀D({score:.0f})")
 
-    # 2) RSI 구간 (20점 만점) — 모멘텀 전략이므로 50~65도 허용
+    # 2) RSI 구간 (15점)
     if rsi <= 35:
-        cs += 20; reasons.append(f"RSI과매도({rsi:.0f})")
+        cs += 15; reasons.append(f"RSI과매도({rsi:.0f})")
     elif rsi <= 45:
-        cs += 16; reasons.append(f"RSI저점({rsi:.0f})")
+        cs += 12; reasons.append(f"RSI저점({rsi:.0f})")
     elif rsi <= 55:
-        cs += 12; reasons.append(f"RSI중립({rsi:.0f})")
+        cs += 8; reasons.append(f"RSI중립({rsi:.0f})")
     elif rsi <= 65:
-        cs += 8; reasons.append(f"RSI적정({rsi:.0f})")
+        cs += 5; reasons.append(f"RSI적정({rsi:.0f})")
     elif rsi <= 75:
-        cs += 4; reasons.append(f"RSI고점({rsi:.0f})")
+        cs += 2
 
-    # 3) 볼린저밴드 위치 (15점 만점)
+    # 3) 볼린저밴드 (10점)
     if bb_pos <= 30:
-        cs += 15; reasons.append(f"BB하단({bb_pos:.0f}%)")
+        cs += 10; reasons.append(f"BB하단({bb_pos:.0f}%)")
     elif bb_pos <= 50:
-        cs += 10; reasons.append(f"BB중간({bb_pos:.0f}%)")
+        cs += 7; reasons.append(f"BB중간({bb_pos:.0f}%)")
     elif bb_pos <= 70:
-        cs += 5
-
-    # 4) 거래량 (15점 만점)
-    if vol_ratio >= 2.0:
-        cs += 15; reasons.append(f"거래량폭증({vol_ratio:.1f}x)")
-    elif vol_ratio >= 1.2:
-        cs += 10; reasons.append(f"거래량증가({vol_ratio:.1f}x)")
-    elif vol_ratio >= 0.8:
-        cs += 6
-    elif vol_ratio >= 0.5:
         cs += 3
 
-    # 5) 신고가 근접도 (10점 만점)
-    if near_high >= 95:
-        cs += 10; reasons.append("신고가근접")
-    elif near_high >= 90:
-        cs += 7
-    elif near_high >= 80:
+    # 4) 거래량 (10점)
+    if vol_ratio >= 2.0:
+        cs += 10; reasons.append(f"거래량폭증({vol_ratio:.1f}x)")
+    elif vol_ratio >= 1.2:
+        cs += 7; reasons.append(f"거래량증가({vol_ratio:.1f}x)")
+    elif vol_ratio >= 0.8:
         cs += 4
+    elif vol_ratio >= 0.5:
+        cs += 2
+
+    # 5) 신고가 근접도 (8점)
+    if near_high >= 95:
+        cs += 8; reasons.append("신고가근접")
+    elif near_high >= 90:
+        cs += 5
+    elif near_high >= 80:
+        cs += 3
+
+    # 6) 상대강도 (5점)
+    if RISK.get("relative_strength"):
+        rs = calc_relative_strength(symbol)
+        if rs >= 1.5:
+            cs += 5; reasons.append(f"RS강({rs:.1f}x)")
+        elif rs >= 1.2:
+            cs += 3; reasons.append(f"RS양호({rs:.1f}x)")
+        elif rs < 0.8:
+            cs -= 3
+
+    # 7) 마켓 레짐 (3점)
+    if RISK.get("market_regime_filter"):
+        regime = get_market_regime()
+        if regime["regime"] == "BULL":
+            cs += 3
+        elif regime["regime"] == "CORRECTION":
+            cs -= 2
+
+    # 8) v2: 멀티팩터 보너스 (밸류+퀄리티 — 15점)
+    if RISK.get("multifactor"):
+        try:
+            from common.market_data import calc_us_multifactor
+            mf = calc_us_multifactor(symbol)
+            mf_grade = mf.get("grade", "N/A")
+            mf_score = mf.get("score", 0)
+            if mf_grade == "A":
+                cs += 15; reasons.append(f"팩터A({mf_score})")
+            elif mf_grade == "B":
+                cs += 10; reasons.append(f"팩터B({mf_score})")
+            elif mf_grade == "C":
+                cs += 4
+            elif mf_grade == "D":
+                cs -= 5; reasons.append(f"팩터D({mf_score})")
+        except Exception:
+            pass
 
     if cs >= RULES["buy_composite_min"]:
         return {
@@ -385,6 +524,25 @@ def execute_buy(symbol: str, score: float, indicators: dict) -> dict:
     if len(open_symbols) >= RISK["max_positions"]:
         return {"result": "MAX_POSITIONS"}
 
+    # v2: 섹터 분산 체크
+    max_sector = RISK.get("max_sector_positions", 2)
+    try:
+        ticker_info = yf.Ticker(symbol).info or {}
+        sym_sector = ticker_info.get("sector", "")
+        if sym_sector:
+            sector_count = 0
+            for os_sym in open_symbols:
+                try:
+                    os_info = yf.Ticker(os_sym).info or {}
+                    if os_info.get("sector") == sym_sector:
+                        sector_count += 1
+                except Exception:
+                    pass
+            if sector_count >= max_sector:
+                return {"result": "MAX_SECTOR", "sector": sym_sector}
+    except Exception:
+        pass
+
     if count_today_buys() >= RISK["max_trades_per_day"]:
         return {"result": "MAX_DAILY_TRADES"}
 
@@ -396,6 +554,26 @@ def execute_buy(symbol: str, score: float, indicators: dict) -> dict:
     else:
         ratio = RISK["invest_ratio_C"]
     invest_usd = RISK["virtual_capital"] * ratio
+
+    # v2: ATR 기반 변동성 사이징
+    if RISK.get("volatility_sizing"):
+        try:
+            ticker = yf.Ticker(symbol)
+            hist = ticker.history(period="30d")
+            if hist is not None and len(hist) >= 14:
+                close = hist["Close"]
+                diffs = [abs(float(close.iloc[i] - close.iloc[i - 1])) for i in range(1, len(close))]
+                atr = sum(diffs[-14:]) / min(len(diffs), 14)
+                atr_pct = atr / price if price > 0 else 0.02
+                if atr_pct > 0.04:
+                    invest_usd *= 0.6
+                    log(f"  {symbol}: 고변동성({atr_pct*100:.1f}%) — 40% 축소")
+                elif atr_pct > 0.03:
+                    invest_usd *= 0.8
+                    log(f"  {symbol}: 중변동성({atr_pct*100:.1f}%) — 20% 축소")
+        except Exception:
+            pass
+
     qty = invest_usd / price
     if qty < 0.01:
         return {"result": "INSUFFICIENT"}
@@ -494,6 +672,14 @@ def run_trading_cycle():
         log("US 매매 사이클 완료")
         return
 
+    # 시장 레짐 확인
+    regime = get_market_regime()
+    log(f"시장 레짐: {regime['regime']} | SPY: {regime.get('spy_price',0):.0f} (200MA: {regime.get('spy_ma200',0):.0f}) | VIX: {regime.get('vix',0):.1f}")
+
+    if regime["regime"] == "BEAR" and RISK.get("market_regime_filter"):
+        log("🐻 BEAR 마켓 — 신규 매수 전면 차단")
+        return
+
     # 모멘텀 스캔 (상위 10% 대상으로 분석)
     log("모멘텀 스캔 중...")
     top_list = scan_today_top_us(universe=US_UNIVERSE, lookback_days=90, top_percent=10.0)
@@ -522,6 +708,16 @@ def run_trading_cycle():
 
         log(f"  RSI: {indicators['rsi']} / BB: {indicators['bb_pos']:.0f}% / "
             f"Vol: {indicators['vol_ratio']:.2f}x / 60dHigh: {indicators['near_high']:.0f}%")
+
+        # v2: 멀티팩터 로깅
+        if RISK.get("multifactor"):
+            try:
+                from common.market_data import calc_us_multifactor
+                mf = calc_us_multifactor(symbol)
+                if mf.get("grade") != "N/A":
+                    log(f"  팩터: {mf['grade']}({mf['score']}) | {mf.get('detail', '')}")
+            except Exception:
+                pass
 
         signal = should_buy(symbol, score, indicators)
         log(f"  신호: {signal['action']} — {signal.get('reason', '')}")

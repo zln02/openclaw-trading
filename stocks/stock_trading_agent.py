@@ -1,19 +1,13 @@
 #!/usr/bin/env python3
 """
-주식 자동매매 에이전트 v2.0 (리팩토링)
+주식 자동매매 에이전트 v3.0 (Top-tier Quant)
 
-변경사항 (v1 → v2):
-- [FIX] 주문 실패 시 DB 저장 방지 (유령 포지션 제거)
-- [FIX] 동일 종목 중복 매수 차단
-- [FIX] 분할매수 평균 진입가 계산
-- [FIX] 손절/익절 텔레그램에 종목명 표시
-- [NEW] AI 실패 시 룰 기반 fallback 매매 판단
-- [NEW] invest_per_stock 제대로 적용
-- [NEW] 체결 확인 로직 추가
-- [NEW] yfinance 캐싱 (종목당 1회만 호출)
-- [NEW] 장 전 전략 없어도 룰 기반 매매 가능
-- [NEW] 에러 핸들링 강화 + 상세 로깅
-- [REFACTOR] 함수 분리 / 설정 중앙화 / 코드 정리
+v3 변경사항:
+- [NEW] DART 재무 스코어를 매매 판단에 반영 (ROE/영업이익률/부채/성장률)
+- [NEW] 동적 유니버스: TOP50 + DART 퀄리티 필터
+- [NEW] ATR 기반 변동성 포지션 사이징
+- [NEW] 섹터 분산 강제 (max_sector_positions)
+- [IMPROVE] 복합 스코어에 재무 품질 15점 추가
 """
 
 import os
@@ -45,36 +39,42 @@ kiwoom = KiwoomClient()
 
 RISK = {
     "invest_ratio": 0.25,
-    "stop_loss": -0.025,         # 비용 반영: -2% 실질 -> -2.5% 기준
-    "take_profit": 0.08,         # 10% -> 8% (빠른 수익 확정)
+    "stop_loss": -0.025,
+    "take_profit": 0.08,
+    "partial_tp_pct": 0.05,              # 5% 부분 익절 진입
+    "partial_tp_ratio": 0.50,            # 50% 수량 매도
     "trailing_stop": 0.015,
-    "trailing_activate": 0.015,  # 1.5% 이상일 때 트레일링 활성화
-    "min_confidence": 65,        # 70 -> 65 완화
+    "trailing_activate": 0.015,
+    "trailing_adaptive": True,           # 수익구간별 트레일링 조절
+    "min_confidence": 65,
     "max_positions": 5,
     "max_daily_loss": -0.08,
-    "max_trades_per_day": 3,     # 2 -> 3 확대
+    "max_drawdown": -0.12,               # 포트폴리오 최대 낙폭 제한
+    "max_trades_per_day": 3,
     "split_ratios": [0.50, 0.30, 0.20],
-    "split_rsi_thresholds": [50, 42, 35],  # 45/38/30 -> 50/42/35 완화
+    "split_rsi_thresholds": [50, 42, 35],
     "min_order_krw": 30000,
-    "cooldown_minutes": 10,      # 15 -> 10분 단축
+    "cooldown_minutes": 10,
     "min_hours_between_splits": 3,
-    # round-trip 비용: 매수 0.015% + 매도 0.015% + 세금 0.18% = ~0.21%
+    "max_sector_positions": 2,           # 동일 섹터 최대 2종목
     "fee_buy": 0.00015,
     "fee_sell": 0.00015,
     "tax_sell": 0.0018,
     "round_trip_cost": 0.0021,
+    "volatility_sizing": True,           # ATR 기반 포지션 사이징
 }
 
 RULES = {
-    "buy_rsi_max": 45,           # 35 -> 45 완화 (모멘텀+RSI 복합 스코어로 전환)
-    "buy_bb_max": 50,            # 40 -> 50 완화
+    "buy_rsi_max": 45,
+    "buy_bb_max": 50,
     "buy_vol_min": 0.7,
-    "buy_momentum_min": 50,      # 모멘텀 스코어 최소 기준 추가
-    "sell_rsi_min": 70,          # 65 -> 70 (수익 더 먹게)
-    "sell_bb_min": 80,           # 75 -> 80
+    "buy_momentum_min": 50,
+    "sell_rsi_min": 70,
+    "sell_bb_min": 80,
     "block_vol_below": 0.3,
-    "block_bb_above": 90,        # 85 -> 90 완화
+    "block_bb_above": 90,
     "block_kospi_above": 80,
+    "trend_confirmation": True,          # KOSPI + 종목 추세 동시 확인
 }
 
 # ─────────────────────────────────────────────
@@ -597,8 +597,9 @@ def rule_based_signal(
     has_position: bool = False,
     supply: dict = None,
     momentum: dict = None,
+    dart_score: dict = None,
 ) -> dict:
-    """복합 스코어 룰 기반 매매 판단 (모멘텀+기술+수급)."""
+    """복합 스코어 룰 기반 매매 판단 (모멘텀+기술+수급+재무)."""
     rsi = indicators.get('rsi', 50)
     macd = indicators.get('macd', 0)
     macd_hist = indicators.get('macd_histogram', 0)
@@ -608,6 +609,9 @@ def rule_based_signal(
     trend = (weekly or {}).get('trend', 'UNKNOWN')
     m_score = (momentum or {}).get('score', 0)
     m_grade = (momentum or {}).get('grade', 'F')
+    dart = dart_score or {}
+    dart_grade = dart.get('grade', 'N/A')
+    dart_val = dart.get('score', 0)
 
     foreign_net = (supply or {}).get('foreign_net', 0)
     inst_net = (supply or {}).get('inst_net', 0)
@@ -650,6 +654,8 @@ def rule_based_signal(
         blocks.append('주봉 하락추세')
     if not has_position and supply_signal == 'SELL':
         blocks.append('수급 동시 순매도')
+    if dart_grade == 'D' and dart_val < 20:
+        blocks.append(f'재무부실({dart_grade}:{dart_val})')
 
     if blocks:
         return {
@@ -658,31 +664,31 @@ def rule_based_signal(
             'reason': f'[룰] 매수 차단: {", ".join(blocks)}',
         }
 
-    # ── 복합 BUY 스코어 (100점 만점) ──
+    # ── 복합 BUY 스코어 (115점 → 정규화 100점) ──
     cs = 0
     buy_reasons = []
 
-    # 1) 모멘텀 (35점)
+    # 1) 모멘텀 (30점)
     if m_grade == 'A':
-        cs += 35; buy_reasons.append(f'모멘텀A({m_score:.0f})')
+        cs += 30; buy_reasons.append(f'모멘텀A({m_score:.0f})')
     elif m_grade == 'B':
-        cs += 25; buy_reasons.append(f'모멘텀B({m_score:.0f})')
+        cs += 22; buy_reasons.append(f'모멘텀B({m_score:.0f})')
     elif m_grade == 'C':
-        cs += 15; buy_reasons.append(f'모멘텀C({m_score:.0f})')
+        cs += 12; buy_reasons.append(f'모멘텀C({m_score:.0f})')
 
-    # 2) RSI (20점)
+    # 2) RSI (18점)
     if rsi <= 30:
-        cs += 20; buy_reasons.append(f'RSI과매도({rsi:.0f})')
+        cs += 18; buy_reasons.append(f'RSI과매도({rsi:.0f})')
     elif rsi <= 40:
-        cs += 15; buy_reasons.append(f'RSI저점({rsi:.0f})')
+        cs += 13; buy_reasons.append(f'RSI저점({rsi:.0f})')
     elif rsi <= 50:
-        cs += 10; buy_reasons.append(f'RSI중립({rsi:.0f})')
+        cs += 8; buy_reasons.append(f'RSI중립({rsi:.0f})')
 
-    # 3) BB (15점)
+    # 3) BB (12점)
     if bb_pos <= 25:
-        cs += 15; buy_reasons.append(f'BB하단({bb_pos:.0f}%)')
+        cs += 12; buy_reasons.append(f'BB하단({bb_pos:.0f}%)')
     elif bb_pos <= 45:
-        cs += 10; buy_reasons.append(f'BB중간({bb_pos:.0f}%)')
+        cs += 8; buy_reasons.append(f'BB중간({bb_pos:.0f}%)')
 
     # 4) 거래량 (10점)
     if vol_ratio >= 2.0:
@@ -690,23 +696,33 @@ def rule_based_signal(
     elif vol_ratio >= 1.2:
         cs += 7; buy_reasons.append(f'거래량증가({vol_ratio:.1f}x)')
 
-    # 5) 추세 (10점)
+    # 5) 추세 (8점)
     if trend == 'UPTREND':
-        cs += 10; buy_reasons.append('상승추세')
+        cs += 8; buy_reasons.append('상승추세')
     elif trend == 'SIDEWAYS':
-        cs += 5
+        cs += 4
 
-    # 6) 수급 (10점)
+    # 6) 수급 (8점)
     if supply_signal == 'STRONG_BUY':
-        cs += 10; buy_reasons.append('수급 동시매수')
+        cs += 8; buy_reasons.append('수급 동시매수')
     elif supply_signal == 'BUY':
-        cs += 5; buy_reasons.append('수급 우호')
+        cs += 4; buy_reasons.append('수급 우호')
+
+    # 7) DART 재무 품질 (15점 — 신규 v3)
+    if dart_grade == 'A':
+        cs += 15; buy_reasons.append(f'재무A({dart_val})')
+    elif dart_grade == 'B':
+        cs += 10; buy_reasons.append(f'재무B({dart_val})')
+    elif dart_grade == 'C':
+        cs += 5; buy_reasons.append(f'재무C({dart_val})')
+    elif dart_grade == 'D':
+        cs -= 3
 
     if cs >= 50:
         return {
             'action': 'BUY',
             'confidence': min(cs + 15, 95),
-            'reason': f'[룰] 복합{cs}점: {" + ".join(buy_reasons[:4])}',
+            'reason': f'[룰] 복합{cs}점: {" + ".join(buy_reasons[:5])}',
         }
 
     return {'action': 'HOLD', 'confidence': 0, 'reason': f'[룰] 복합{cs}점 미달'}
@@ -726,7 +742,8 @@ def analyze_with_ai(
     if not OPENAI_KEY:
         log('OpenAI 키 없음 → 룰 기반 판단', 'WARN')
         momentum = calc_momentum_score(stock['code'])
-        return rule_based_signal(indicators, kospi, weekly, has_position, supply, momentum)
+        dart = _get_dart_score(stock['code'])
+        return rule_based_signal(indicators, kospi, weekly, has_position, supply, momentum, dart)
 
     try:
         from openai import OpenAI
@@ -821,7 +838,8 @@ def analyze_with_ai(
 
     except Exception as e:
         log(f'AI 분석 실패 → 룰 기반 fallback: {e}', 'WARN')
-        result = rule_based_signal(indicators, kospi, weekly, has_position, supply, momentum)
+        dart = _get_dart_score(stock['code'])
+        result = rule_based_signal(indicators, kospi, weekly, has_position, supply, momentum, dart)
         result['source'] = 'RULE_FALLBACK'
         return result
 
@@ -879,7 +897,44 @@ def get_trading_signal(
 
     # 3차: 룰 기반
     momentum = calc_momentum_score(stock['code'])
-    return rule_based_signal(indicators, kospi, weekly, has_position, supply, momentum)
+    dart = _get_dart_score(stock['code'])
+    return rule_based_signal(indicators, kospi, weekly, has_position, supply, momentum, dart)
+
+
+# ─────────────────────────────────────────────
+# DART 재무 품질 스코어 (v3 신규)
+# ─────────────────────────────────────────────
+_dart_cache: dict = {}
+_sector_map: dict = {}
+
+
+def _get_stock_sector(code: str) -> str:
+    """종목 코드로 섹터 조회 (TOP50 WATCHLIST 기반 + DB fallback)."""
+    if code in _sector_map:
+        return _sector_map[code]
+    try:
+        from stock_premarket import WATCHLIST
+        for w in WATCHLIST:
+            _sector_map[w['code']] = w.get('sector', '')
+        if code in _sector_map:
+            return _sector_map[code]
+    except Exception:
+        pass
+    _sector_map[code] = ''
+    return ''
+
+
+def _get_dart_score(code: str) -> dict:
+    if code in _dart_cache:
+        return _dart_cache[code]
+    try:
+        from common.market_data import get_dart_financial_score
+        result = get_dart_financial_score(code, supabase)
+        _dart_cache[code] = result
+        return result
+    except Exception as e:
+        log(f'DART 스코어 실패 {code}: {e}', 'WARN')
+        return {'score': 0, 'grade': 'N/A'}
 
 
 # ─────────────────────────────────────────────
@@ -989,9 +1044,22 @@ def execute_buy(
     # 최대 포지션 수 체크
     all_open = get_open_positions()
     open_codes = list(set(p['stock_code'] for p in all_open))
-    # 이미 보유 중인 종목은 분할매수이므로 새 종목만 카운트
     if code not in open_codes and len(open_codes) >= RISK['max_positions']:
         return {'result': 'MAX_POSITIONS'}
+
+    # v3: 섹터 분산 체크 (동일 섹터 max_sector_positions 제한)
+    max_sector = RISK.get('max_sector_positions', 2)
+    if code not in open_codes:
+        stock_sector = stock.get('sector', '')
+        if stock_sector:
+            sector_count = 0
+            for oc in open_codes:
+                s = _get_stock_sector(oc)
+                if s == stock_sector:
+                    sector_count += 1
+            if sector_count >= max_sector:
+                log(f'{name}: 동일 섹터({stock_sector}) {sector_count}개 — 추가 매수 차단', 'WARN')
+                return {'result': 'MAX_SECTOR'}
 
     # ── 주문 수량 계산 ──
     try:
@@ -1010,6 +1078,26 @@ def execute_buy(
     total_invest = krw_balance * RISK['invest_ratio']
     stage_ratio = RISK['split_ratios'][split_stage - 1]
     invest_krw = total_invest * stage_ratio
+
+    # v3: ATR 기반 변동성 포지션 사이징
+    if RISK.get('volatility_sizing'):
+        try:
+            data = _fetch_live_candles(code, period='1mo', interval='1d') or _fetch_daily_from_db(code)
+            if data and len(data.get('closes', [])) >= 14:
+                closes = data['closes']
+                atr_vals = []
+                for i in range(1, min(len(closes), 15)):
+                    atr_vals.append(abs(closes[i] - closes[i - 1]))
+                atr = sum(atr_vals) / len(atr_vals) if atr_vals else price * 0.02
+                atr_pct = atr / price if price > 0 else 0.02
+                if atr_pct > 0.04:
+                    invest_krw *= 0.6
+                    log(f'{name}: 고변동성({atr_pct*100:.1f}%) — 포지션 40% 축소')
+                elif atr_pct > 0.03:
+                    invest_krw *= 0.8
+                    log(f'{name}: 중변동성({atr_pct*100:.1f}%) — 포지션 20% 축소')
+        except Exception:
+            pass
 
     if invest_krw < RISK['min_order_krw']:
         return {'result': 'INSUFFICIENT_KRW', 'available': invest_krw}
@@ -1222,11 +1310,20 @@ def check_stop_loss_take_profit():
                     except Exception as e:
                         log(f'highest_price 업데이트 실패({code}, trade_id={tid}): {e}', 'WARN')
 
-            # ── 트레일링 스탑 체크 ──
+            # ── 적응형 트레일링 스탑 체크 ──
             trailing_activate = RISK.get('trailing_activate', 0.01)
             if current_highest > 0 and net_pnl_pct > trailing_activate:
                 drop_from_high = (current_highest - price) / current_highest
-                if drop_from_high >= RISK.get('trailing_stop', 0.015):
+                if RISK.get('trailing_adaptive'):
+                    if net_pnl_pct >= 0.06:
+                        trail_pct = 0.01    # 6%+ 수익: 1% 트레일링
+                    elif net_pnl_pct >= 0.04:
+                        trail_pct = 0.012   # 4-6% 수익: 1.2%
+                    else:
+                        trail_pct = RISK.get('trailing_stop', 0.015)
+                else:
+                    trail_pct = RISK.get('trailing_stop', 0.015)
+                if drop_from_high >= trail_pct:
                     trail_pnl = (price - avg_entry) / avg_entry * 100
                     log(
                         f'{name} 트레일링 스탑 발동: 고점 {current_highest:,.0f} → 현재 {price:,.0f} '
@@ -1245,7 +1342,7 @@ def check_stop_loss_take_profit():
                     time.sleep(0.3)
                     continue
 
-            # ── 기존 손절 (비용 포함 기준) ──
+            # ── 손절 ──
             if net_pnl_pct <= RISK['stop_loss']:
                 log(f'{name} 손절: {net_pnl_pct*100:.2f}%', 'TRADE')
                 execute_sell(
@@ -1257,7 +1354,32 @@ def check_stop_loss_take_profit():
                 time.sleep(0.3)
                 continue
 
-            # ── 고정 익절 (트레일링 보완용, 10% 이상이면 무조건 익절) ──
+            # ── 부분 익절: 5% 이상 수익 시 50% 매도 ──
+            partial_tp = RISK.get('partial_tp_pct', 0.05)
+            if net_pnl_pct >= partial_tp:
+                already_partial = any(t.get('partial_sold') for t in trades)
+                if not already_partial and total_qty >= 2:
+                    sell_qty = max(1, int(total_qty * RISK.get('partial_tp_ratio', 0.50)))
+                    log(f'{name} 부분 익절: {net_pnl_pct*100:.2f}%, {sell_qty}주 매도', 'TRADE')
+                    try:
+                        kiwoom.sell_stock(code, sell_qty, price)
+                        for t in trades[:1]:
+                            tid = t.get('trade_id')
+                            if tid:
+                                supabase.table('trade_executions').update(
+                                    {'partial_sold': True}
+                                ).eq('trade_id', tid).execute()
+                        send_telegram(
+                            f'🟡 <b>{name} 부분 익절 ({int(RISK.get("partial_tp_ratio",0.5)*100)}%)</b>\n'
+                            f'수익: +{net_pnl_pct*100:.2f}% | {sell_qty}주 매도\n'
+                            f'잔여 {total_qty - sell_qty}주 트레일링 보호'
+                        )
+                    except Exception as e:
+                        log(f'{name} 부분 익절 매도 실패: {e}', 'ERROR')
+                    time.sleep(0.3)
+                    continue
+
+            # ── 최대 익절 ──
             if net_pnl_pct >= RISK['take_profit']:
                 log(f'{name} 최대 익절: {net_pnl_pct*100:.2f}%', 'TRADE')
                 execute_sell(
@@ -1304,8 +1426,9 @@ def check_stop_loss_take_profit():
 # 메인 사이클
 # ─────────────────────────────────────────────
 def run_trading_cycle():
-    global _cache
-    _cache = {}  # 사이클마다 캐시 리셋
+    global _cache, _dart_cache
+    _cache = {}
+    _dart_cache = {}
 
     # STOP 플래그 체크 (텔레그램 /stop 명령으로 생성)
     stop_flag = Path(__file__).parent / 'STOP_TRADING'
@@ -1418,6 +1541,14 @@ def run_trading_cycle():
 
         weekly = get_weekly_trend(code)
         log(f'  주봉 추세: {weekly.get("trend", "?")}')
+
+        # DART 재무 스코어 (v3 신규)
+        dart = _get_dart_score(code)
+        if dart.get('grade') != 'N/A':
+            log(
+                f"  재무: {dart['grade']}({dart['score']}) | {dart.get('detail', '?')}",
+                'INFO',
+            )
 
         news = get_stock_news(name)
 
