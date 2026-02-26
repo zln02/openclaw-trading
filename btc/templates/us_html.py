@@ -125,6 +125,9 @@ US_DASHBOARD_HTML = r'''<!DOCTYPE html>
       <div style="font-family:var(--mono);font-size:11px;color:var(--muted);" id="last-update"></div>
     </div>
 
+    <!-- 마켓 레짐 -->
+    <div id="regime-bar" style="display:none;margin-bottom:16px;padding:10px 16px;border-radius:10px;font-family:var(--mono);font-size:13px;display:flex;gap:20px;align-items:center;border:1px solid var(--border);background:var(--bg2);"></div>
+
     <!-- 시장 지수 -->
     <div class="idx-row" id="idx-row"><div class="idx-card"><div class="idx-name">Loading...</div></div></div>
 
@@ -232,9 +235,11 @@ async function loadFx() {
 async function loadMarket() {
   try {
     const res = await fetch('/api/us/market');
-    const data = await res.json();
+    const raw = await res.json();
+    const data = raw.indices || raw;
+    const regime = raw.regime || {};
     const el = document.getElementById('idx-row');
-    if (!data.length) { el.innerHTML = '<div style="color:var(--muted);font-size:12px;">지수 로딩 중...</div>'; return; }
+    if (!data || !data.length) { el.innerHTML = '<div style="color:var(--muted);font-size:12px;">지수 로딩 중...</div>'; return; }
     const nameKo = {'S&P 500':'S&P 500 (미국 대형주)','NASDAQ':'NASDAQ (기술주)','Dow Jones':'Dow Jones (산업주)','VIX':'VIX (공포지수)'};
     el.innerHTML = data.map(m => {
       const c = m.change_pct > 0 ? 'var(--green)' : m.change_pct < 0 ? 'var(--red)' : 'var(--text)';
@@ -243,6 +248,21 @@ async function loadMarket() {
       const label = nameKo[m.name] || m.name;
       return `<div class="idx-card"><div class="idx-name">${label}</div><div class="idx-price">${p}</div><div class="idx-chg" style="color:${c}">${s}${m.change_pct.toFixed(2)}%</div></div>`;
     }).join('');
+
+    // 마켓 레짐 바
+    if (regime && regime.regime && regime.regime !== 'UNKNOWN') {
+      const regimeBar = document.getElementById('regime-bar');
+      const regimeMap = {BULL:{icon:'\uD83D\uDFE2',label:'BULL (상승장)',color:'var(--green)'},CORRECTION:{icon:'\uD83D\uDFE1',label:'CORRECTION (조정)',color:'var(--yellow)'},RECOVERY:{icon:'\uD83D\uDD35',label:'RECOVERY (회복)',color:'var(--accent)'},BEAR:{icon:'\uD83D\uDD34',label:'BEAR (하락장)',color:'var(--red)'}};
+      const r = regimeMap[regime.regime] || {icon:'\u2753',label:regime.regime,color:'var(--muted)'};
+      regimeBar.style.display = 'flex';
+      regimeBar.style.borderColor = r.color.replace('var(','rgba(').replace(')','') || 'var(--border)';
+      regimeBar.innerHTML = `
+        <span style="font-size:16px">${r.icon}</span>
+        <span style="color:${r.color};font-weight:700">${r.label}</span>
+        <span style="color:var(--muted)">SPY: ${regime.spy_price||0} (200MA: ${regime.spy_ma200||0})</span>
+        <span style="color:var(--muted)">VIX: <span style="color:${(regime.vix||20)>30?'var(--red)':'var(--text)'}">${(regime.vix||20).toFixed(1)}</span></span>
+      `;
+    }
   } catch(e) { console.error('market', e); }
 }
 

@@ -1,16 +1,24 @@
 #!/bin/bash
-# .env + openclaw.json 둘 다 로드 (Supabase는 openclaw.json에 있음)
+# 대시보드 실행 — 환경변수 안전 로딩
 OPENCLAW_JSON="/home/wlsdud5035/.openclaw/openclaw.json"
 OPENCLAW_ENV="/home/wlsdud5035/.openclaw/.env"
-if [ -f "$OPENCLAW_ENV" ]; then set -a; . "$OPENCLAW_ENV"; set +a; fi
-export $(python3 -c "
-import json
+WORKSPACE="/home/wlsdud5035/.openclaw/workspace"
+
+cd "$WORKSPACE" || exit 1
+
+if [ -f "$OPENCLAW_ENV" ]; then set -a; source "$OPENCLAW_ENV"; set +a; fi
+
+ENV_VARS=$(.venv/bin/python3 -c "
+import json, os
+from shlex import quote
 d = json.load(open('$OPENCLAW_JSON'))
 for k, v in d.get('env', {}).items():
-    if isinstance(v, (str, int, float)) and not isinstance(v, bool):
-        from shlex import quote
+    if k != 'shellEnv' and isinstance(v, (str, int, float)) and not isinstance(v, bool):
         print(f'{k}={quote(str(v))}')
 " 2>/dev/null)
-cd /home/wlsdud5035/.openclaw/workspace
-# venv 사용 (fastapi/uvicorn이 시스템에 없을 수 있음)
+
+while IFS= read -r line; do
+    export "$line" 2>/dev/null
+done <<< "$ENV_VARS"
+
 exec .venv/bin/python btc/btc_dashboard.py

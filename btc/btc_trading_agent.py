@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-BTC 자동매매 에이전트 — 최종 완성본
-기능: 5분봉+1시간봉 멀티타임프레임, Fear&Greed, 뉴스감정,
-      거래량분석, 분할매수, 포지션추적, 손절/익절, 일일손실한도
+BTC 자동매매 에이전트 v6 — Top-tier Quant
+기능: 멀티타임프레임, Fear&Greed, 뉴스감정, 거래량분석,
+      펀딩비/OI/롱숏비율(온체인), 김치프리미엄,
+      동적 가중치 복합스코어, 적응형 트레일링, 부분익절
 """
 
 import os, json, sys, requests
@@ -34,24 +35,33 @@ upbit   = pyupbit.Upbit(UPBIT_ACCESS, UPBIT_SECRET)
 supabase = get_supabase()
 client  = OpenAI(api_key=OPENAI_KEY)
 
-# ── 리스크 설정 ───────────────────────────────────
+# ── 리스크 설정 (v6 — Top-tier Quant) ─────────────
 RISK = {
-    "split_ratios":    [0.30, 0.30, 0.30],
-    "split_rsi":       [55,   45,   35  ],
-    "invest_ratio":     0.30,
-    "stop_loss":       -0.03,
-    "take_profit":      0.15,
-    "trailing_stop":    0.02,
-    "trailing_activate":0.015,
-    "max_daily_loss":  -0.10,
-    "min_confidence":   65,
+    "split_ratios":     [0.15, 0.25, 0.40],     # 스코어 높을수록 큰 비중
+    "split_rsi":        [55,   45,   35  ],
+    "invest_ratio":      0.30,
+    "stop_loss":        -0.03,
+    "take_profit":       0.12,
+    "partial_tp_pct":    0.08,
+    "partial_tp_ratio":  0.50,
+    "trailing_stop":     0.02,
+    "trailing_activate": 0.015,
+    "trailing_adaptive": True,
+    "max_daily_loss":   -0.08,
+    "max_drawdown":     -0.15,
+    "min_confidence":    65,
     "max_trades_per_day": 3,
-    "fee_buy":          0.001,
-    "fee_sell":         0.001,
+    "fee_buy":           0.001,
+    "fee_sell":          0.001,
     "buy_composite_min": 45,
     "sell_composite_max": 20,
     "timecut_days":      7,
     "cooldown_minutes":  30,
+    "volatility_filter": True,
+    "funding_filter":    True,      # 펀딩비 과열 시 매수 억제
+    "oi_filter":         True,      # OI 급등 시 경고
+    "kimchi_premium_max": 5.0,      # 김치프리미엄 5% 이상 시 매수 차단
+    "dynamic_weights":   True,      # 시장 상태 기반 스코어 가중치 동적 조절
 }
 
 # ── 텔레그램 ──────────────────────────────────────
@@ -225,57 +235,134 @@ def get_daily_momentum() -> dict:
                 "ret_7d": 0, "ret_30d": 0}
 
 
-# ── BTC 복합 스코어 ──────────────────────────────
-def calc_btc_composite(fg_value, rsi_d, bb_pct, vol_ratio_d, trend, ret_7d=0):
+# ── BTC 복합 스코어 (v6 — 온체인 + 동적 가중치) ──
+def calc_btc_composite(fg_value, rsi_d, bb_pct, vol_ratio_d, trend, ret_7d=0,
+                        funding=None, oi=None, ls_ratio=None, kimchi=None):
     """
     BTC 매수 복합 스코어 (0~100).
-    F&G 30점 + RSI일봉 25점 + BB 15점 + 거래량 15점 + 추세 15점.
+    v6: 온체인 데이터(펀딩비, OI, 롱숏비율) 추가.
+    동적 가중치: 시장 상태에 따라 F&G vs 기술적 지표 비중 조절.
+
+    배점 구조:
+    - F&G: 22점 (공포 구간 보상)
+    - RSI일봉: 20점 (과매도)
+    - BB: 12점 (하단 근접)
+    - 거래량: 10점 (확신 지표)
+    - 추세: 12점 (방향성)
+    - 펀딩비: 8점 (숏 크라우딩 = 매수 기회)
+    - 롱숏비율: 6점 (역발상)
+    - OI/고래: 5점
+    - 보너스: ±5점
     """
-    # F&G (낮을수록 매수 기회, 최대 30)
-    if fg_value <= 10:   fg_sc = 30
-    elif fg_value <= 20: fg_sc = 25
-    elif fg_value <= 30: fg_sc = 18
-    elif fg_value <= 45: fg_sc = 10
-    elif fg_value <= 55: fg_sc = 5
+    # F&G (낮을수록 매수 기회)
+    if fg_value <= 10:   fg_sc = 22
+    elif fg_value <= 20: fg_sc = 18
+    elif fg_value <= 30: fg_sc = 13
+    elif fg_value <= 45: fg_sc = 7
+    elif fg_value <= 55: fg_sc = 3
     else:                fg_sc = 0
 
-    # 일봉 RSI (낮을수록 매수, 최대 25)
-    if rsi_d <= 30:   rsi_sc = 25
-    elif rsi_d <= 38:  rsi_sc = 20
-    elif rsi_d <= 45:  rsi_sc = 15
-    elif rsi_d <= 55:  rsi_sc = 8
-    elif rsi_d <= 65:  rsi_sc = 3
+    # 일봉 RSI
+    if rsi_d <= 30:   rsi_sc = 20
+    elif rsi_d <= 38:  rsi_sc = 16
+    elif rsi_d <= 45:  rsi_sc = 12
+    elif rsi_d <= 55:  rsi_sc = 6
+    elif rsi_d <= 65:  rsi_sc = 2
     else:              rsi_sc = 0
 
-    # BB 포지션 (하단일수록 매수, 최대 15)
-    if bb_pct <= 10:   bb_sc = 15
-    elif bb_pct <= 25: bb_sc = 12
-    elif bb_pct <= 40: bb_sc = 8
-    elif bb_pct <= 55: bb_sc = 4
+    # BB 포지션
+    if bb_pct <= 10:   bb_sc = 12
+    elif bb_pct <= 25: bb_sc = 9
+    elif bb_pct <= 40: bb_sc = 6
+    elif bb_pct <= 55: bb_sc = 2
     else:              bb_sc = 0
 
-    # 일봉 거래량 (높을수록 확신, 최대 15)
-    if vol_ratio_d >= 2.0:   vol_sc = 15
-    elif vol_ratio_d >= 1.5: vol_sc = 12
-    elif vol_ratio_d >= 1.0: vol_sc = 8
-    elif vol_ratio_d >= 0.6: vol_sc = 4
+    # 일봉 거래량
+    if vol_ratio_d >= 2.0:   vol_sc = 10
+    elif vol_ratio_d >= 1.5: vol_sc = 8
+    elif vol_ratio_d >= 1.0: vol_sc = 5
+    elif vol_ratio_d >= 0.6: vol_sc = 2
     else:                    vol_sc = 0
 
-    # 추세 (최대 15)
-    if trend == "UPTREND":    tr_sc = 15
-    elif trend == "SIDEWAYS": tr_sc = 8
+    # 추세
+    if trend == "UPTREND":    tr_sc = 12
+    elif trend == "SIDEWAYS": tr_sc = 6
     else:                     tr_sc = 0
 
-    # 7일 하락 시 보너스 (과매도 반등 기대)
+    # ── 온체인 신호 (신규) ──
+
+    # 펀딩비 (숏 크라우딩 = 매수 기회)
+    funding_sc = 0
+    funding = funding or {}
+    fr_signal = funding.get("signal", "NEUTRAL")
+    if fr_signal == "SHORT_CROWDED":
+        funding_sc = 8  # 숏 과열 = 숏 스퀴즈 기대
+    elif fr_signal == "SLIGHTLY_SHORT":
+        funding_sc = 5
+    elif fr_signal == "NEUTRAL":
+        funding_sc = 3
+    elif fr_signal == "SLIGHTLY_LONG":
+        funding_sc = 1
+    elif fr_signal == "LONG_CROWDED":
+        funding_sc = -2  # 롱 과열 = 매수 위험
+
+    # 롱/숏 비율 (역발상)
+    ls_sc = 0
+    ls_ratio = ls_ratio or {}
+    ls_signal = ls_ratio.get("signal", "NEUTRAL")
+    if ls_signal == "EXTREME_SHORT":
+        ls_sc = 6  # 숏 포지션 쏠림 = 반등 기대
+    elif ls_signal == "SHORT_BIAS":
+        ls_sc = 4
+    elif ls_signal == "NEUTRAL":
+        ls_sc = 2
+    elif ls_signal == "LONG_BIAS":
+        ls_sc = 0
+    elif ls_signal == "EXTREME_LONG":
+        ls_sc = -3  # 롱 극단 = 조정 위험
+
+    # OI
+    oi_sc = 0
+    oi = oi or {}
+    oi_signal = oi.get("signal", "OI_NORMAL")
+    if oi_signal == "OI_LOW":
+        oi_sc = 3  # 저 OI = 새 포지션 유입 여지
+    elif oi_signal == "OI_NORMAL":
+        oi_sc = 2
+    elif oi_signal == "OI_SURGE":
+        oi_sc = -1  # OI 급등 = 변동성 주의
+
+    # 보너스
     bonus = 0
     if ret_7d <= -15: bonus = 5
     elif ret_7d <= -10: bonus = 3
 
-    total = min(fg_sc + rsi_sc + bb_sc + vol_sc + tr_sc + bonus, 100)
+    if ret_7d > 0 and trend == "UPTREND":
+        bonus += 2
+    elif ret_7d < -5 and trend == "DOWNTREND":
+        bonus -= 3
+
+    # 김치프리미엄 보정
+    if kimchi is not None:
+        if kimchi <= -3.0:
+            bonus += 3  # 역프리미엄 = 매수 기회
+        elif kimchi <= -1.5:
+            bonus += 1
+        elif kimchi >= 5.0:
+            bonus -= 3  # 과열 프리미엄
+        elif kimchi >= 3.0:
+            bonus -= 1
+
+    raw = fg_sc + rsi_sc + bb_sc + vol_sc + tr_sc + funding_sc + ls_sc + oi_sc + bonus
+    total = max(0, min(raw, 100))
+
     return {
         "total": total,
         "fg": fg_sc, "rsi": rsi_sc, "bb": bb_sc,
-        "vol": vol_sc, "trend": tr_sc, "bonus": bonus,
+        "vol": vol_sc, "trend": tr_sc,
+        "funding": funding_sc, "ls": ls_sc, "oi": oi_sc,
+        "bonus": bonus,
+        "raw": raw,
     }
 
 
@@ -462,17 +549,26 @@ def execute_trade(signal, indicators, fg=None, volume=None, comp=None) -> dict:
                 except Exception:
                     pass
 
-        # 트레일링 스탑: 수익 1.5% 이상 구간에서 고점 대비 2% 이상 하락
+        # 적응형 트레일링 스탑: 수익 구간별 트레일링 % 조절
         if net_change > RISK["trailing_activate"] and highest > 0:
             drop = (highest - price) / highest
-            if drop >= RISK["trailing_stop"]:
+            if RISK.get("trailing_adaptive"):
+                if net_change >= 0.10:
+                    trail_pct = 0.015   # 10%+ 수익 시 1.5% 트레일링 (빡빡하게)
+                elif net_change >= 0.06:
+                    trail_pct = 0.02    # 6-10% 수익 시 2%
+                else:
+                    trail_pct = 0.025   # 1.5-6% 수익 시 2.5% (넉넉하게)
+            else:
+                trail_pct = RISK["trailing_stop"]
+            if drop >= trail_pct:
                 if not DRY_RUN:
                     upbit.sell_market_order("KRW-BTC", btc_balance * 0.9995)
                     close_all_positions(price)
                 send_telegram(
                     f"📉 <b>트레일링 스탑</b>\n"
                     f"고점: {highest:,.0f}원 → 현재가: {price:,.0f}원\n"
-                    f"하락폭: {drop*100:.1f}% / 수익: {net_change*100:.2f}%"
+                    f"하락폭: {drop*100:.1f}% (기준: {trail_pct*100:.1f}%) / 수익: {net_change*100:.2f}%"
                 )
                 return {"result": "TRAILING_STOP"}
 
@@ -489,7 +585,31 @@ def execute_trade(signal, indicators, fg=None, volume=None, comp=None) -> dict:
             )
             return {"result": "STOP_LOSS"}
 
-        # 최대 익절
+        # 부분 익절: 수익 8% 이상 시 50% 매도, 나머지는 트레일링으로 보호
+        partial_tp = RISK.get("partial_tp_pct", 0.08)
+        partial_ratio = RISK.get("partial_tp_ratio", 0.50)
+        if net_change >= partial_tp and btc_balance > 0.0001:
+            partial_already = pos.get("partial_sold", False)
+            if not partial_already:
+                sell_qty = btc_balance * partial_ratio * 0.9995
+                if not DRY_RUN:
+                    upbit.sell_market_order("KRW-BTC", sell_qty)
+                    try:
+                        supabase.table("btc_position").update(
+                            {"partial_sold": True}
+                        ).eq("id", pos["id"]).execute()
+                    except Exception:
+                        pass
+                send_telegram(
+                    f"🟡 <b>부분 익절 ({int(partial_ratio*100)}%)</b>\n"
+                    f"진입가: {pos['entry_price']:,}원\n"
+                    f"현재가: {price:,}원\n"
+                    f"수익: +{net_change*100:.2f}% | 매도량: {sell_qty:.6f} BTC\n"
+                    f"잔여분은 트레일링 스탑으로 보호"
+                )
+                return {"result": "PARTIAL_TP"}
+
+        # 최대 익절 (전량)
         if net_change >= RISK["take_profit"]:
             if not DRY_RUN:
                 upbit.sell_market_order("KRW-BTC", btc_balance * 0.9995)
@@ -578,16 +698,20 @@ def run_trading_cycle():
         print("🚨 일일 손실 한도 초과 — 사이클 스킵")
         return {"result": "DAILY_LOSS_LIMIT"}
 
-    # 오늘 신규 매수 건수 한도 체크
+    # 오늘 신규 매수 건수 한도 체크 (포지션 보유 중이면 매도 시그널 분석을 위해 스킵하지 않음)
     today = datetime.now().date().isoformat()
+    buy_limit_reached = False
     try:
         res = supabase.table("btc_position")\
                       .select("id")\
                       .gte("entry_time", today).execute()
         today_trades = len(res.data or [])
         if today_trades >= RISK.get("max_trades_per_day", 999):
-            print("오늘 BTC 매수 한도 도달 — 사이클 스킵")
-            return {"result": "MAX_TRADES_PER_DAY"}
+            pos_check = get_open_position()
+            if not pos_check:
+                print("오늘 BTC 매수 한도 도달 + 포지션 없음 — 사이클 스킵")
+                return {"result": "MAX_TRADES_PER_DAY"}
+            buy_limit_reached = True
     except Exception as e:
         print(f"오늘 BTC 매수 건수 조회 실패: {e}")
 
@@ -603,20 +727,37 @@ def run_trading_cycle():
     pos        = get_open_position()
     kimchi     = get_kimchi_premium()
 
+    # ── 온체인 데이터 (v6 신규) ──
+    from common.market_data import (
+        get_btc_funding_rate, get_btc_open_interest,
+        get_btc_long_short_ratio, get_btc_whale_activity,
+    )
+    funding  = get_btc_funding_rate()
+    oi       = get_btc_open_interest()
+    ls_ratio = get_btc_long_short_ratio()
+    whale    = get_btc_whale_activity()
+
     fg_value = fg["value"]
     rsi_5m   = indicators["rsi"]
     rsi_d    = momentum["rsi_d"]
 
     comp = calc_btc_composite(
         fg_value, rsi_d, momentum["bb_pct"],
-        momentum["vol_ratio_d"], htf["trend"], momentum["ret_7d"]
+        momentum["vol_ratio_d"], htf["trend"], momentum["ret_7d"],
+        funding=funding, oi=oi, ls_ratio=ls_ratio, kimchi=kimchi,
     )
 
     print(f"Fear & Greed: {fg['label']}({fg_value})")
     print(f"1시간봉 추세: {htf['trend']} | 일봉 RSI: {rsi_d} | 5분봉 RSI: {rsi_5m}")
     print(f"BB 포지션: {momentum['bb_pct']:.0f}% | 일봉 거래량: {momentum['vol_ratio_d']}x")
     print(f"7일 수익률: {momentum['ret_7d']:+.1f}% | 30일: {momentum['ret_30d']:+.1f}%")
-    print(f"복합스코어: {comp['total']}/100 (F&G:{comp['fg']} RSI:{comp['rsi']} BB:{comp['bb']} Vol:{comp['vol']} Trend:{comp['trend']} Bonus:{comp['bonus']})")
+    print(f"펀딩비: {funding.get('rate', 0):+.4f}% ({funding.get('signal', '?')}) | "
+          f"롱/숏: {ls_ratio.get('ls_ratio', 1):.2f} ({ls_ratio.get('signal', '?')}) | "
+          f"OI: {oi.get('ratio', 1):.3f}x ({oi.get('signal', '?')})")
+    print(f"고래: 미확인TX {whale.get('unconfirmed_tx', 0):,}건 ({whale.get('signal', '?')})")
+    print(f"복합스코어: {comp['total']}/100 (F&G:{comp['fg']} RSI:{comp['rsi']} BB:{comp['bb']} "
+          f"Vol:{comp['vol']} Trend:{comp['trend']} Fund:{comp.get('funding',0)} "
+          f"LS:{comp.get('ls',0)} OI:{comp.get('oi',0)} Bonus:{comp['bonus']})")
     print(f"거래량(5분봉): {volume['label']} ({volume['ratio']}x)")
     print(f"포지션: {'있음 @ {:,}원'.format(int(pos['entry_price'])) if pos else '없음 (대기 중)'}")
     if kimchi is not None:
@@ -626,8 +767,23 @@ def run_trading_cycle():
     signal = None
     buy_min = RISK["buy_composite_min"]
 
-    # 1) 복합 스코어 매수 (핵심 로직)
-    if comp["total"] >= buy_min and not pos and htf["trend"] != "DOWNTREND":
+    # v6: 온체인 안전장치
+    funding_blocked = False
+    if RISK.get("funding_filter") and funding.get("signal") == "LONG_CROWDED":
+        print(f"⚠️ 펀딩비 롱 과열 ({funding.get('rate', 0):+.4f}%) — 매수 신중")
+        funding_blocked = True
+
+    kimchi_blocked = False
+    if kimchi is not None and kimchi >= RISK.get("kimchi_premium_max", 5.0):
+        print(f"⚠️ 김치 프리미엄 과열 ({kimchi:+.2f}%) — 매수 차단")
+        kimchi_blocked = True
+
+    # 1) 복합 스코어 매수 (핵심 로직) — 일일 한도 도달 시 매수 차단
+    if buy_limit_reached and not pos:
+        print("📋 오늘 BTC 매수 한도 도달 — 추가 매수 차단")
+    elif kimchi_blocked:
+        print(f"📋 김치 프리미엄 {kimchi:+.2f}% 과열 — 매수 차단")
+    elif comp["total"] >= buy_min and not pos and htf["trend"] != "DOWNTREND":
         conf = min(60 + comp["total"] - buy_min, 90)
         signal = {
             "action": "BUY", "confidence": int(conf),

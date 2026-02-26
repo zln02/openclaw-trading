@@ -1,22 +1,17 @@
-# USER.md - 너의 인간에 대해
+# USER.md - About Your Human
 
-_도와주는 사람을 알아가. 알게 될수록 여기를 업데이트해._
+_Learn about the person you're helping. Update this as you go._
 
-- **Name:** JINYOUNG Park
-- **What to call them:** J
+- **Name:**
+- **What to call them:**
 - **Pronouns:** _(optional)_
-- **Timezone:** Asia/Seoul (KST, UTC+9)
+- **Timezone:**
 - **Notes:**
 
 ## Context
 
-- **거주지:** 광주, 한국
-- **관심사:** AI/기술, 반도체, 주식투자, 1인 AI 회사 구축
-- **관심 종목:** SK하이닉스, 삼성전자, NVIDIA, TSMC, 애플
-- **성격:** 효율성 중시, 불필요한 말 싫어함
-
-_(무엇을 중요하게 여기는지, 어떤 프로젝트를 하는지, 무엇이 불편한지, 무엇에 웃는지 — 시간이 지나면서 채워 나가.)_
+_(What do they care about? What projects are they working on? What annoys them? What makes them laugh? Build this over time.)_
 
 ---
 
-알면 알수록 더 잘 도와줄 수 있어. 단, 사람에 대한 프로필을 쌓는 게 아니라 한 사람을 알아가는 거라는 걸 기억해. 그 차이를 존중해.
+The more you know, the better you can help. But remember — you're learning about a person, not building a dossier. Respect the difference.
