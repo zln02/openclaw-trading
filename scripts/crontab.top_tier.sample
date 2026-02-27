@@ -1,0 +1,48 @@
+# OpenClaw top-tier cron sample (KST 기준)
+# 적용: crontab -e 후 아래 라인 붙여넣기
+
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# --- Core trading loops ---
+# BTC 사이클 (10분)
+*/10 * * * * /home/wlsdud5035/.openclaw/workspace/scripts/run_btc_cron.sh >> /home/wlsdud5035/.openclaw/logs/btc_trading.log 2>&1
+# BTC 1분 체크
+* * * * * /home/wlsdud5035/.openclaw/workspace/scripts/run_btc_cron.sh check >> /home/wlsdud5035/.openclaw/logs/btc_check.log 2>&1
+
+# KR 주식 사이클 (평일 장중 10분)
+*/10 9-15 * * 1-5 /home/wlsdud5035/.openclaw/workspace/scripts/run_stock_cron.sh >> /home/wlsdud5035/.openclaw/logs/stock_trading.log 2>&1
+# KR 손절/익절 체크 (평일 장중 1분)
+* 9-15 * * 1-5 /home/wlsdud5035/.openclaw/workspace/scripts/run_stock_cron.sh check >> /home/wlsdud5035/.openclaw/logs/stock_check.log 2>&1
+# KR 장전
+0 8 * * 1-5 /home/wlsdud5035/.openclaw/workspace/scripts/run_stock_cron.sh premarket >> /home/wlsdud5035/.openclaw/logs/stock_premarket.log 2>&1
+
+# US 주식 사이클 (KST 기준 야간, 15분)
+*/15 22-23,0-5 * * 1-5 /home/wlsdud5035/.openclaw/workspace/scripts/run_us_cron.sh >> /home/wlsdud5035/.openclaw/logs/us_trading.log 2>&1
+# US 체크 (야간 5분)
+*/5 22-23,0-5 * * 1-5 /home/wlsdud5035/.openclaw/workspace/scripts/run_us_cron.sh check >> /home/wlsdud5035/.openclaw/logs/us_check.log 2>&1
+# US 장전
+30 22 * * 1-5 /home/wlsdud5035/.openclaw/workspace/scripts/run_us_cron.sh premarket >> /home/wlsdud5035/.openclaw/logs/us_premarket.log 2>&1
+
+# --- Top-tier Phase 14/15/16 signal jobs ---
+# Phase 14: BTC 시그널(오더플로우/캐리/아비/고래)
+*/5 * * * * KR_SYMBOL=005930 US_SYMBOL=AAPL /home/wlsdud5035/.openclaw/workspace/scripts/run_top_tier_cron.sh phase14 >> /home/wlsdud5035/.openclaw/logs/phase14_signals.log 2>&1
+
+# Phase 15: KR 시그널(호가/수급/DART/섹터)
+*/10 9-15 * * 1-5 KR_SYMBOL=005930 /home/wlsdud5035/.openclaw/workspace/scripts/run_top_tier_cron.sh phase15 >> /home/wlsdud5035/.openclaw/logs/phase15_signals.log 2>&1
+
+# Phase 16: US 시그널(브로커 상태/옵션/숏인터레스트)
+*/15 22-23,0-5 * * 1-5 US_SYMBOL=AAPL /home/wlsdud5035/.openclaw/workspace/scripts/run_top_tier_cron.sh phase16 >> /home/wlsdud5035/.openclaw/logs/phase16_signals.log 2>&1
+
+# --- Phase 18 monitoring/reporting ---
+# 알림 매니저 (2분)
+*/2 * * * * ALERT_DRAWDOWN=-0.01 ALERT_VAR95=0.018 ALERT_CORR_SHIFT=0.05 ALERT_VOLUME_SPIKE=1.4 /home/wlsdud5035/.openclaw/workspace/scripts/run_top_tier_cron.sh phase18-alert >> /home/wlsdud5035/.openclaw/logs/alert_manager.log 2>&1
+
+# 일간 리포트 (매일 21:00 KST)
+0 21 * * * /home/wlsdud5035/.openclaw/workspace/scripts/run_top_tier_cron.sh phase18-daily >> /home/wlsdud5035/.openclaw/logs/daily_report.log 2>&1
+
+# 주간 리포트 (일요일 21:00 KST)
+0 21 * * 0 /home/wlsdud5035/.openclaw/workspace/scripts/run_top_tier_cron.sh phase18-weekly >> /home/wlsdud5035/.openclaw/logs/weekly_report.log 2>&1
+
+# 헬스체크
+*/5 * * * * /home/wlsdud5035/.openclaw/workspace/scripts/check_health.sh >> /home/wlsdud5035/.openclaw/logs/health_check.log 2>&1
