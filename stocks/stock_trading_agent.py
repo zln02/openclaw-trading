@@ -23,8 +23,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from common.env_loader import load_env
 from common.telegram import send_telegram as _tg_send
 from common.supabase_client import get_supabase
+from common.logger import get_logger
+from common.retry import retry, retry_call
+from common.config import STOCK_TRADING_LOG
 
 load_env()
+_log = get_logger("stock_agent", STOCK_TRADING_LOG)
 
 sys.path.insert(0, str(Path(__file__).parent))
 from kiwoom_client import KiwoomClient
@@ -81,9 +85,12 @@ RULES = {
 # 유틸리티
 # ─────────────────────────────────────────────
 def log(msg: str, level: str = "INFO"):
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    prefix = {"INFO": "ℹ️", "WARN": "⚠️", "ERROR": "❌", "TRADE": "💰"}.get(level, "")
-    print(f"[{ts}] {prefix} {msg}")
+    """Backward-compat wrapper routing to structured logger."""
+    _dispatch = {
+        "INFO": _log.info, "WARN": _log.warn,
+        "ERROR": _log.error, "TRADE": _log.trade,
+    }
+    _dispatch.get(level, _log.info)(msg)
 
 
 def send_telegram(msg: str):
@@ -246,7 +253,14 @@ def get_investor_trend_krx(stock_code: str) -> dict:
             'Referer': 'http://data.krx.co.kr/',
         }
         res = requests.post(url, data=payload, headers=headers, timeout=10)
-        data = res.json()
+        res.raise_for_status()
+        text = (res.text or "").strip()
+        if not text or not text.startswith("{"):
+            return {}
+        try:
+            data = res.json()
+        except json.JSONDecodeError:
+            return {}
         items = data.get('output', [])
         if not items:
             return {}
@@ -1573,7 +1587,7 @@ def run_trading_cycle():
         result = execute_trade(stock, signal, indicators, kospi=kospi, weekly=weekly)
         log(f"  결과: {result['result']}")
 
-        time.sleep(1)
+        time.sleep(1.2)  # 키움 429 완화
 
     log('주식 매매 사이클 완료')
     log('=' * 50)

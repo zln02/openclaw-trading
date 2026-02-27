@@ -8,21 +8,18 @@ import requests
 from typing import Dict, Optional, Tuple
 from functools import lru_cache
 
-_cache: Dict[str, Tuple[float, any]] = {}
+from common.cache import get_cached as _cached_get, set_cached as _set_cache_new
+from common.retry import retry
+
 CACHE_TTL = 300  # 5분
 
 
 def _cached(key: str, ttl: int = CACHE_TTL):
-    """TTL 기반 캐시 데코레이터 헬퍼."""
-    if key in _cache:
-        ts, val = _cache[key]
-        if time.time() - ts < ttl:
-            return val
-    return None
+    return _cached_get(key)
 
 
-def _set_cache(key: str, val):
-    _cache[key] = (time.time(), val)
+def _set_cache(key: str, val, ttl: int = CACHE_TTL):
+    _set_cache_new(key, val, ttl=ttl)
 
 
 # ── BTC 펀딩비 (Binance — 무료, 인증 불필요) ─────────
@@ -32,11 +29,14 @@ def get_btc_funding_rate() -> dict:
     if cached:
         return cached
     try:
-        res = requests.get(
-            "https://fapi.binance.com/fapi/v1/fundingRate",
-            params={"symbol": "BTCUSDT", "limit": 10},
-            timeout=5,
-        )
+        @retry(max_attempts=2, base_delay=1.0)
+        def _fetch():
+            return requests.get(
+                "https://fapi.binance.com/fapi/v1/fundingRate",
+                params={"symbol": "BTCUSDT", "limit": 10},
+                timeout=5,
+            )
+        res = _fetch()
         data = res.json()
         if not data:
             return {"rate": 0, "rates": [], "signal": "NEUTRAL"}
@@ -75,19 +75,25 @@ def get_btc_open_interest() -> dict:
     if cached:
         return cached
     try:
-        res = requests.get(
-            "https://fapi.binance.com/fapi/v1/openInterest",
-            params={"symbol": "BTCUSDT"},
-            timeout=5,
-        )
+        @retry(max_attempts=2, base_delay=1.0)
+        def _fetch_oi():
+            return requests.get(
+                "https://fapi.binance.com/fapi/v1/openInterest",
+                params={"symbol": "BTCUSDT"},
+                timeout=5,
+            )
+        res = _fetch_oi()
         data = res.json()
         oi = float(data.get("openInterest", 0))
 
-        hist = requests.get(
-            "https://fapi.binance.com/futures/data/openInterestHist",
-            params={"symbol": "BTCUSDT", "period": "1h", "limit": 48},
-            timeout=5,
-        ).json()
+        @retry(max_attempts=2, base_delay=1.0)
+        def _fetch_oi_hist():
+            return requests.get(
+                "https://fapi.binance.com/futures/data/openInterestHist",
+                params={"symbol": "BTCUSDT", "period": "1h", "limit": 48},
+                timeout=5,
+            )
+        hist = _fetch_oi_hist().json()
 
         oi_values = [float(h.get("sumOpenInterest", 0)) for h in hist] if hist else [oi]
         avg_oi = sum(oi_values) / len(oi_values) if oi_values else oi
@@ -121,11 +127,14 @@ def get_btc_long_short_ratio() -> dict:
     if cached:
         return cached
     try:
-        res = requests.get(
-            "https://fapi.binance.com/futures/data/globalLongShortAccountRatio",
-            params={"symbol": "BTCUSDT", "period": "1h", "limit": 24},
-            timeout=5,
-        )
+        @retry(max_attempts=2, base_delay=1.0)
+        def _fetch_ls():
+            return requests.get(
+                "https://fapi.binance.com/futures/data/globalLongShortAccountRatio",
+                params={"symbol": "BTCUSDT", "period": "1h", "limit": 24},
+                timeout=5,
+            )
+        res = _fetch_ls()
         data = res.json()
         if not data:
             return {"long_ratio": 50, "short_ratio": 50, "signal": "NEUTRAL"}
@@ -169,22 +178,17 @@ def get_btc_whale_activity() -> dict:
     if cached:
         return cached
     try:
-        res = requests.get(
-            "https://blockchain.info/q/totalbc",
-            timeout=5,
-        )
+        @retry(max_attempts=2, base_delay=2.0)
+        def _fetch_blockchain(endpoint):
+            return requests.get(f"https://blockchain.info/q/{endpoint}", timeout=5)
+
+        res = _fetch_blockchain("totalbc")
         total_btc = float(res.text) / 1e8
 
-        hash_rate = requests.get(
-            "https://blockchain.info/q/hashrate",
-            timeout=5,
-        ).text
+        hash_rate = _fetch_blockchain("hashrate").text
         hash_rate_val = float(hash_rate) / 1e9  # GH/s → EH/s
 
-        mempool = requests.get(
-            "https://blockchain.info/q/unconfirmedcount",
-            timeout=5,
-        ).text
+        mempool = _fetch_blockchain("unconfirmedcount").text
         unconfirmed = int(mempool)
 
         if unconfirmed > 150000:
@@ -213,11 +217,14 @@ def get_btc_liquidations() -> dict:
     if cached:
         return cached
     try:
-        res = requests.get(
-            "https://fapi.binance.com/fapi/v1/ticker/24hr",
-            params={"symbol": "BTCUSDT"},
-            timeout=5,
-        )
+        @retry(max_attempts=2, base_delay=1.0)
+        def _fetch_liq():
+            return requests.get(
+                "https://fapi.binance.com/fapi/v1/ticker/24hr",
+                params={"symbol": "BTCUSDT"},
+                timeout=5,
+            )
+        res = _fetch_liq()
         data = res.json()
         vol_24h = float(data.get("quoteVolume", 0))
         price_change = float(data.get("priceChangePercent", 0))
@@ -458,6 +465,64 @@ def calc_us_multifactor(symbol: str) -> dict:
         }
     except Exception as e:
         return {"score": 0, "grade": "N/A", "detail": str(e)}
+
+
+# ── US 마켓 레짐 (SPY 200MA + VIX) ──────────────────
+def get_market_regime() -> dict:
+    """SPY 200일/50일 이동평균 + VIX 기반 시장 레짐 판단.
+
+    Returns dict with keys: regime, spy_price, spy_ma200, spy_ma50,
+    spy_above_200ma, vix.
+    Regimes: BULL, CORRECTION, RECOVERY, BEAR, UNKNOWN.
+    """
+    cached = _cached("us_market_regime")
+    if cached:
+        return cached
+    try:
+        import yfinance as yf
+
+        spy = yf.Ticker("SPY")
+        spy_hist = spy.history(period="1y")
+        if spy_hist is None or len(spy_hist) < 200:
+            return {"regime": "UNKNOWN", "spy_above_200ma": True, "vix": 20}
+
+        close = spy_hist["Close"]
+        ma200 = float(close.rolling(200).mean().iloc[-1])
+        ma50 = float(close.rolling(50).mean().iloc[-1])
+        current = float(close.iloc[-1])
+        above_200 = current > ma200
+        above_50 = current > ma50
+
+        vix_val = 20.0
+        try:
+            vix = yf.Ticker("^VIX")
+            vix_hist = vix.history(period="5d")
+            if vix_hist is not None and not vix_hist.empty:
+                vix_val = float(vix_hist["Close"].iloc[-1])
+        except Exception:
+            pass
+
+        if above_200 and above_50:
+            regime = "BULL"
+        elif above_200 and not above_50:
+            regime = "CORRECTION"
+        elif not above_200 and above_50:
+            regime = "RECOVERY"
+        else:
+            regime = "BEAR"
+
+        result = {
+            "regime": regime,
+            "spy_price": round(current, 2),
+            "spy_ma200": round(ma200, 2),
+            "spy_ma50": round(ma50, 2),
+            "spy_above_200ma": above_200,
+            "vix": round(vix_val, 1),
+        }
+        _set_cache("us_market_regime", result, ttl=600)
+        return result
+    except Exception:
+        return {"regime": "UNKNOWN", "spy_above_200ma": True, "vix": 20}
 
 
 # ── US 어닝 캘린더 체크 ──────────────────────────────

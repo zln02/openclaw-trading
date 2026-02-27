@@ -18,8 +18,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from common.env_loader import load_env
 from common.telegram import send_telegram
 from common.supabase_client import get_supabase
+from common.logger import get_logger
+from common.config import US_TRADING_LOG
 
 load_env()
+_log = get_logger("us_premarket", US_TRADING_LOG)
 
 sys.path.insert(0, str(Path(__file__).parent))
 from us_momentum_backtest import scan_today_top_us
@@ -28,9 +31,12 @@ supabase = get_supabase()
 
 
 def log(msg: str, level: str = "INFO"):
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    prefix = {"INFO": "ℹ️", "WARN": "⚠️", "ERROR": "❌", "OK": "✅"}.get(level, "")
-    print(f"[{ts}] {prefix} {msg}")
+    """Backward-compat wrapper routing to structured logger."""
+    _dispatch = {
+        "INFO": _log.info, "WARN": _log.warn,
+        "ERROR": _log.error, "OK": _log.info,
+    }
+    _dispatch.get(level, _log.info)(msg)
 
 
 def get_us_indices() -> list:

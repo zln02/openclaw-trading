@@ -15,8 +15,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from common.env_loader import load_env
 from common.telegram import send_telegram as _tg_send
 from common.supabase_client import get_supabase
+from common.logger import get_logger
+from common.retry import retry, retry_call
+from common.config import BTC_LOG
 
 load_env()
+log = get_logger("btc_agent", BTC_LOG)
 
 import pyupbit
 from openai import OpenAI
@@ -29,7 +33,7 @@ OPENAI_KEY    = os.environ.get("OPENAI_API_KEY", "")
 DRY_RUN       = os.environ.get("DRY_RUN", "0") == "1"
 
 if not all([UPBIT_ACCESS, UPBIT_SECRET, OPENAI_KEY]):
-    print("필수 환경변수 없음: UPBIT keys + OPENAI_API_KEY 필요", file=sys.stderr)
+    log.critical("필수 환경변수 없음: UPBIT keys + OPENAI_API_KEY 필요")
     sys.exit(1)
 upbit   = pyupbit.Upbit(UPBIT_ACCESS, UPBIT_SECRET)
 supabase = get_supabase()
@@ -135,7 +139,10 @@ def get_volume_analysis(df) -> dict:
 # ── Fear & Greed ──────────────────────────────────
 def get_fear_greed() -> dict:
     try:
-        res   = requests.get("https://api.alternative.me/fng/?limit=1", timeout=5)
+        res = retry_call(requests.get, args=("https://api.alternative.me/fng/?limit=1",),
+                         kwargs={"timeout": 5}, max_attempts=2, default=None)
+        if res is None:
+            return {"value": 50, "label": "Unknown", "msg": "⚪ 중립(50)"}
         data  = res.json()["data"][0]
         value = int(data["value"])
         label = data["value_classification"]
@@ -175,21 +182,24 @@ def get_hourly_trend() -> dict:
         return {"trend": trend, "ema20": round(ema20, 0),
                 "ema50": round(ema50, 0), "rsi_1h": round(rsi, 1)}
     except Exception as e:
-        print(f"1시간봉 조회 실패: {e}")
+        log.warn(f"1시간봉 조회 실패: {e}")
         return {"trend": "UNKNOWN", "ema20": 0, "ema50": 0, "rsi_1h": 50}
 
 def get_kimchi_premium():
     try:
-        import requests as req
-        binance = req.get(
-            "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT",
-            timeout=3
-        ).json()
+        binance = retry_call(requests.get,
+            args=("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT",),
+            kwargs={"timeout": 3}, max_attempts=2, default=None)
+        if binance is None:
+            return None
+        binance = binance.json()
         binance_price = float(binance["price"])
-        usdt = req.get(
-            "https://api.upbit.com/v1/ticker?markets=KRW-USDT",
-            timeout=3
-        ).json()
+        usdt = retry_call(requests.get,
+            args=("https://api.upbit.com/v1/ticker?markets=KRW-USDT",),
+            kwargs={"timeout": 3}, max_attempts=2, default=None)
+        if usdt is None:
+            return None
+        usdt = usdt.json()
         usd_krw = float(usdt[0]["trade_price"])
         binance_krw = binance_price * usd_krw
         upbit_price = pyupbit.get_current_price("KRW-BTC")
@@ -198,7 +208,7 @@ def get_kimchi_premium():
         premium = (float(upbit_price) - binance_krw) / binance_krw * 100
         return round(premium, 2)
     except Exception as e:
-        print(f"[ERROR] 김치 프리미엄: {e}")
+        log.warn(f"김치 프리미엄 조회 실패: {e}")
         return None
 
 # ── 일봉 모멘텀 분석 ─────────────────────────────
@@ -230,7 +240,7 @@ def get_daily_momentum() -> dict:
             "ret_30d": round(float(ret_30d), 1),
         }
     except Exception as e:
-        print(f"일봉 모멘텀 조회 실패: {e}")
+        log.warn(f"일봉 모멘텀 조회 실패: {e}")
         return {"rsi_d": 50, "bb_pct": 50, "vol_ratio_d": 1.0,
                 "ret_7d": 0, "ret_30d": 0}
 
@@ -393,7 +403,7 @@ def open_position(entry_price, quantity, entry_krw) -> bool:
         supabase.table("btc_position").insert(row).execute()
         return True
     except Exception as e:
-        print(f"포지션 오픈 실패: {e}")
+        log.error(f"포지션 오픈 실패: {e}")
         return False
 
 def close_all_positions(exit_price):
@@ -411,7 +421,7 @@ def close_all_positions(exit_price):
                 "pnl_pct":    round(pnl_pct, 2),
             }).eq("id", pos["id"]).execute()
     except Exception as e:
-        print(f"포지션 종료 실패: {e}")
+        log.error(f"포지션 종료 실패: {e}")
 
 # ── 일일 손실 한도 ────────────────────────────────
 def check_daily_loss() -> bool:
@@ -498,7 +508,7 @@ def analyze_with_ai(indicators, news_summary, fg, htf, volume) -> dict:
         raw  = raw.replace("```json", "").replace("```", "").strip()
         return json.loads(raw)
     except Exception as e:
-        print(f"AI 분석 실패: {e}")
+        log.warn(f"AI 분석 실패: {e}")
         return {"action": "HOLD", "confidence": 0, "reason": "AI 오류"}
 
 # ── 분할 매수 단계 (복합 스코어 기반) ─────────────
@@ -514,11 +524,11 @@ def execute_trade(signal, indicators, fg=None, volume=None, comp=None) -> dict:
     # ── 코드 레벨 안전 필터 (복합 스코어 기반) ──
     if signal["action"] == "BUY":
         if fg and fg["value"] > 75:
-            print(f"⚠️ F&G {fg['value']} > 75 (극도 탐욕) — BUY 차단")
+            log.warn(f"F&G {fg['value']} > 75 (극도 탐욕) — BUY 차단")
             return {"result": "BLOCKED_FG"}
         is_extreme_fear = fg and fg["value"] <= 20
         if volume and volume["ratio"] <= 0.15 and not is_extreme_fear:
-            print(f"⚠️ 5분봉 거래량 {volume['ratio']}x 거의 0 — BUY 차단")
+            log.warn(f"5분봉 거래량 {volume['ratio']}x 거의 0 — BUY 차단")
             return {"result": "BLOCKED_VOLUME"}
 
     # ── 신뢰도 필터 ──
@@ -636,15 +646,15 @@ def execute_trade(signal, indicators, fg=None, volume=None, comp=None) -> dict:
             qty    = float(result.get("executed_volume", 0)) or (invest_krw / price)
             ok = open_position(price, qty, invest_krw)
             if not ok:
-                print("⚠️ 포지션 기록 실패 → 즉시 되팔기")
+                log.error("포지션 기록 실패 → 즉시 되팔기")
                 try:
                     upbit.sell_market_order("KRW-BTC", qty * 0.9995)
                 except Exception as e2:
-                    print(f"되팔기도 실패: {e2}")
+                    log.error(f"되팔기도 실패: {e2}")
                 send_telegram("🚨 BTC 매수 후 포지션 기록 실패 → 자동 되팔기 시도")
                 return {"result": "POSITION_ROLLBACK"}
         else:
-            print(f"[DRY_RUN] {stage}차 매수 — {invest_krw:,.0f}원")
+            log.info(f"[DRY_RUN] {stage}차 매수 — {invest_krw:,.0f}원")
 
         send_telegram(
             f"🟢 <b>BTC {stage}차 매수</b>\n"
@@ -686,16 +696,16 @@ def save_log(indicators, signal, result):
             "indicator_snapshot": json.dumps(indicators),
             "order_raw":          json.dumps(result),
         }).execute()
-        print("✅ Supabase 저장 완료")
+        log.debug("Supabase 저장 완료")
     except Exception as e:
-        print(f"❌ Supabase 저장 실패: {e}")
+        log.error(f"Supabase 저장 실패: {e}")
 
 # ── 메인 사이클 ───────────────────────────────────
 def run_trading_cycle():
 
     # 일일 손실 한도 체크
     if check_daily_loss():
-        print("🚨 일일 손실 한도 초과 — 사이클 스킵")
+        log.warn("일일 손실 한도 초과 — 사이클 스킵")
         return {"result": "DAILY_LOSS_LIMIT"}
 
     # 오늘 신규 매수 건수 한도 체크 (포지션 보유 중이면 매도 시그널 분석을 위해 스킵하지 않음)
@@ -709,13 +719,13 @@ def run_trading_cycle():
         if today_trades >= RISK.get("max_trades_per_day", 999):
             pos_check = get_open_position()
             if not pos_check:
-                print("오늘 BTC 매수 한도 도달 + 포지션 없음 — 사이클 스킵")
+                log.info("오늘 BTC 매수 한도 도달 + 포지션 없음 — 사이클 스킵")
                 return {"result": "MAX_TRADES_PER_DAY"}
             buy_limit_reached = True
     except Exception as e:
-        print(f"오늘 BTC 매수 건수 조회 실패: {e}")
+        log.warn(f"오늘 BTC 매수 건수 조회 실패: {e}")
 
-    print(f"\n[{datetime.now()}] 매매 사이클 시작")
+    log.info("매매 사이클 시작")
 
     df         = get_market_data()
     indicators = calculate_indicators(df)
@@ -747,21 +757,19 @@ def run_trading_cycle():
         funding=funding, oi=oi, ls_ratio=ls_ratio, kimchi=kimchi,
     )
 
-    print(f"Fear & Greed: {fg['label']}({fg_value})")
-    print(f"1시간봉 추세: {htf['trend']} | 일봉 RSI: {rsi_d} | 5분봉 RSI: {rsi_5m}")
-    print(f"BB 포지션: {momentum['bb_pct']:.0f}% | 일봉 거래량: {momentum['vol_ratio_d']}x")
-    print(f"7일 수익률: {momentum['ret_7d']:+.1f}% | 30일: {momentum['ret_30d']:+.1f}%")
-    print(f"펀딩비: {funding.get('rate', 0):+.4f}% ({funding.get('signal', '?')}) | "
-          f"롱/숏: {ls_ratio.get('ls_ratio', 1):.2f} ({ls_ratio.get('signal', '?')}) | "
-          f"OI: {oi.get('ratio', 1):.3f}x ({oi.get('signal', '?')})")
-    print(f"고래: 미확인TX {whale.get('unconfirmed_tx', 0):,}건 ({whale.get('signal', '?')})")
-    print(f"복합스코어: {comp['total']}/100 (F&G:{comp['fg']} RSI:{comp['rsi']} BB:{comp['bb']} "
-          f"Vol:{comp['vol']} Trend:{comp['trend']} Fund:{comp.get('funding',0)} "
-          f"LS:{comp.get('ls',0)} OI:{comp.get('oi',0)} Bonus:{comp['bonus']})")
-    print(f"거래량(5분봉): {volume['label']} ({volume['ratio']}x)")
-    print(f"포지션: {'있음 @ {:,}원'.format(int(pos['entry_price'])) if pos else '없음 (대기 중)'}")
+    log.info(f"F&G: {fg['label']}({fg_value}) | 1h: {htf['trend']} | dRSI: {rsi_d} | 5mRSI: {rsi_5m}")
+    log.info(f"BB: {momentum['bb_pct']:.0f}% | dVol: {momentum['vol_ratio_d']}x | 7d: {momentum['ret_7d']:+.1f}% | 30d: {momentum['ret_30d']:+.1f}%")
+    log.info(f"Fund: {funding.get('rate', 0):+.4f}%({funding.get('signal', '?')}) | "
+             f"LS: {ls_ratio.get('ls_ratio', 1):.2f}({ls_ratio.get('signal', '?')}) | "
+             f"OI: {oi.get('ratio', 1):.3f}x({oi.get('signal', '?')}) | "
+             f"Whale: {whale.get('unconfirmed_tx', 0):,}tx({whale.get('signal', '?')})")
+    log.info(f"Score: {comp['total']}/100 (F&G:{comp['fg']} RSI:{comp['rsi']} BB:{comp['bb']} "
+             f"Vol:{comp['vol']} Trend:{comp['trend']} Fund:{comp.get('funding',0)} "
+             f"LS:{comp.get('ls',0)} OI:{comp.get('oi',0)} Bonus:{comp['bonus']})")
+    log.info(f"Vol(5m): {volume['label']}({volume['ratio']}x) | "
+             f"Pos: {'@ {:,}원'.format(int(pos['entry_price'])) if pos else 'None'}")
     if kimchi is not None:
-        print(f"🇰🇷 김치 프리미엄: {kimchi:+.2f}%")
+        log.info(f"김치 프리미엄: {kimchi:+.2f}%")
 
     # ── 복합 스코어 기반 매매 결정 ──
     signal = None
@@ -770,26 +778,26 @@ def run_trading_cycle():
     # v6: 온체인 안전장치
     funding_blocked = False
     if RISK.get("funding_filter") and funding.get("signal") == "LONG_CROWDED":
-        print(f"⚠️ 펀딩비 롱 과열 ({funding.get('rate', 0):+.4f}%) — 매수 신중")
+        log.warn(f"펀딩비 롱 과열 ({funding.get('rate', 0):+.4f}%) — 매수 신중")
         funding_blocked = True
 
     kimchi_blocked = False
     if kimchi is not None and kimchi >= RISK.get("kimchi_premium_max", 5.0):
-        print(f"⚠️ 김치 프리미엄 과열 ({kimchi:+.2f}%) — 매수 차단")
+        log.warn(f"김치 프리미엄 과열 ({kimchi:+.2f}%) — 매수 차단")
         kimchi_blocked = True
 
     # 1) 복합 스코어 매수 (핵심 로직) — 일일 한도 도달 시 매수 차단
     if buy_limit_reached and not pos:
-        print("📋 오늘 BTC 매수 한도 도달 — 추가 매수 차단")
+        log.info("오늘 BTC 매수 한도 도달 — 추가 매수 차단")
     elif kimchi_blocked:
-        print(f"📋 김치 프리미엄 {kimchi:+.2f}% 과열 — 매수 차단")
+        log.info(f"김치 프리미엄 {kimchi:+.2f}% 과열 — 매수 차단")
     elif comp["total"] >= buy_min and not pos and htf["trend"] != "DOWNTREND":
         conf = min(60 + comp["total"] - buy_min, 90)
         signal = {
             "action": "BUY", "confidence": int(conf),
             "reason": f"복합스코어 {comp['total']}/{buy_min} (F&G={fg_value}, dRSI={rsi_d}) [룰기반]"
         }
-        print(f"🚨 복합스코어 매수 발동: {comp['total']}점 >= {buy_min}")
+        log.trade(f"복합스코어 매수 발동: {comp['total']}점 >= {buy_min}")
 
     # 2) 극단 공포 오버라이드: F&G<=15면 일봉 RSI<=55까지 매수 허용
     elif fg_value <= 15 and rsi_d <= 55 and not pos and htf["trend"] != "DOWNTREND":
@@ -797,7 +805,7 @@ def run_trading_cycle():
             "action": "BUY", "confidence": 78,
             "reason": f"극도공포 오버라이드 F&G={fg_value}, dRSI={rsi_d} [룰기반]"
         }
-        print(f"🚨 극도공포 오버라이드: F&G={fg_value}, dRSI={rsi_d}")
+        log.trade(f"극도공포 오버라이드: F&G={fg_value}, dRSI={rsi_d}")
 
     # 3) 기술적 과매수 매도: 일봉 RSI>=75 + 하락 추세
     elif rsi_d >= 75 and htf["trend"] == "DOWNTREND" and pos:
@@ -821,7 +829,7 @@ def run_trading_cycle():
                     "action": "SELL", "confidence": 70,
                     "reason": f"타임컷 {held_days}일 보유, 수익 {pnl_pct*100:+.1f}% [룰기반]"
                 }
-                print(f"⏰ 타임컷 발동: {held_days}일, 수익 {pnl_pct*100:+.1f}%")
+                log.trade(f"타임컷 발동: {held_days}일, 수익 {pnl_pct*100:+.1f}%")
 
     # 5) 룰기반 미발동 → AI 분석
     if not signal:
@@ -832,7 +840,7 @@ def run_trading_cycle():
     # 거래량 폭발
     vol_r = volume["ratio"]
     if vol_r >= 3.0:
-        print(f"💥 거래량 폭발 감지 ({vol_r:.1f}x)")
+        log.info(f"거래량 폭발 감지 ({vol_r:.1f}x)")
         if signal["action"] == "BUY":
             signal["confidence"] = max(signal["confidence"], 78)
         elif signal["action"] == "HOLD" and indicators["macd"] > 0 and rsi_d < 60:
@@ -848,7 +856,7 @@ def run_trading_cycle():
 
     result = execute_trade(signal, indicators, fg, volume, comp)
 
-    print(f"신호: {signal['action']} (신뢰도: {signal['confidence']}%) → {result['result']}")
+    log.trade(f"신호: {signal['action']} (신뢰도: {signal['confidence']}%) → {result['result']}")
 
     save_log(indicators, signal, result)
     return result
@@ -891,7 +899,7 @@ def send_hourly_report():
     """매시 정각 요약 리포트 — 텔레그램으로 발송 (cron 'report' 호출용)."""
     msg = build_hourly_summary()
     send_telegram(msg)
-    print(f"[매시 요약 발송] {(msg[:80] + '...') if len(msg) > 80 else msg}")
+    log.info(f"매시 요약 발송 완료")
 
 
 if __name__ == "__main__":
@@ -904,9 +912,9 @@ if __name__ == "__main__":
             fg = get_fear_greed()
             vol = get_volume_analysis(df)
             execute_trade({"action": "HOLD", "confidence": 0, "reason": "1분 체크"}, ind, fg, vol, None)
-            print(f"[{datetime.now()}] BTC 1분 손절/익절 체크 완료")
+            log.info("BTC 1분 손절/익절 체크 완료")
         else:
-            print(f"[{datetime.now()}] BTC 포지션 없음 — 스킵")
+            log.info("BTC 포지션 없음 — 스킵")
     elif len(sys.argv) > 1 and sys.argv[1] == "report":
         send_hourly_report()
     else:

@@ -1,5 +1,5 @@
 {
-  "date": "2026-02-26",
+  "date": "2026-02-27",
   "market_outlook": "강세",
   "risk_level": "높음",
   "sector_view": {
@@ -14,39 +14,63 @@
       "code": "042700",
       "name": "한미반도체",
       "action": "BUY",
-      "reason": "RSI가 매우 낮고 반도체 섹터의 긍정적인 모멘텀을 반영."
+      "reason": "RSI가 매우 낮아 반등 가능성이 높음"
     },
     {
       "code": "000660",
       "name": "SK하이닉스",
       "action": "BUY",
-      "reason": "반도체 가격 상승 기대감으로 매수 기회."
+      "reason": "미국 반도체 긍정적 영향으로 상승 기대"
     },
     {
       "code": "005380",
       "name": "현대차",
       "action": "BUY",
-      "reason": "자동차 섹터의 긍정적인 분위기와 함께 저점 매수 가능."
+      "reason": "자동차 섹터의 긍정적인 모멘텀"
     },
     {
       "code": "068270",
       "name": "셀트리온",
-      "action": "WATCH",
-      "reason": "바이오 섹터의 회복 가능성 관찰."
+      "action": "BUY",
+      "reason": "바이오 섹터의 상승 가능성"
     },
     {
       "code": "035420",
       "name": "NAVER",
       "action": "WATCH",
-      "reason": "디지털 광고 회복세를 기대하며 관찰."
+      "reason": "기초 체력이 좋지만 현재 RSI가 낮아 관망 필요"
     },
     {
       "code": "035720",
       "name": "카카오",
       "action": "WATCH",
-      "reason": "시장 반응을 지켜보며 매수 기회 탐색."
+      "reason": "기초 체력은 좋으나 시장 변동성에 따라 관망"
+    },
+    {
+      "code": "207940",
+      "name": "삼성바이오로직스",
+      "action": "WATCH",
+      "reason": "바이오 섹터의 긍정적인 전망"
+    },
+    {
+      "code": "051910",
+      "name": "LG화학",
+      "action": "WATCH",
+      "reason": "전반적인 소비재 섹터의 안정성"
+    },
+    {
+      "code": "000270",
+      "name": "기아",
+      "action": "WATCH",
+      "reason": "자동차 섹터의 긍정적 전망을 반영"
+    },
+    {
+      "code": "051900",
+      "name": "LG생활건강",
+      "action": "WATCH",
+      "reason": "소비재 섹터의 안정성으로 관망 필요"
     }
   ],
-  "summary": "반도체와 자동차 섹터의 긍정적인 모멘텀을 활용하여 공격적인 매수 전략을 추천.",
+  "summary": "오늘은 반도체와 자동차 섹터의 긍정적인 모멘텀으로 공격적인 매수를 추천합니다.",
   "source": "AI"
 }

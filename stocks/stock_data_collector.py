@@ -27,28 +27,13 @@ import requests
 from datetime import datetime, timedelta
 from pathlib import Path
 
-# ─────────────────────────────────────────────
-# 환경변수 로드
-# ─────────────────────────────────────────────
-def _load_env():
-    openclaw_json = Path('/home/wlsdud5035/.openclaw/openclaw.json')
-    if openclaw_json.exists():
-        d = json.loads(openclaw_json.read_text())
-        for k, v in (d.get('env') or {}).items():
-            if isinstance(v, str):
-                os.environ.setdefault(k, v)
-    for p in [
-        Path('/home/wlsdud5035/.openclaw/.env'),
-        Path('/home/wlsdud5035/.openclaw/workspace/skills/kiwoom-api/.env'),
-    ]:
-        if not p.exists():
-            continue
-        for line in p.read_text().splitlines():
-            if '=' in line and not line.startswith('#'):
-                k, _, v = line.partition('=')
-                os.environ.setdefault(k.strip(), v.strip())
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from common.env_loader import load_env
+from common.logger import get_logger
+from common.config import STOCK_COLLECTOR_LOG
 
-_load_env()
+load_env()
+_log = get_logger("stock_collector", STOCK_COLLECTOR_LOG)
 
 from supabase import create_client
 
@@ -64,9 +49,12 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if (SUPABASE_URL and SUPABA
 # 유틸리티
 # ─────────────────────────────────────────────
 def log(msg: str, level: str = "INFO"):
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    prefix = {"INFO": "ℹ️", "WARN": "⚠️", "ERROR": "❌", "OK": "✅"}.get(level, "")
-    print(f"[{ts}] {prefix} {msg}")
+    """Backward-compat wrapper routing to structured logger."""
+    _dispatch = {
+        "INFO": _log.info, "WARN": _log.warn,
+        "ERROR": _log.error, "OK": _log.info,
+    }
+    _dispatch.get(level, _log.info)(msg)
 
 
 def send_telegram(msg: str):

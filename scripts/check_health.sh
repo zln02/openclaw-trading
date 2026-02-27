@@ -2,9 +2,17 @@
 # 에이전트 헬스체크 — 5분마다 cron으로 실행
 # 로그가 10분 이상 안 갱신되면 텔레그램 경보
 
-LOG_FILE="/home/wlsdud5035/.openclaw/logs/stock_trading.log"
-BOT_TOKEN="$(python3 -c "import json; d=json.load(open('/home/wlsdud5035/.openclaw/openclaw.json')); print(d.get('env',{}).get('TELEGRAM_BOT_TOKEN',''))")"
-CHAT_ID="$(python3 -c "import json; d=json.load(open('/home/wlsdud5035/.openclaw/openclaw.json')); print(d.get('env',{}).get('TELEGRAM_CHAT_ID',''))")"
+OPENCLAW_ROOT="/home/wlsdud5035/.openclaw"
+OPENCLAW_JSON="$OPENCLAW_ROOT/openclaw.json"
+OPENCLAW_ENV="$OPENCLAW_ROOT/.env"
+LOG_FILE="$OPENCLAW_ROOT/logs/stock_trading.log"
+
+# .env 로드 (공통 패턴)
+if [ -f "$OPENCLAW_ENV" ]; then set -a; source "$OPENCLAW_ENV"; set +a; fi
+
+# openclaw.json에서 환경변수 추출
+BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-$(python3 -c "import json; d=json.load(open('$OPENCLAW_JSON')); print(d.get('env',{}).get('TELEGRAM_BOT_TOKEN',''))" 2>/dev/null)}"
+CHAT_ID="${TELEGRAM_CHAT_ID:-$(python3 -c "import json; d=json.load(open('$OPENCLAW_JSON')); print(d.get('env',{}).get('TELEGRAM_CHAT_ID',''))" 2>/dev/null)}"
 
 # 장 중인지 체크 (평일 09:00~15:30)
 DAY=$(date +%u)  # 1=월 ... 7=일

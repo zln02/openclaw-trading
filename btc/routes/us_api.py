@@ -1,5 +1,6 @@
 """US stock-related API endpoints."""
 import time as _time
+import asyncio
 from pathlib import Path
 from fastapi import APIRouter, Query
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -8,6 +9,9 @@ import sys as _sys
 _sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from common.supabase_client import get_supabase
 from common.config import US_TRADING_LOG
+from common.logger import get_logger
+
+log = get_logger("us_api")
 
 supabase = get_supabase()
 router = APIRouter()
@@ -74,7 +78,7 @@ async def api_us_positions():
             },
         }
     except Exception as e:
-        print(f"[ERROR] us positions: {e}")
+        log.error(f"us positions: {e}")
         return {"positions": [], "summary": {}}
 
 
@@ -98,7 +102,7 @@ async def api_us_chart(symbol: str, period: str = Query("3mo")):
             })
         return {"candles": candles, "symbol": symbol}
     except Exception as e:
-        print(f"[ERROR] us chart: {e}")
+        log.error(f"us chart: {e}")
         return {"candles": [], "symbol": symbol}
 
 
@@ -128,7 +132,7 @@ async def api_us_trades():
         )
         return res.data or []
     except Exception as e:
-        print(f"[ERROR] us trades: {e}")
+        log.error(f"us trades: {e}")
         return []
 
 
@@ -139,54 +143,64 @@ async def api_us_market():
     return {"indices": data, "regime": regime}
 
 
-def _get_market_regime() -> dict:
-    """SPY 200MA + VIX 기반 마켓 레짐."""
-    cache_key = "_regime_cache"
-    cached = getattr(_get_market_regime, cache_key, None)
-    if cached and _time.time() - cached.get("ts", 0) < 600:
-        return cached.get("data", {})
+@router.get("/api/us/realtime/news")
+async def api_us_realtime_news(
+    symbol: str = Query("BTC"),
+    limit: int = Query(10, ge=1, le=50),
+):
+    """Phase 9: normalized news snapshot for US-side dashboard widgets."""
     try:
-        import yfinance as _yf_r
-        spy = _yf_r.Ticker("SPY")
-        spy_hist = spy.history(period="1y")
-        if spy_hist is None or len(spy_hist) < 200:
-            return {"regime": "UNKNOWN"}
-        close = spy_hist["Close"]
-        ma200 = float(close.rolling(200).mean().iloc[-1])
-        ma50 = float(close.rolling(50).mean().iloc[-1])
-        current = float(close.iloc[-1])
-        above_200 = current > ma200
-        above_50 = current > ma50
+        from common.data import collect_news_once
 
-        vix_val = 20.0
-        try:
-            vix = _yf_r.Ticker("^VIX")
-            vix_hist = vix.history(period="5d")
-            if vix_hist is not None and not vix_hist.empty:
-                vix_val = float(vix_hist["Close"].iloc[-1])
-        except Exception:
-            pass
+        rows = await asyncio.to_thread(
+            collect_news_once,
+            symbol.upper(),
+            int(limit),
+        )
+        return {"items": rows, "count": len(rows)}
+    except Exception as e:
+        log.error(f"us realtime news: {e}")
+        return {"items": [], "count": 0}
 
-        if above_200 and above_50:
-            regime = "BULL"
-        elif above_200 and not above_50:
-            regime = "CORRECTION"
-        elif not above_200 and above_50:
-            regime = "RECOVERY"
-        else:
-            regime = "BEAR"
 
-        result = {
-            "regime": regime,
-            "spy_price": round(current, 2),
-            "spy_ma200": round(ma200, 2),
-            "spy_ma50": round(ma50, 2),
-            "vix": round(vix_val, 1),
+@router.get("/api/us/realtime/price/{symbol}")
+async def api_us_realtime_price(symbol: str):
+    """Phase 9: realtime-like US price snapshot."""
+    try:
+        from common.data import get_price_snapshot
+
+        return await asyncio.to_thread(get_price_snapshot, symbol, "us")
+    except Exception as e:
+        log.error(f"us realtime price: {e}")
+        return {
+            "symbol": symbol.upper(),
+            "price": 0.0,
+            "volume": 0.0,
+            "source": "us",
         }
-        setattr(_get_market_regime, cache_key, {"ts": _time.time(), "data": result})
-        return result
-    except Exception:
-        return {"regime": "UNKNOWN"}
+
+
+@router.get("/api/us/realtime/alt/{symbol}")
+async def api_us_realtime_alt(symbol: str):
+    """Phase 9: alternative-data snapshot for US symbol."""
+    try:
+        from common.data import get_alternative_data
+
+        return await asyncio.to_thread(get_alternative_data, symbol)
+    except Exception as e:
+        log.error(f"us realtime alt: {e}")
+        return {
+            "symbol": symbol.upper(),
+            "search_trend_7d": 0.0,
+            "social_mentions_24h": 0,
+            "sentiment_score": 0.0,
+        }
+
+
+def _get_market_regime() -> dict:
+    """SPY 200MA + VIX 기반 마켓 레짐 — common 모듈 위임."""
+    from common.market_data import get_market_regime
+    return get_market_regime()
 
 
 @router.get("/api/us/fx")
@@ -203,7 +217,7 @@ async def api_us_fx():
             _fx_cache["rate"] = rate
             return {"usdkrw": rate}
     except Exception as e:
-        print(f"[ERROR] fx: {e}")
+        log.error(f"fx: {e}")
     if _fx_cache["rate"] > 0:
         return {"usdkrw": _fx_cache["rate"]}
     return {"usdkrw": 1450}
@@ -229,7 +243,7 @@ def _fetch_us_signals() -> dict:
         items = [r for r in rows if r.get("run_date") == latest_date]
         return {"run_date": latest_date, "items": items}
     except Exception as e:
-        print(f"[us] Supabase 조회 실패: {e}")
+        log.error(f"us Supabase 조회 실패: {e}")
         return {"run_date": None, "items": []}
 
 

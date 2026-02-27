@@ -1,5 +1,5 @@
 """BTC-related API endpoints."""
-import os, time, json, requests, subprocess
+import os, time, json, requests, subprocess, asyncio
 from datetime import datetime
 from pathlib import Path
 from fastapi import APIRouter, Query
@@ -10,6 +10,9 @@ import sys as _sys
 _sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from common.supabase_client import get_supabase
 from common.config import BTC_LOG, BRAIN_PATH, MEMORY_PATH
+from common.logger import get_logger
+
+log = get_logger("btc_api")
 
 supabase = get_supabase()
 router = APIRouter()
@@ -38,7 +41,7 @@ def _refresh_upbit_cache():
             _upbit_cache["krw"] = float(bal) if bal is not None else None
             _upbit_cache["ok"] = True
     except Exception as e:
-        print(f"[ERROR] upbit cache: {e}")
+        log.error(f"upbit cache: {e}")
 
 
 def _get_hourly_trend():
@@ -65,7 +68,7 @@ def _get_hourly_trend():
         _trend_cache.update(value=result, time=time.time())
         return result
     except Exception as e:
-        print(f"[ERROR] trend: {e}")
+        log.error(f"trend: {e}")
         _trend_cache.update(value="SIDEWAYS", time=time.time())
         return "SIDEWAYS"
 
@@ -83,70 +86,66 @@ async def index():
     return BTC_HTML
 
 
+def _compute_composite_sync():
+    """Blocking composite computation — run via asyncio.to_thread."""
+    import yfinance as _yf_c
+    from ta.momentum import RSIIndicator as _RSI
+    from ta.volatility import BollingerBands as _BB
+
+    df = _yf_c.download("BTC-USD", period="90d", interval="1d", progress=False)
+    if df.empty:
+        return {"error": "데이터 없음"}
+    close = df["Close"].squeeze()
+    rsi_d = float(_RSI(close, window=14).rsi().iloc[-1])
+    bb = _BB(close, window=20)
+    bb_h, bb_l = float(bb.bollinger_hband().iloc[-1]), float(bb.bollinger_lband().iloc[-1])
+    bb_pct = (float(close.iloc[-1]) - bb_l) / (bb_h - bb_l) * 100 if bb_h > bb_l else 50
+    vol = df["Volume"].squeeze()
+    vol_avg = float(vol.rolling(20).mean().iloc[-1])
+    vol_ratio_d = float(vol.iloc[-1]) / vol_avg if vol_avg > 0 else 1.0
+    ret_7d = (float(close.iloc[-1]) / float(close.iloc[-8]) - 1) * 100 if len(close) > 8 else 0
+    ret_30d = (float(close.iloc[-1]) / float(close.iloc[-31]) - 1) * 100 if len(close) > 31 else 0
+
+    fg_val = 50
+    try:
+        fg_r = requests.get("https://api.alternative.me/fng/?limit=1", timeout=5)
+        fg_val = int(fg_r.json()["data"][0]["value"])
+    except Exception:
+        pass
+
+    trend = _get_hourly_trend()
+
+    from btc.btc_trading_agent import calc_btc_composite
+    comp = calc_btc_composite(fg_val, rsi_d, bb_pct, vol_ratio_d, trend, ret_7d)
+
+    pos = None
+    if supabase:
+        pr = supabase.table("btc_position").select("*").eq("status", "OPEN").order("entry_time", desc=True).limit(1).execute()
+        pos = pr.data[0] if pr.data else None
+
+    cur_price = float(close.iloc[-1])
+    pos_pnl = None
+    if pos:
+        entry_p = float(pos.get("entry_price", 0))
+        if entry_p > 0:
+            pos_pnl = {"pnl_pct": round((cur_price * 1450 - entry_p) / entry_p * 100, 2),
+                       "entry_price": entry_p, "quantity": pos.get("quantity", 0),
+                       "entry_krw": pos.get("entry_krw", 0)}
+
+    return {
+        "composite": comp,
+        "fg_value": fg_val, "rsi_d": round(rsi_d, 1), "bb_pct": round(bb_pct, 1),
+        "vol_ratio_d": round(vol_ratio_d, 2), "trend": trend,
+        "ret_7d": round(ret_7d, 1), "ret_30d": round(ret_30d, 1),
+        "buy_threshold": 45,
+        "position": pos_pnl,
+    }
+
+
 @router.get("/api/btc/composite")
 async def api_btc_composite():
     try:
-        import yfinance as _yf_c
-        from ta.momentum import RSIIndicator as _RSI
-        from ta.volatility import BollingerBands as _BB
-
-        df = _yf_c.download("BTC-USD", period="90d", interval="1d", progress=False)
-        if df.empty:
-            return {"error": "데이터 없음"}
-        close = df["Close"].squeeze()
-        rsi_d = float(_RSI(close, window=14).rsi().iloc[-1])
-        bb = _BB(close, window=20)
-        bb_h, bb_l = float(bb.bollinger_hband().iloc[-1]), float(bb.bollinger_lband().iloc[-1])
-        bb_pct = (float(close.iloc[-1]) - bb_l) / (bb_h - bb_l) * 100 if bb_h > bb_l else 50
-        vol = df["Volume"].squeeze()
-        vol_avg = float(vol.rolling(20).mean().iloc[-1])
-        vol_ratio_d = float(vol.iloc[-1]) / vol_avg if vol_avg > 0 else 1.0
-        ret_7d = (float(close.iloc[-1]) / float(close.iloc[-8]) - 1) * 100 if len(close) > 8 else 0
-        ret_30d = (float(close.iloc[-1]) / float(close.iloc[-31]) - 1) * 100 if len(close) > 31 else 0
-
-        fg_val = 50
-        try:
-            fg_r = requests.get("https://api.alternative.me/fng/?limit=1", timeout=5)
-            fg_val = int(fg_r.json()["data"][0]["value"])
-        except Exception:
-            pass
-
-        trend = _get_hourly_trend()
-
-        def _score(fg, rsi, bb_p, vol_r, tr, r7):
-            fg_sc = 30 if fg <= 10 else 25 if fg <= 20 else 18 if fg <= 30 else 10 if fg <= 45 else 5 if fg <= 55 else 0
-            rsi_sc = 25 if rsi <= 30 else 20 if rsi <= 38 else 15 if rsi <= 45 else 8 if rsi <= 55 else 3 if rsi <= 65 else 0
-            bb_sc = 15 if bb_p <= 10 else 12 if bb_p <= 25 else 8 if bb_p <= 40 else 4 if bb_p <= 55 else 0
-            vol_sc = 15 if vol_r >= 2.0 else 12 if vol_r >= 1.5 else 8 if vol_r >= 1.0 else 4 if vol_r >= 0.6 else 0
-            tr_sc = 15 if tr == "UPTREND" else 8 if tr == "SIDEWAYS" else 0
-            bonus = 5 if r7 <= -15 else 3 if r7 <= -10 else 0
-            return {"total": min(fg_sc+rsi_sc+bb_sc+vol_sc+tr_sc+bonus, 100),
-                    "fg": fg_sc, "rsi": rsi_sc, "bb": bb_sc, "vol": vol_sc, "trend": tr_sc, "bonus": bonus}
-
-        comp = _score(fg_val, rsi_d, bb_pct, vol_ratio_d, trend, ret_7d)
-
-        pos = None
-        if supabase:
-            pr = supabase.table("btc_position").select("*").eq("status", "OPEN").order("entry_time", desc=True).limit(1).execute()
-            pos = pr.data[0] if pr.data else None
-
-        cur_price = float(close.iloc[-1])
-        pos_pnl = None
-        if pos:
-            entry_p = float(pos.get("entry_price", 0))
-            if entry_p > 0:
-                pos_pnl = {"pnl_pct": round((cur_price * 1450 - entry_p) / entry_p * 100, 2),
-                           "entry_price": entry_p, "quantity": pos.get("quantity", 0),
-                           "entry_krw": pos.get("entry_krw", 0)}
-
-        return {
-            "composite": comp,
-            "fg_value": fg_val, "rsi_d": round(rsi_d, 1), "bb_pct": round(bb_pct, 1),
-            "vol_ratio_d": round(vol_ratio_d, 2), "trend": trend,
-            "ret_7d": round(ret_7d, 1), "ret_30d": round(ret_30d, 1),
-            "buy_threshold": 45,
-            "position": pos_pnl,
-        }
+        return await asyncio.to_thread(_compute_composite_sync)
     except Exception as e:
         return {"error": str(e)}
 
@@ -259,7 +258,7 @@ async def api_btc_portfolio():
             "summary": summary,
         }
     except Exception as e:
-        print(f"[ERROR] btc portfolio: {e}")
+        log.error(f"btc portfolio: {e}")
         return {"error": str(e), "open_positions": [], "closed_positions": [], "summary": {}}
 
 
@@ -346,7 +345,7 @@ async def get_stats():
             "krw_balance": krw_balance,
         }
     except Exception as e:
-        print(f"[ERROR] stats: {e}")
+        log.error(f"stats: {e}")
         return {"error": str(e)}
 
 
@@ -362,7 +361,7 @@ async def get_trades():
                 t["timestamp"] = t["timestamp"][:19]
         return data
     except Exception as e:
-        print(f"[ERROR] trades: {e}")
+        log.error(f"trades: {e}")
         return []
 
 
@@ -378,62 +377,70 @@ async def get_logs():
         ]
         return {"lines": lines}
     except Exception as e:
-        print(f"[ERROR] logs: {e}")
+        log.error(f"logs: {e}")
         return {"lines": [f"로그 읽기 실패: {e}"]}
+
+
+def _fetch_news_sync():
+    import xml.etree.ElementTree as ET
+    res = requests.get(
+        "https://www.coindesk.com/arc/outboundfeeds/rss/",
+        timeout=5,
+        headers={"User-Agent": "Mozilla/5.0"}
+    )
+    root = ET.fromstring(res.content)
+    items = root.findall(".//item")[:8]
+    return [
+        {
+            "title": item.findtext("title", ""),
+            "url": item.findtext("link", ""),
+            "time": (item.findtext("pubDate", "") or "")[:16],
+            "source": "CoinDesk",
+        }
+        for item in items
+    ]
 
 
 @router.get("/api/news")
 async def get_news():
     try:
-        import xml.etree.ElementTree as ET
-        res = requests.get(
-            "https://www.coindesk.com/arc/outboundfeeds/rss/",
-            timeout=5,
-            headers={"User-Agent": "Mozilla/5.0"}
-        )
-        root = ET.fromstring(res.content)
-        items = root.findall(".//item")[:8]
-        return [
-            {
-                "title": item.findtext("title", ""),
-                "url": item.findtext("link", ""),
-                "time": (item.findtext("pubDate", "") or "")[:16],
-                "source": "CoinDesk",
-            }
-            for item in items
-        ]
+        return await asyncio.to_thread(_fetch_news_sync)
     except Exception as e:
-        print(f"[ERROR] news: {e}")
+        log.error(f"news: {e}")
         return []
+
+
+def _fetch_candles_sync(interval):
+    import pyupbit
+    df = pyupbit.get_ohlcv("KRW-BTC", interval=interval, count=100)
+    if df is None or df.empty:
+        return []
+    result = []
+    for ts, row in df.iterrows():
+        result.append({
+            "time": int(ts.timestamp()),
+            "open": float(row["open"]),
+            "high": float(row["high"]),
+            "low": float(row["low"]),
+            "close": float(row["close"]),
+            "volume": float(row["volume"]),
+        })
+    return result
 
 
 @router.get("/api/candles")
 async def get_candles(interval: str = Query("minute5")):
     try:
-        import pyupbit
-        df = pyupbit.get_ohlcv("KRW-BTC", interval=interval, count=100)
-        if df is None or df.empty:
-            return []
-        result = []
-        for ts, row in df.iterrows():
-            result.append({
-                "time": int(ts.timestamp()),
-                "open": float(row["open"]),
-                "high": float(row["high"]),
-                "low": float(row["low"]),
-                "close": float(row["close"]),
-                "volume": float(row["volume"]),
-            })
-        return result
+        return await asyncio.to_thread(_fetch_candles_sync, interval)
     except Exception as e:
-        print(f"[ERROR] candles: {e}")
+        log.error(f"candles: {e}")
         return []
 
 
 @router.get("/api/system")
 async def get_system():
     try:
-        cpu = psutil.cpu_percent(interval=1)
+        cpu = psutil.cpu_percent(interval=0)  # non-blocking; uses delta from last call
         mem = psutil.virtual_memory()
         disk = psutil.disk_usage("/")
 
@@ -459,8 +466,97 @@ async def get_system():
             "upbit_ok": upbit_ok,
         }
     except Exception as e:
-        print(f"[ERROR] system: {e}")
+        log.error(f"system: {e}")
         return {"error": str(e)}
+
+
+@router.get("/api/realtime/news")
+async def get_realtime_news(
+    currencies: str = Query("BTC"),
+    limit: int = Query(10, ge=1, le=50),
+):
+    """Phase 9: normalized news snapshot.
+
+    Output records:
+    {headline, source, timestamp, symbols[], sentiment_raw, url, id}
+    """
+    try:
+        from common.data import collect_news_once
+
+        rows = await asyncio.to_thread(
+            collect_news_once,
+            currencies.upper(),
+            int(limit),
+        )
+        return {"items": rows, "count": len(rows)}
+    except Exception as e:
+        log.error(f"realtime news: {e}")
+        return {"items": [], "count": 0}
+
+
+@router.get("/api/realtime/orderbook")
+async def get_realtime_orderbook(
+    market: str = Query("binance"),
+    symbol: str = Query("BTCUSDT"),
+):
+    """Phase 9: orderbook snapshot endpoint.
+
+    market=binance -> symbol like BTCUSDT
+    market=upbit   -> symbol like KRW-BTC
+    """
+    try:
+        from common.data import fetch_binance_orderbook, fetch_upbit_orderbook
+
+        mk = market.lower().strip()
+        if mk == "upbit":
+            snap = await asyncio.to_thread(fetch_upbit_orderbook, symbol.upper())
+        else:
+            snap = await asyncio.to_thread(fetch_binance_orderbook, symbol.upper())
+        return snap
+    except Exception as e:
+        log.error(f"realtime orderbook: {e}")
+        return {
+            "symbol": symbol,
+            "bids": [],
+            "asks": [],
+            "spread": 0.0,
+            "imbalance": 0.0,
+            "source": market,
+        }
+
+
+@router.get("/api/realtime/alt/{symbol}")
+async def get_realtime_alt_data(symbol: str):
+    """Phase 9: alternative-data snapshot endpoint."""
+    try:
+        from common.data import get_alternative_data
+
+        return await asyncio.to_thread(get_alternative_data, symbol)
+    except Exception as e:
+        log.error(f"realtime alt_data: {e}")
+        return {
+            "symbol": symbol.upper(),
+            "search_trend_7d": 0.0,
+            "social_mentions_24h": 0,
+            "sentiment_score": 0.0,
+        }
+
+
+@router.get("/api/realtime/price/{symbol}")
+async def get_realtime_price(symbol: str, market: str = Query("auto")):
+    """Phase 9: realtime price snapshot endpoint."""
+    try:
+        from common.data import get_price_snapshot
+
+        return await asyncio.to_thread(get_price_snapshot, symbol, market)
+    except Exception as e:
+        log.error(f"realtime price: {e}")
+        return {
+            "symbol": symbol,
+            "price": 0.0,
+            "volume": 0.0,
+            "source": market,
+        }
 
 
 @router.get("/api/brain")
@@ -487,5 +583,5 @@ async def get_brain():
             "memory": memory,
         }
     except Exception as e:
-        print(f"[ERROR] brain: {e}")
+        log.error(f"brain: {e}")
         return {"error": str(e)}

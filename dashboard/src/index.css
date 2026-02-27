@@ -1,0 +1,27 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-gray-950 text-gray-100 font-sans antialiased;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-gray-900 border border-gray-800 rounded-xl p-4;
+  }
+  .badge-green {
+    @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-emerald-500/20 text-emerald-400;
+  }
+  .badge-red {
+    @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-500/20 text-red-400;
+  }
+  .badge-yellow {
+    @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-500/20 text-amber-400;
+  }
+  .badge-blue {
+    @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-500/20 text-blue-400;
+  }
+}

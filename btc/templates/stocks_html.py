@@ -456,13 +456,24 @@ function renderHeatmap(stocks) {
 function renderStockTable(stocks) {
   var tbody = document.querySelector('#stock-table tbody');
   if (!tbody) return;
-  var sorted = (stocks || []).slice().sort(function(a,b){ return (parseFloat(b.change)||0) - (parseFloat(a.change)||0); });
-  tbody.innerHTML = sorted.map(function(s) {
+  var sorted = (stocks || []).slice().sort(function(a,b){
+    return (parseFloat(b.change)||0) - (parseFloat(a.change)||0);
+  });
+  tbody.innerHTML = '';
+  sorted.forEach(function(s) {
     var change = parseFloat(s.change) || 0;
     var cls = change >= 0 ? 'up' : 'down';
     var rsi = parseFloat(s.rsi) || 50;
-    return '<tr onclick="selectStock(\'' + s.code + '\',\'' + (s.name||'').replace(/'/g, "\\'") + '\')" style="cursor:pointer"><td><b>' + (s.name||s.code) + '</b><br><small style="color:var(--muted)">' + s.code + '</small></td><td>' + (s.price||0).toLocaleString('ko-KR') + '</td><td class="' + cls + '">' + (change >= 0 ? '+' : '') + change.toFixed(2) + '%</td><td>' + rsi.toFixed(0) + '</td><td>' + (s.volume ? (s.volume/1e6).toFixed(1) + 'M' : '--') + '</td></tr>';
-  }).join('');
+    var tr = document.createElement('tr');
+    tr.style.cursor = 'pointer';
+    tr.onclick = function() { selectStock(s.code, s.name || ''); };
+    tr.innerHTML = '<td><b>' + (s.name||s.code) + '</b><br><small style="color:var(--muted)">' + s.code + '</small></td>' +
+      '<td>' + (s.price||0).toLocaleString('ko-KR') + '</td>' +
+      '<td class="' + cls + '">' + (change >= 0 ? '+' : '') + change.toFixed(2) + '%</td>' +
+      '<td>' + rsi.toFixed(0) + '</td>' +
+      '<td>' + (s.volume ? (s.volume/1e6).toFixed(1) + 'M' : '--') + '</td>';
+    tbody.appendChild(tr);
+  });
 }
 
 async function loadPortfolio() {
