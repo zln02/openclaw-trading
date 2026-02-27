@@ -1,5 +1,5 @@
 """Korean stock-related API endpoints."""
-import json, time as _time
+import json, time as _time, asyncio
 from datetime import datetime, timedelta
 from pathlib import Path
 from collections import defaultdict
@@ -13,6 +13,9 @@ from common.config import (
     WORKSPACE, STRATEGY_JSON,
     STOCK_TRADING_LOG, STOCK_CHECK_LOG, STOCK_PREMARKET_LOG, STOCK_COLLECTOR_LOG,
 )
+from common.logger import get_logger
+
+log = get_logger("stock_api")
 
 supabase = get_supabase()
 router = APIRouter()
@@ -31,7 +34,7 @@ def _get_kiwoom():
             from stocks.kiwoom_client import KiwoomClient
             _kiwoom_client = KiwoomClient()
         except Exception as e:
-            print(f"[WARN] Kiwoom init: {e}")
+            log.warn(f"Kiwoom init: {e}")
     return _kiwoom_client
 
 
@@ -92,7 +95,7 @@ def _fetch_market_summary_dict():
             change_pct = (change / prev * 100) if prev and prev > 0 else 0
             result[key] = {"price": round(price, 2), "change": round(change, 2), "change_pct": round(change_pct, 2)}
         except Exception as e:
-            print(f"[WARN] market-summary {key}: {e}")
+            log.warn(f"market-summary {key}: {e}")
             result[key] = {"price": 0, "change": 0, "change_pct": 0}
     return result
 
@@ -106,7 +109,7 @@ async def get_market_summary():
         _market_summary_cache["data"], _market_summary_cache["ts"] = data, now
         return data
     except Exception as e:
-        print(f"[ERROR] market-summary: {e}")
+        log.error(f"market-summary: {e}")
         return {k: {"price": 0, "change": 0, "change_pct": 0} for k in ["kospi", "kosdaq", "sp500", "nasdaq", "nikkei", "usdkrw", "btc"]}
 
 
@@ -184,7 +187,7 @@ async def get_stocks_overview():
         _overview_cache["ts"] = now
         return result
     except Exception as e:
-        print(f"[ERROR] stocks overview: {e}")
+        log.error(f"stocks overview: {e}")
         return []
 
 
@@ -192,13 +195,96 @@ async def get_stocks_overview():
 async def get_stock_live_price(code: str):
     db_code = code.lstrip("A") if code.startswith("A") else code
     kiwoom = _get_kiwoom()
-    if not kiwoom:
-        return {"price": 0, "is_live": False}
+    if kiwoom:
+        try:
+            price = kiwoom.get_current_price(db_code)
+            if price and price > 0:
+                return {"price": price, "is_live": True, "code": code}
+        except Exception:
+            pass
+    # 키움 실패/429 시 DB 일봉 최신가 폴백
+    if supabase:
+        try:
+            row = (
+                supabase.table("daily_ohlcv")
+                .select("close_price")
+                .eq("stock_code", db_code)
+                .order("date", desc=True)
+                .limit(1)
+                .execute()
+                .data
+            )
+            if row and row[0].get("close_price") is not None:
+                return {"price": float(row[0]["close_price"]), "is_live": False, "code": code}
+        except Exception:
+            pass
+    return {"price": 0, "is_live": False, "code": code}
+
+
+@router.get("/api/stocks/realtime/price/{code}")
+async def get_stock_realtime_price(code: str):
+    """Phase 9: KR realtime-like price snapshot."""
     try:
-        price = kiwoom.get_current_price(db_code)
-        return {"price": price, "is_live": True, "code": code}
-    except Exception:
-        return {"price": 0, "is_live": False}
+        from common.data import get_price_snapshot
+
+        kiwoom = _get_kiwoom()
+        snap = await asyncio.to_thread(
+            get_price_snapshot,
+            code,
+            "kr",
+            kiwoom,
+        )
+        snap["code"] = code
+        return snap
+    except Exception as e:
+        log.error(f"stocks realtime price: {e}")
+        return {
+            "symbol": code,
+            "code": code,
+            "price": 0.0,
+            "volume": 0.0,
+            "source": "kr",
+        }
+
+
+@router.get("/api/stocks/realtime/orderbook/{code}")
+async def get_stock_realtime_orderbook(code: str):
+    """Phase 9: KR orderbook snapshot (kiwoom fallback)."""
+    try:
+        from common.data import fetch_kr_orderbook_snapshot
+
+        kiwoom = _get_kiwoom()
+        snap = await asyncio.to_thread(fetch_kr_orderbook_snapshot, code, kiwoom)
+        snap["code"] = code
+        return snap
+    except Exception as e:
+        log.error(f"stocks realtime orderbook: {e}")
+        return {
+            "symbol": code,
+            "code": code,
+            "bids": [],
+            "asks": [],
+            "spread": 0.0,
+            "imbalance": 0.0,
+            "source": "kiwoom_fallback",
+        }
+
+
+@router.get("/api/stocks/realtime/alt/{symbol}")
+async def get_stock_realtime_alt_data(symbol: str):
+    """Phase 9: alternative-data snapshot for KR symbol."""
+    try:
+        from common.data import get_alternative_data
+
+        return await asyncio.to_thread(get_alternative_data, symbol)
+    except Exception as e:
+        log.error(f"stocks realtime alt_data: {e}")
+        return {
+            "symbol": symbol.upper(),
+            "search_trend_7d": 0.0,
+            "social_mentions_24h": 0,
+            "sentiment_score": 0.0,
+        }
 
 
 @router.get("/api/stocks/chart/{code}")
@@ -297,7 +383,7 @@ async def get_stock_chart(code: str, interval: str = Query("1d")):
 
         return {"candles": candles, "name": _stock_name(code), "code": code}
     except Exception as e:
-        print(f"[ERROR] stock chart: {e}")
+        log.error(f"stock chart: {e}")
         return {"candles": [], "name": "", "code": code}
 
 
@@ -362,7 +448,7 @@ async def get_stock_indicators(code: str):
             "ma20": round(ma20, 0),
         }
     except Exception as e:
-        print(f"[ERROR] stock indicators: {e}")
+        log.error(f"stock indicators: {e}")
         return {"error": str(e)}
 
 
@@ -432,7 +518,7 @@ async def get_stocks_portfolio():
                         "is_live": market_open,
                     })
             except Exception as e:
-                print(f"[ERROR] portfolio positions: {e}")
+                log.error(f"portfolio positions: {e}")
                 positions = []
 
         if not positions and holdings:
@@ -494,7 +580,7 @@ async def get_stocks_portfolio():
             "is_market_open": market_open,
         }
     except Exception as e:
-        print(f"[ERROR] portfolio: {e}")
+        log.error(f"portfolio: {e}")
         return {"error": str(e), "positions": [], "deposit": 0, "total_evaluation": 0, "estimated_asset": 0}
 
 
@@ -528,7 +614,7 @@ async def get_stocks_daily_pnl(days: int = Query(7, ge=1, le=31)):
                 })
         return {"daily": results}
     except Exception as e:
-        print(f"[ERROR] daily-pnl: {e}")
+        log.error(f"daily-pnl: {e}")
         return {"daily": []}
 
 
@@ -595,5 +681,5 @@ async def get_stocks_trades():
             return res.data or []
         except Exception:
             pass
-        print(f"[ERROR] stocks trades: {e}")
+        log.error(f"stocks trades: {e}")
         return []

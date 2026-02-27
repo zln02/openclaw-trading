@@ -32,8 +32,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from common.env_loader import load_env
 from common.telegram import send_telegram as _tg_send
 from common.supabase_client import get_supabase
+from common.logger import get_logger
+from common.retry import retry, retry_call
+from common.config import US_TRADING_LOG
 
 load_env()
+_log = get_logger("us_agent", US_TRADING_LOG)
 
 sys.path.insert(0, str(Path(__file__).parent))
 from us_momentum_backtest import scan_today_top_us, US_UNIVERSE, MomentumScore
@@ -85,9 +89,12 @@ STOP_FLAG = Path(__file__).parent / "US_STOP_TRADING"
 # 유틸리티
 # ─────────────────────────────────────────────
 def log(msg: str, level: str = "INFO"):
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    prefix = {"INFO": "ℹ️", "WARN": "⚠️", "ERROR": "❌", "TRADE": "💰"}.get(level, "")
-    print(f"[US_AGENT][{ts}] {prefix} {msg}")
+    """Backward-compat wrapper routing to structured logger."""
+    _dispatch = {
+        "INFO": _log.info, "WARN": _log.warn,
+        "ERROR": _log.error, "TRADE": _log.trade,
+    }
+    _dispatch.get(level, _log.info)(msg)
 
 
 def send_telegram(msg: str):
@@ -102,59 +109,9 @@ def is_us_market_open() -> bool:
 
 
 # ─────────────────────────────────────────────
-# 시장 레짐 필터 (SPY 200MA + VIX)
+# 시장 레짐 필터 (SPY 200MA + VIX) — common 모듈 위임
 # ─────────────────────────────────────────────
-_regime_cache: Dict[str, any] = {}
-
-
-def get_market_regime() -> dict:
-    """SPY 200일 이동평균 기반 시장 레짐 판단 + VIX."""
-    if "regime" in _regime_cache:
-        return _regime_cache["regime"]
-    try:
-        spy = yf.Ticker("SPY")
-        spy_hist = spy.history(period="1y")
-        if spy_hist is None or len(spy_hist) < 200:
-            return {"regime": "UNKNOWN", "spy_above_200ma": True, "vix": 20}
-
-        close = spy_hist["Close"]
-        ma200 = float(close.rolling(200).mean().iloc[-1])
-        ma50 = float(close.rolling(50).mean().iloc[-1])
-        current = float(close.iloc[-1])
-        above_200 = current > ma200
-        above_50 = current > ma50
-
-        vix_val = 20.0
-        try:
-            vix = yf.Ticker("^VIX")
-            vix_hist = vix.history(period="5d")
-            if vix_hist is not None and not vix_hist.empty:
-                vix_val = float(vix_hist["Close"].iloc[-1])
-        except Exception:
-            pass
-
-        if above_200 and above_50:
-            regime = "BULL"
-        elif above_200 and not above_50:
-            regime = "CORRECTION"
-        elif not above_200 and above_50:
-            regime = "RECOVERY"
-        else:
-            regime = "BEAR"
-
-        result = {
-            "regime": regime,
-            "spy_price": current,
-            "spy_ma200": round(ma200, 2),
-            "spy_ma50": round(ma50, 2),
-            "spy_above_200ma": above_200,
-            "vix": round(vix_val, 1),
-        }
-        _regime_cache["regime"] = result
-        return result
-    except Exception as e:
-        log(f"시장 레짐 조회 실패: {e}", "WARN")
-        return {"regime": "UNKNOWN", "spy_above_200ma": True, "vix": 20}
+from common.market_data import get_market_regime  # noqa: E402
 
 
 def calc_relative_strength(symbol: str, days: int = 20) -> float:

@@ -21,4 +21,4 @@ while IFS= read -r line; do
     export "$line" 2>/dev/null
 done <<< "$ENV_VARS"
 
-exec .venv/bin/python btc/btc_dashboard.py
+exec .venv/bin/python3 btc/btc_dashboard.py

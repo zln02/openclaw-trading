@@ -93,7 +93,7 @@ def find_project_root() -> Path:
 class KiwoomAPIClient:
     """키움증권 REST API 클라이언트 v2"""
 
-    MIN_REQUEST_INTERVAL = 0.15
+    MIN_REQUEST_INTERVAL = 0.6  # 429 완화
 
     def __init__(self, use_mock: Optional[bool] = None):
         project_root = find_project_root()
