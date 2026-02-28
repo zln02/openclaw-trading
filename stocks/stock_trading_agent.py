@@ -27,6 +27,11 @@ from common.logger import get_logger
 from common.retry import retry, retry_call
 from common.config import STOCK_TRADING_LOG
 
+try:
+    from common.sheets_logger import append_trade as _sheets_append
+except ImportError:
+    _sheets_append = None
+
 load_env()
 _log = get_logger("stock_agent", STOCK_TRADING_LOG)
 
@@ -1165,6 +1170,11 @@ def execute_buy(
         f"📝 {signal.get('reason', '')}\n"
         f"⚠️ 모의투자"
     )
+    if _sheets_append:
+        try:
+            _sheets_append("kr", "매수", code, price, quantity, None, signal.get("reason", ""))
+        except Exception:
+            pass
 
     return {
         'result': 'BUY',
@@ -1250,6 +1260,13 @@ def execute_sell(stock: dict, signal: dict, indicators: dict, reason_prefix: str
         f"📝 {reason_prefix}{signal.get('reason', '') if isinstance(signal, dict) else ''}\n"
         f"⚠️ 모의투자"
     )
+    if _sheets_append:
+        try:
+            action = "손절" if pnl_pct < -2 else "익절" if pnl_pct > 2 else "매도"
+            reason = f"{reason_prefix}{signal.get('reason', '') if isinstance(signal, dict) else ''}"
+            _sheets_append("kr", action, code, price, total_qty, pnl_pct, reason)
+        except Exception:
+            pass
 
     return {
         'result': 'SELL',

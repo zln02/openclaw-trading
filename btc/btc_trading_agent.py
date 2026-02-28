@@ -19,6 +19,11 @@ from common.logger import get_logger
 from common.retry import retry, retry_call
 from common.config import BTC_LOG
 
+try:
+    from common.sheets_logger import append_trade as _sheets_append
+except ImportError:
+    _sheets_append = None
+
 load_env()
 log = get_logger("btc_agent", BTC_LOG)
 
@@ -182,7 +187,7 @@ def get_hourly_trend() -> dict:
         return {"trend": trend, "ema20": round(ema20, 0),
                 "ema50": round(ema50, 0), "rsi_1h": round(rsi, 1)}
     except Exception as e:
-        log.warn(f"1시간봉 조회 실패: {e}")
+        log.warning(f"1시간봉 조회 실패: {e}")
         return {"trend": "UNKNOWN", "ema20": 0, "ema50": 0, "rsi_1h": 50}
 
 def get_kimchi_premium():
@@ -208,7 +213,7 @@ def get_kimchi_premium():
         premium = (float(upbit_price) - binance_krw) / binance_krw * 100
         return round(premium, 2)
     except Exception as e:
-        log.warn(f"김치 프리미엄 조회 실패: {e}")
+        log.warning(f"김치 프리미엄 조회 실패: {e}")
         return None
 
 # ── 일봉 모멘텀 분석 ─────────────────────────────
@@ -240,18 +245,19 @@ def get_daily_momentum() -> dict:
             "ret_30d": round(float(ret_30d), 1),
         }
     except Exception as e:
-        log.warn(f"일봉 모멘텀 조회 실패: {e}")
+        log.warning(f"일봉 모멘텀 조회 실패: {e}")
         return {"rsi_d": 50, "bb_pct": 50, "vol_ratio_d": 1.0,
                 "ret_7d": 0, "ret_30d": 0}
 
 
 # ── BTC 복합 스코어 (v6 — 온체인 + 동적 가중치) ──
 def calc_btc_composite(fg_value, rsi_d, bb_pct, vol_ratio_d, trend, ret_7d=0,
-                        funding=None, oi=None, ls_ratio=None, kimchi=None):
+                        funding=None, oi=None, ls_ratio=None, kimchi=None,
+                        regime: str = "TRANSITION"):
     """
     BTC 매수 복합 스코어 (0~100).
     v6: 온체인 데이터(펀딩비, OI, 롱숏비율) 추가.
-    동적 가중치: 시장 상태에 따라 F&G vs 기술적 지표 비중 조절.
+    v6.1: regime 파라미터로 실제 동적 가중치 적용.
 
     배점 구조:
     - F&G: 22점 (공포 구간 보상)
@@ -263,6 +269,7 @@ def calc_btc_composite(fg_value, rsi_d, bb_pct, vol_ratio_d, trend, ret_7d=0,
     - 롱숏비율: 6점 (역발상)
     - OI/고래: 5점
     - 보너스: ±5점
+    - 레짐 조정: RISK_ON +5 / RISK_OFF -10 / CRISIS -20
     """
     # F&G (낮을수록 매수 기회)
     if fg_value <= 10:   fg_sc = 22
@@ -363,7 +370,16 @@ def calc_btc_composite(fg_value, rsi_d, bb_pct, vol_ratio_d, trend, ret_7d=0,
         elif kimchi >= 3.0:
             bonus -= 1
 
-    raw = fg_sc + rsi_sc + bb_sc + vol_sc + tr_sc + funding_sc + ls_sc + oi_sc + bonus
+    # ── 레짐 기반 실제 동적 조정 (v6.1) ──────────────
+    _regime_bonus_map = {
+        "RISK_ON":    +5,   # 강세장: 진입 문턱 낮춤
+        "TRANSITION":  0,
+        "RISK_OFF":  -10,   # 약세장: 진입 억제
+        "CRISIS":    -20,   # 위기: 강력 억제
+    }
+    regime_adj = _regime_bonus_map.get(str(regime).upper(), 0)
+
+    raw = fg_sc + rsi_sc + bb_sc + vol_sc + tr_sc + funding_sc + ls_sc + oi_sc + bonus + regime_adj
     total = max(0, min(raw, 100))
 
     return {
@@ -372,6 +388,8 @@ def calc_btc_composite(fg_value, rsi_d, bb_pct, vol_ratio_d, trend, ret_7d=0,
         "vol": vol_sc, "trend": tr_sc,
         "funding": funding_sc, "ls": ls_sc, "oi": oi_sc,
         "bonus": bonus,
+        "regime_adj": regime_adj,
+        "regime": regime,
         "raw": raw,
     }
 
@@ -508,7 +526,7 @@ def analyze_with_ai(indicators, news_summary, fg, htf, volume) -> dict:
         raw  = raw.replace("```json", "").replace("```", "").strip()
         return json.loads(raw)
     except Exception as e:
-        log.warn(f"AI 분석 실패: {e}")
+        log.warning(f"AI 분석 실패: {e}")
         return {"action": "HOLD", "confidence": 0, "reason": "AI 오류"}
 
 # ── 분할 매수 단계 (복합 스코어 기반) ─────────────
@@ -524,11 +542,11 @@ def execute_trade(signal, indicators, fg=None, volume=None, comp=None) -> dict:
     # ── 코드 레벨 안전 필터 (복합 스코어 기반) ──
     if signal["action"] == "BUY":
         if fg and fg["value"] > 75:
-            log.warn(f"F&G {fg['value']} > 75 (극도 탐욕) — BUY 차단")
+            log.warning(f"F&G {fg['value']} > 75 (극도 탐욕) — BUY 차단")
             return {"result": "BLOCKED_FG"}
         is_extreme_fear = fg and fg["value"] <= 20
         if volume and volume["ratio"] <= 0.15 and not is_extreme_fear:
-            log.warn(f"5분봉 거래량 {volume['ratio']}x 거의 0 — BUY 차단")
+            log.warning(f"5분봉 거래량 {volume['ratio']}x 거의 0 — BUY 차단")
             return {"result": "BLOCKED_VOLUME"}
 
     # ── 신뢰도 필터 ──
@@ -664,10 +682,18 @@ def execute_trade(signal, indicators, fg=None, volume=None, comp=None) -> dict:
             f"🎯 신뢰도: {signal['confidence']}%\n"
             f"📝 {signal['reason']}"
         )
+        if _sheets_append:
+            try:
+                _sheets_append("btc", "매수", "BTC", price, qty, None, signal.get("reason", ""))
+            except Exception:
+                pass
         return {"result": f"BUY_{stage}차"}
 
     # ── AI SELL ──
     elif signal["action"] == "SELL" and btc_balance > 0.00001:
+        pnl_pct = None
+        if pos:
+            pnl_pct = (price - pos["entry_price"]) / pos["entry_price"] * 100
         if not DRY_RUN:
             upbit.sell_market_order("KRW-BTC", btc_balance * 0.9995)
             close_all_positions(price)
@@ -678,6 +704,12 @@ def execute_trade(signal, indicators, fg=None, volume=None, comp=None) -> dict:
             f"🎯 신뢰도: {signal['confidence']}%\n"
             f"📝 {signal['reason']}"
         )
+        if _sheets_append:
+            try:
+                action = "손절" if pnl_pct is not None and pnl_pct < -2 else "익절" if pnl_pct is not None and pnl_pct > 2 else "매도"
+                _sheets_append("btc", action, "BTC", price, btc_balance, pnl_pct, signal.get("reason", ""))
+            except Exception:
+                pass
         return {"result": "SELL"}
 
     return {"result": "HOLD"}
@@ -705,7 +737,7 @@ def run_trading_cycle():
 
     # 일일 손실 한도 체크
     if check_daily_loss():
-        log.warn("일일 손실 한도 초과 — 사이클 스킵")
+        log.warning("일일 손실 한도 초과 — 사이클 스킵")
         return {"result": "DAILY_LOSS_LIMIT"}
 
     # 오늘 신규 매수 건수 한도 체크 (포지션 보유 중이면 매도 시그널 분석을 위해 스킵하지 않음)
@@ -723,7 +755,7 @@ def run_trading_cycle():
                 return {"result": "MAX_TRADES_PER_DAY"}
             buy_limit_reached = True
     except Exception as e:
-        log.warn(f"오늘 BTC 매수 건수 조회 실패: {e}")
+        log.warning(f"오늘 BTC 매수 건수 조회 실패: {e}")
 
     log.info("매매 사이클 시작")
 
@@ -741,11 +773,19 @@ def run_trading_cycle():
     from common.market_data import (
         get_btc_funding_rate, get_btc_open_interest,
         get_btc_long_short_ratio, get_btc_whale_activity,
+        get_market_regime,
     )
     funding  = get_btc_funding_rate()
     oi       = get_btc_open_interest()
     ls_ratio = get_btc_long_short_ratio()
     whale    = get_btc_whale_activity()
+
+    # ── 시장 레짐 (v6.1: 동적 가중치 실제 연동) ──
+    try:
+        _mr = get_market_regime()
+        market_regime = _mr.get("regime", "TRANSITION")
+    except Exception:
+        market_regime = "TRANSITION"
 
     fg_value = fg["value"]
     rsi_5m   = indicators["rsi"]
@@ -755,6 +795,7 @@ def run_trading_cycle():
         fg_value, rsi_d, momentum["bb_pct"],
         momentum["vol_ratio_d"], htf["trend"], momentum["ret_7d"],
         funding=funding, oi=oi, ls_ratio=ls_ratio, kimchi=kimchi,
+        regime=market_regime,
     )
 
     log.info(f"F&G: {fg['label']}({fg_value}) | 1h: {htf['trend']} | dRSI: {rsi_d} | 5mRSI: {rsi_5m}")
@@ -765,7 +806,8 @@ def run_trading_cycle():
              f"Whale: {whale.get('unconfirmed_tx', 0):,}tx({whale.get('signal', '?')})")
     log.info(f"Score: {comp['total']}/100 (F&G:{comp['fg']} RSI:{comp['rsi']} BB:{comp['bb']} "
              f"Vol:{comp['vol']} Trend:{comp['trend']} Fund:{comp.get('funding',0)} "
-             f"LS:{comp.get('ls',0)} OI:{comp.get('oi',0)} Bonus:{comp['bonus']})")
+             f"LS:{comp.get('ls',0)} OI:{comp.get('oi',0)} Bonus:{comp['bonus']} "
+             f"Regime:{market_regime}[{comp.get('regime_adj',0):+d}])")
     log.info(f"Vol(5m): {volume['label']}({volume['ratio']}x) | "
              f"Pos: {'@ {:,}원'.format(int(pos['entry_price'])) if pos else 'None'}")
     if kimchi is not None:
@@ -778,12 +820,12 @@ def run_trading_cycle():
     # v6: 온체인 안전장치
     funding_blocked = False
     if RISK.get("funding_filter") and funding.get("signal") == "LONG_CROWDED":
-        log.warn(f"펀딩비 롱 과열 ({funding.get('rate', 0):+.4f}%) — 매수 신중")
+        log.warning(f"펀딩비 롱 과열 ({funding.get('rate', 0):+.4f}%) — 매수 신중")
         funding_blocked = True
 
     kimchi_blocked = False
     if kimchi is not None and kimchi >= RISK.get("kimchi_premium_max", 5.0):
-        log.warn(f"김치 프리미엄 과열 ({kimchi:+.2f}%) — 매수 차단")
+        log.warning(f"김치 프리미엄 과열 ({kimchi:+.2f}%) — 매수 차단")
         kimchi_blocked = True
 
     # 1) 복합 스코어 매수 (핵심 로직) — 일일 한도 도달 시 매수 차단

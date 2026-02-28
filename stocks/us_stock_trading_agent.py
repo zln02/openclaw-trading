@@ -36,6 +36,11 @@ from common.logger import get_logger
 from common.retry import retry, retry_call
 from common.config import US_TRADING_LOG
 
+try:
+    from common.sheets_logger import append_trade as _sheets_append
+except ImportError:
+    _sheets_append = None
+
 load_env()
 _log = get_logger("us_agent", US_TRADING_LOG)
 
@@ -547,6 +552,11 @@ def execute_buy(symbol: str, score: float, indicators: dict) -> dict:
         f"📊 모멘텀: {score:.0f}\n"
         f"⚠️ 모의투자"
     )
+    if _sheets_append:
+        try:
+            _sheets_append("us", "매수", symbol, price, qty, None, f"모멘텀 {score:.0f}")
+        except Exception:
+            pass
 
     return {"result": "BUY", "symbol": symbol, "qty": qty, "price": price}
 
@@ -572,6 +582,12 @@ def execute_sell(symbol: str, position: dict, reason: str, indicators: dict) -> 
         f"📝 {reason}\n"
         f"⚠️ 모의투자"
     )
+    if _sheets_append:
+        try:
+            action = "손절" if pnl_pct < -3 else "익절" if pnl_pct > 5 else "매도"
+            _sheets_append("us", action, symbol, price, qty, pnl_pct, reason)
+        except Exception:
+            pass
 
     return {"result": "SELL", "pnl_pct": pnl_pct, "reason": reason}
 
