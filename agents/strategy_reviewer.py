@@ -21,6 +21,7 @@ from common.logger import get_logger
 from common.market_data import get_market_regime
 from common.supabase_client import get_supabase
 from common.telegram import send_telegram
+from common.utils import safe_float as _safe_float
 
 load_env()
 log = get_logger("strategy_reviewer")
@@ -36,15 +37,6 @@ def _to_date(value: str | date | datetime | None = None) -> date:
     if value is None:
         return datetime.now().date()
     return datetime.strptime(str(value)[:10], "%Y-%m-%d").date()
-
-
-def _safe_float(value, default: float = 0.0) -> float:
-    try:
-        if value is None:
-            return default
-        return float(value)
-    except Exception:
-        return default
 
 
 def _slice_iso(dt: str) -> str:
@@ -122,7 +114,7 @@ class StrategyReviewer:
         try:
             return json.loads(self.strategy_path.read_text(encoding="utf-8"))
         except Exception as exc:
-            log.warn("today_strategy load failed", error=exc)
+            log.warning("today_strategy load failed", error=exc)
             return {}
 
     def collect_weekly_metrics(self, as_of: str | date | datetime | None = None) -> dict:
@@ -164,7 +156,7 @@ class StrategyReviewer:
                     elif pnl < 0:
                         out["kr"]["losses"] += 1
         except Exception as exc:
-            log.warn("weekly KR metrics failed", error=exc)
+            log.warning("weekly KR metrics failed", error=exc)
 
         # US
         try:
@@ -188,7 +180,7 @@ class StrategyReviewer:
                     elif pnl < 0:
                         out["us"]["losses"] += 1
         except Exception as exc:
-            log.warn("weekly US metrics failed", error=exc)
+            log.warning("weekly US metrics failed", error=exc)
 
         # BTC
         try:
@@ -212,7 +204,7 @@ class StrategyReviewer:
                 elif pnl < 0:
                     out["btc"]["losses"] += 1
         except Exception as exc:
-            log.warn("weekly BTC metrics failed", error=exc)
+            log.warning("weekly BTC metrics failed", error=exc)
 
         # aggregate winrate
         total_closed = out["kr"]["closed"] + out["us"]["closed"] + out["btc"]["closed"]
@@ -237,7 +229,7 @@ class StrategyReviewer:
                 "sample_factors": names[:10],
             }
         except Exception as exc:
-            log.warn("factor context failed", error=exc)
+            log.warning("factor context failed", error=exc)
             return {"registered_factor_count": 0, "sample_factors": []}
 
     def collect_market_context(self) -> dict:
@@ -340,7 +332,7 @@ class StrategyReviewer:
             raw = (res.choices[0].message.content or "").strip()
             return _json_parse(raw)
         except Exception as exc:
-            log.warn("strategy review llm failed", error=exc)
+            log.warning("strategy review llm failed", error=exc)
             return None
 
     def _merge_review(self, base: dict, review: dict, as_of: date) -> dict:
@@ -366,6 +358,183 @@ class StrategyReviewer:
         p = HISTORY_DIR / f"{as_of.isoformat()}.json"
         p.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         return p
+
+    def collect_daily_metrics(self, as_of: str | date | datetime | None = None) -> dict:
+        """Collect today's trade summary across KR / US / BTC."""
+        day = _to_date(as_of)
+        start_iso = day.isoformat()
+        end_iso = (day + timedelta(days=1)).isoformat()
+
+        out: Dict[str, Any] = {
+            "date": day.isoformat(),
+            "kr": {"trades": 0, "wins": 0, "losses": 0, "pnl_sum": 0.0, "open_positions": 0},
+            "us": {"trades": 0, "wins": 0, "losses": 0, "pnl_sum": 0.0, "open_positions": 0},
+            "btc": {"trades": 0, "wins": 0, "losses": 0, "pnl_sum": 0.0, "open_positions": 0},
+        }
+
+        if not self.supabase:
+            return out
+
+        # KR
+        try:
+            rows = (
+                self.supabase.table("trade_executions")
+                .select("*")
+                .gte("created_at", start_iso)
+                .lt("created_at", end_iso)
+                .execute()
+                .data
+                or []
+            )
+            out["kr"]["trades"] = len(rows)
+            for r in rows:
+                status = str(r.get("result") or "").upper()
+                if status in {"CLOSED", "SELL"}:
+                    pnl = _safe_float(r.get("pnl") or r.get("pnl_krw"), 0.0)
+                    out["kr"]["pnl_sum"] += pnl
+                    if pnl > 0:
+                        out["kr"]["wins"] += 1
+                    elif pnl < 0:
+                        out["kr"]["losses"] += 1
+                elif status in {"OPEN", "BUY", "HOLD"}:
+                    out["kr"]["open_positions"] += 1
+        except Exception as exc:
+            log.warning("daily KR metrics failed", error=exc)
+
+        # US
+        try:
+            rows = (
+                self.supabase.table("us_trade_executions")
+                .select("*")
+                .gte("created_at", start_iso)
+                .lt("created_at", end_iso)
+                .execute()
+                .data
+                or []
+            )
+            out["us"]["trades"] = len(rows)
+            for r in rows:
+                status = str(r.get("result") or "").upper()
+                if status in {"CLOSED", "SELL"}:
+                    pnl = _safe_float(r.get("pnl") or r.get("pnl_usd"), 0.0)
+                    out["us"]["pnl_sum"] += pnl
+                    if pnl > 0:
+                        out["us"]["wins"] += 1
+                    elif pnl < 0:
+                        out["us"]["losses"] += 1
+                elif status in {"OPEN", "BUY", "HOLD"}:
+                    out["us"]["open_positions"] += 1
+        except Exception as exc:
+            log.warning("daily US metrics failed", error=exc)
+
+        # BTC
+        try:
+            closed_rows = (
+                self.supabase.table("btc_position")
+                .select("*")
+                .eq("status", "CLOSED")
+                .gte("exit_time", start_iso)
+                .lt("exit_time", end_iso)
+                .execute()
+                .data
+                or []
+            )
+            out["btc"]["trades"] = len(closed_rows)
+            for r in closed_rows:
+                pnl = _safe_float(r.get("pnl"), 0.0)
+                out["btc"]["pnl_sum"] += pnl
+                if pnl > 0:
+                    out["btc"]["wins"] += 1
+                elif pnl < 0:
+                    out["btc"]["losses"] += 1
+
+            open_rows = (
+                self.supabase.table("btc_position")
+                .select("id")
+                .eq("status", "OPEN")
+                .execute()
+                .data
+                or []
+            )
+            out["btc"]["open_positions"] = len(open_rows)
+        except Exception as exc:
+            log.warning("daily BTC metrics failed", error=exc)
+
+        # Aggregate
+        total_trades = out["kr"]["trades"] + out["us"]["trades"] + out["btc"]["trades"]
+        total_wins = out["kr"]["wins"] + out["us"]["wins"] + out["btc"]["wins"]
+        total_closed = total_wins + out["kr"]["losses"] + out["us"]["losses"] + out["btc"]["losses"]
+        total_pnl = round(out["kr"]["pnl_sum"] + out["us"]["pnl_sum"] + out["btc"]["pnl_sum"], 4)
+        out["total_trades"] = total_trades
+        out["total_closed"] = total_closed
+        out["total_wins"] = total_wins
+        out["overall_win_rate"] = round((total_wins / total_closed * 100.0) if total_closed > 0 else 0.0, 2)
+        out["overall_pnl_sum"] = total_pnl
+        return out
+
+    def run_daily_check(self, as_of: str | date | datetime | None = None, notify: bool = True) -> dict:
+        """Lightweight daily summary: collect today's metrics and send Telegram report.
+
+        No heavy LLM call is made — this is designed to run every evening quickly.
+        """
+        day = _to_date(as_of)
+
+        daily = self.collect_daily_metrics(day)
+        market_ctx = self.collect_market_context()
+        regime = market_ctx.get("us_regime", {}).get("regime", "UNKNOWN")
+        vix = market_ctx.get("us_regime", {}).get("vix", "?")
+
+        kr = daily["kr"]
+        us = daily["us"]
+        btc = daily["btc"]
+
+        def _pnl_sign(v: float) -> str:
+            return "+" if v >= 0 else ""
+
+        msg = (
+            f"📊 <b>일간 매매 요약 ({day.isoformat()})</b>\n"
+            f"레짐: {regime} | VIX: {vix}\n\n"
+            f"🇰🇷 KR주식: {kr['trades']}건 | "
+            f"수익 {_pnl_sign(kr['pnl_sum'])}{kr['pnl_sum']:,.0f}원 | "
+            f"보유 {kr['open_positions']}종목\n"
+            f"🌐 US주식: {us['trades']}건 | "
+            f"수익 {_pnl_sign(us['pnl_sum'])}{us['pnl_sum']:,.2f}$ | "
+            f"보유 {us['open_positions']}종목\n"
+            f"₿ BTC: {btc['trades']}건 | "
+            f"수익 {_pnl_sign(btc['pnl_sum'])}{btc['pnl_sum']:,.4f}₿ | "
+            f"보유 {btc['open_positions']}포지션\n\n"
+            f"합계: {daily['total_closed']}건 결산 | "
+            f"승률 {daily['overall_win_rate']:.1f}% | "
+            f"총손익 {_pnl_sign(daily['overall_pnl_sum'])}{daily['overall_pnl_sum']}"
+        )
+
+        if notify:
+            try:
+                send_telegram(msg)
+            except Exception as exc:
+                log.warning("daily check telegram send failed", error=exc)
+
+        # Save daily snapshot to brain
+        history_payload = {
+            "type": "daily_check",
+            "date": day.isoformat(),
+            "daily_metrics": daily,
+            "market_context": market_ctx,
+        }
+        try:
+            HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+            p = HISTORY_DIR / f"daily-{day.isoformat()}.json"
+            p.write_text(json.dumps(history_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception as exc:
+            log.warning("daily check save failed", error=exc)
+
+        return {
+            "ok": True,
+            "type": "daily_check",
+            "date": day.isoformat(),
+            "daily_metrics": daily,
+            "market_context": market_ctx,
+        }
 
     def run(self, force: bool = False, as_of: str | date | datetime | None = None) -> dict:
         day = _to_date(as_of)
@@ -418,13 +587,18 @@ class StrategyReviewer:
 
 
 def _cli() -> int:
-    p = argparse.ArgumentParser(description="Weekly strategy reviewer")
-    p.add_argument("--force", action="store_true", help="run even if not Sunday")
+    p = argparse.ArgumentParser(description="Strategy reviewer (weekly + daily)")
+    p.add_argument("--force", action="store_true", help="run weekly review even if not Sunday")
     p.add_argument("--date", default=None, help="as-of date YYYY-MM-DD")
+    p.add_argument("--daily", action="store_true", help="run lightweight daily check instead of weekly review")
+    p.add_argument("--no-notify", action="store_true", help="skip Telegram notification (daily mode)")
     args = p.parse_args()
 
     reviewer = StrategyReviewer()
-    out = reviewer.run(force=args.force, as_of=args.date)
+    if args.daily:
+        out = reviewer.run_daily_check(as_of=args.date, notify=not args.no_notify)
+    else:
+        out = reviewer.run(force=args.force, as_of=args.date)
     print(json.dumps(out, ensure_ascii=False, indent=2))
     return 0
 

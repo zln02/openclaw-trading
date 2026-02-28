@@ -11,6 +11,7 @@ from common.cache import get_cached, set_cached
 from common.env_loader import load_env
 from common.logger import get_logger
 from common.telegram import send_telegram
+from common.utils import safe_float as _safe_float
 
 load_env()
 log = get_logger("alert_manager")
@@ -18,15 +19,6 @@ log = get_logger("alert_manager")
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def _safe_float(value: Any, default: float = 0.0) -> float:
-    try:
-        if value is None:
-            return default
-        return float(value)
-    except Exception:
-        return default
 
 
 def _pct_to_decimal(v: float) -> float:

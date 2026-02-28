@@ -5,6 +5,7 @@
 import json
 import os
 import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -37,21 +38,24 @@ def _get_interests() -> list[str]:
 def _brave_search(query: str, api_key: str, count: int = 5) -> list[dict[str, Any]]:
     if not api_key:
         return []
-    try:
-        r = requests.get(
-            BRAVE_API_URL,
-            headers={
-                "Accept": "application/json",
-                "X-Subscription-Token": api_key,
-            },
-            params={"q": query, "count": count},
-            timeout=15,
-        )
-        r.raise_for_status()
-        data = r.json()
-        return data.get("web", {}).get("results", []) or []
-    except Exception:
-        return []
+    for attempt in range(1, 4):
+        try:
+            r = requests.get(
+                BRAVE_API_URL,
+                headers={
+                    "Accept": "application/json",
+                    "X-Subscription-Token": api_key,
+                },
+                params={"q": query, "count": count},
+                timeout=15,
+            )
+            r.raise_for_status()
+            data = r.json()
+            return data.get("web", {}).get("results", []) or []
+        except Exception:
+            if attempt < 3:
+                time.sleep(attempt)
+    return []
 
 
 def _send_telegram(text: str) -> bool:
@@ -59,15 +63,18 @@ def _send_telegram(text: str) -> bool:
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
     if not token or not chat_id:
         return False
-    try:
-        r = requests.post(
-            TELEGRAM_API.format(token=token),
-            json={"chat_id": chat_id.strip(), "text": text, "disable_web_page_preview": True},
-            timeout=10,
-        )
-        return r.status_code == 200
-    except Exception:
-        return False
+    for attempt in range(1, 4):
+        try:
+            r = requests.post(
+                TELEGRAM_API.format(token=token),
+                json={"chat_id": chat_id.strip(), "text": text, "disable_web_page_preview": True},
+                timeout=10,
+            )
+            return r.status_code == 200
+        except Exception:
+            if attempt < 3:
+                time.sleep(attempt)
+    return False
 
 
 def _make_summary(results: list[dict], query: str) -> tuple[str, str]:

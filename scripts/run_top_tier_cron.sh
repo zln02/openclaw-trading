@@ -17,6 +17,7 @@ OPENCLAW_ENV="/home/wlsdud5035/.openclaw/.env"
 WORKSPACE="/home/wlsdud5035/.openclaw/workspace"
 
 cd "$WORKSPACE" || exit 1
+export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}$WORKSPACE"
 
 if [ -f "$OPENCLAW_ENV" ]; then
   set -a

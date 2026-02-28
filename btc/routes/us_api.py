@@ -1,6 +1,7 @@
 """US stock-related API endpoints."""
 import time as _time
 import asyncio
+from datetime import datetime, timedelta
 from pathlib import Path
 from fastapi import APIRouter, Query
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -19,10 +20,163 @@ router = APIRouter()
 _fx_cache = {"ts": 0, "rate": 0}
 
 
-@router.get("/us", response_class=HTMLResponse)
-async def us_page():
-    from btc.templates.us_html import US_DASHBOARD_HTML
-    return US_DASHBOARD_HTML
+# @router.get("/us", response_class=HTMLResponse)
+# async def us_page():
+#     from btc.templates.us_html import US_DASHBOARD_HTML
+#     return US_DASHBOARD_HTML
+
+
+@router.get("/api/us/composite")
+async def get_us_composite():
+    """US 종합 점수"""
+    try:
+        # 기본 점수 구조
+        composite = {
+            "total": 52,
+            "spy": 50,
+            "qqq": 48,
+            "volume": 55,
+            "trend": "NEUTRAL",
+            "sentiment": 54
+        }
+        
+        # 실제 데이터가 있다면 업데이트
+        if supabase:
+            try:
+                # 최신 US 모멘텀 신호 조회
+                res = supabase.table("us_momentum_signals").select("*").order("created_at", desc=True).limit(50).execute()
+                if res.data:
+                    avg_score = sum(item.get("score", 50) for item in res.data) / len(res.data)
+                    composite["total"] = int(avg_score)
+            except Exception:
+                pass
+        
+        return composite
+    except Exception as e:
+        log.error(f"US composite error: {e}")
+        return {"total": 52, "spy": 50, "qqq": 48, "volume": 55, "trend": "NEUTRAL", "sentiment": 54}
+
+
+@router.get("/api/us/portfolio")
+async def get_us_portfolio():
+    """US 포트폴리오 정보"""
+    try:
+        if not supabase:
+            return {"open_positions": [], "closed_positions": [], "summary": {}}
+        
+        # US 오픈 포지션 조회
+        open_res = supabase.table("us_trade_executions").select("*").eq("result", "OPEN").execute()
+        open_positions = open_res.data or []
+        
+        # US 체결 내역 조회
+        closed_res = supabase.table("us_trade_executions").select("*").eq("result", "CLOSED").order("timestamp", desc=True).limit(100).execute()
+        closed_positions = closed_res.data or []
+        
+        # 현재 가격 계산
+        import yfinance as _yf_pf
+        total_invested = 0
+        total_current = 0
+        
+        for p in open_positions:
+            sym = p.get("symbol", "")
+            entry = float(p.get("price", 0))
+            qty = float(p.get("quantity", 0))
+            invested = entry * qty
+            total_invested += invested
+            
+            try:
+                t = _yf_pf.Ticker(sym)
+                h = t.history(period="2d")
+                if not h.empty:
+                    cur = float(h["Close"].iloc[-1])
+                    p["current_price"] = round(cur, 2)
+                    p["pnl_pct"] = round((cur / entry - 1) * 100, 2) if entry else 0
+                    p["pnl_usd"] = round((cur - entry) * qty, 2)
+                    total_current += cur * qty
+                else:
+                    p["current_price"] = entry
+                    p["pnl_pct"] = 0
+                    p["pnl_usd"] = 0
+                    total_current += invested
+            except Exception:
+                p["current_price"] = entry
+                p["pnl_pct"] = 0
+                p["pnl_usd"] = 0
+                total_current += invested
+        
+        total_pnl_pct = round((total_current / total_invested - 1) * 100, 2) if total_invested > 0 else 0
+        
+        summary = {
+            "usd_balance": None,
+            "open_count": len(open_positions),
+            "closed_count": len(closed_positions),
+            "total_invested": round(total_invested, 2),
+            "total_current": round(total_current, 2),
+            "unrealized_pnl": round(total_current - total_invested, 2),
+            "unrealized_pnl_pct": total_pnl_pct,
+            "realized_pnl": sum(p.get("pnl_usd", 0) for p in closed_positions)
+        }
+        
+        return {
+            "open_positions": open_positions,
+            "closed_positions": closed_positions,
+            "summary": summary
+        }
+    except Exception as e:
+        log.error(f"US portfolio error: {e}")
+        return {"open_positions": [], "closed_positions": [], "summary": {}}
+
+
+@router.get("/api/us/system")
+async def get_us_system():
+    """US 시스템 상태"""
+    try:
+        import psutil
+        import os
+        alpaca_ok = bool(os.environ.get("ALPACA_API_KEY") and os.environ.get("ALPACA_SECRET_KEY"))
+        mem = psutil.virtual_memory()
+        disk = psutil.disk_usage('/')
+        return {
+            "cpu": round(psutil.cpu_percent(interval=0), 1),
+            "mem_used": round(mem.used / (1024**3), 1),
+            "mem_total": round(mem.total / (1024**3), 1),
+            "mem_pct": mem.percent,
+            "disk_used": round(disk.used / (1024**3), 1),
+            "disk_total": round(disk.total / (1024**3), 1),
+            "disk_pct": disk.percent,
+            "alpaca_ok": alpaca_ok,
+            "last_cron": f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}][us_agent][INFO]",
+        }
+    except Exception as e:
+        log.error(f"US system error: {e}")
+        return {"cpu": 0, "mem_pct": 0, "disk_pct": 0, "alpaca_ok": False}
+
+
+@router.get("/api/us/trades")
+async def get_us_trades(
+    limit: int = Query(default=50, le=500),
+    result: str = Query(default=None, regex="^(OPEN|CLOSED)$"),
+    hours: int = Query(default=None, ge=1, le=168)
+):
+    """US 거래 내역 (필터링 지원)"""
+    try:
+        if not supabase:
+            return []
+        
+        query = supabase.table("us_trade_executions").select("*")
+        
+        if result:
+            query = query.eq("result", result)
+        
+        if hours:
+            cutoff = (datetime.now() - timedelta(hours=hours)).isoformat()
+            query = query.gte("timestamp", cutoff)
+        
+        res = query.order("timestamp", desc=True).limit(limit).execute()
+        return res.data or []
+    except Exception as e:
+        log.error(f"US trades error: {e}")
+        return []
 
 
 @router.get("/api/us/top", response_class=JSONResponse)
@@ -74,7 +228,6 @@ async def api_us_positions():
                 "total_pnl_pct": total_pnl_pct,
                 "total_pnl_usd": round(total_current - total_invested, 2),
                 "count": len(positions),
-                "virtual_capital": 10000,
             },
         }
     except Exception as e:
@@ -118,24 +271,6 @@ async def api_us_logs():
         return {"lines": [f"로그 읽기 실패: {e}"]}
 
 
-@router.get("/api/us/trades")
-async def api_us_trades():
-    try:
-        if not supabase:
-            return []
-        res = (
-            supabase.table("us_trade_executions")
-            .select("*")
-            .order("id", desc=True)
-            .limit(50)
-            .execute()
-        )
-        return res.data or []
-    except Exception as e:
-        log.error(f"us trades: {e}")
-        return []
-
-
 @router.get("/api/us/market")
 async def api_us_market():
     data = _get_us_market_summary()
@@ -144,6 +279,7 @@ async def api_us_market():
 
 
 @router.get("/api/us/realtime/news")
+
 async def api_us_realtime_news(
     symbol: str = Query("BTC"),
     limit: int = Query(10, ge=1, le=50),

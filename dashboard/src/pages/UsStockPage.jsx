@@ -1,168 +1,198 @@
-import { Globe, TrendingUp, Wallet, DollarSign, ShieldAlert, Newspaper } from "lucide-react";
+import { Globe, Gauge, Wallet, Clock, Newspaper, TrendingUp, DollarSign } from "lucide-react";
 import usePolling from "../hooks/usePolling";
 import StatCard from "../components/StatCard";
 import TradeTable from "../components/TradeTable";
-import {
-  getUsPositions,
-  getUsTrades,
-  getUsMarket,
-  getUsFx,
-  getUsRealtimePrice,
-  getUsRealtimeAlt,
-  getUsRealtimeNews,
-} from "../api";
 
 const fmt = (n) => n != null ? Number(n).toLocaleString() : "—";
 const pct = (n) => n != null ? `${Number(n) >= 0 ? "+" : ""}${Number(n).toFixed(2)}%` : "—";
 
 const TRADE_COLS = [
-  { key: "created_at", label: "시간", render: (_v, row) => (row.created_at || row.timestamp || row.executed_at || "").slice(5, 16) },
-  { key: "trade_type", label: "구분", render: (_v, row) => {
-    const side = row.trade_type || row.action || row.side || "";
-    return (
-      <span className={side === "BUY" ? "text-emerald-400 font-medium" : side === "SELL" ? "text-red-400 font-medium" : "text-gray-400"}>{side || "—"}</span>
-    );
-  }},
-  { key: "symbol", label: "종목", render: (v) => <span className="font-medium">{v}</span> },
-  { key: "price", label: "가격", render: (_v, row) => `$${fmt(row.price ?? row.executed_price)}` },
-  { key: "quantity", label: "수량", render: (_v, row) => row.quantity ?? row.qty ?? "—" },
-  { key: "score", label: "스코어" },
-  { key: "reason", label: "사유", render: (_v, row) => <span className="text-gray-400 text-xs max-w-[180px] truncate block">{row.reason || row.strategy || ""}</span> },
+  { key: "timestamp", label: "시간", render: (v) => v?.slice(5, 16) },
+  { key: "symbol", label: "종목", render: (v) => <span className="font-mono">{v}</span> },
+  { key: "action", label: "구분", render: (v) => (
+    <span className={v === "BUY" ? "profit-text" : v === "SELL" ? "loss-text" : "text-text-secondary"}>{v}</span>
+  )},
+  { key: "price", label: "가격", render: (v) => <span className="font-mono">${fmt(v)}</span> },
+  { key: "quantity", label: "수량", render: (v) => <span className="font-mono">{fmt(v)}</span> },
+  { key: "pnl_usd", label: "P&L", render: (v) => (
+    <span className={v > 0 ? "profit-text" : v < 0 ? "loss-text" : "text-text-secondary"}>
+      ${fmt(v)}
+    </span>
+  )},
 ];
 
-const US_REALTIME_SYMBOL = "AAPL";
-const fetchUsRtPrice = () => getUsRealtimePrice(US_REALTIME_SYMBOL);
-const fetchUsRtAlt = () => getUsRealtimeAlt(US_REALTIME_SYMBOL);
-const fetchUsRtNews = () => getUsRealtimeNews(US_REALTIME_SYMBOL, 10);
+async function apiFetch(path) {
+  const res = await fetch(path);
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  return res.json();
+}
+
+const getUsComposite = () => apiFetch("/api/us/composite");
+const getUsPortfolio  = () => apiFetch("/api/us/portfolio");
+const getUsTrades     = () => apiFetch("/api/us/trades");
+const getUsSystem     = () => apiFetch("/api/us/system");
+const getUsTop        = () => apiFetch("/api/us/top");
 
 export default function UsStockPage() {
-  const { data: positionsResp } = usePolling(getUsPositions, 30000);
-  const { data: trades } = usePolling(getUsTrades, 60000);
-  const { data: market } = usePolling(getUsMarket, 60000);
-  const { data: fx } = usePolling(getUsFx, 120000);
-  const { data: rtPrice } = usePolling(fetchUsRtPrice, 5000);
-  const { data: rtAlt } = usePolling(fetchUsRtAlt, 60000);
-  const { data: rtNews } = usePolling(fetchUsRtNews, 120000);
+  const { data: composite } = usePolling(getUsComposite, 10000);
+  const { data: portfolio } = usePolling(getUsPortfolio, 15000);
+  const { data: trades } = usePolling(getUsTrades, 20000);
+  const { data: system } = usePolling(getUsSystem, 30000);
+  const { data: topStocks } = usePolling(getUsTop, 60000);
 
-  const regime = market?.regime;
-  const openPositions = Array.isArray(positionsResp?.positions) ? positionsResp.positions : [];
-  const summary = positionsResp?.summary || {};
-  const newsItems = Array.isArray(rtNews?.items) ? rtNews.items : [];
-
-  const totalPnlFallback = openPositions.reduce((sum, p) => {
-    if (!p.price || !p.current_price) return sum;
-    return sum + (p.current_price - p.price) * (p.quantity || 0);
-  }, 0);
-  const totalPnl = summary?.total_pnl_usd ?? totalPnlFallback;
-
-  const regimeColor = {
-    BULL: "badge-green", CORRECTION: "badge-yellow",
-    RECOVERY: "badge-blue", BEAR: "badge-red",
-  };
+  const summary = portfolio?.summary || {};
+  const positions = portfolio?.open_positions || [];
 
   return (
-    <div className="space-y-6">
+    <div className="p-6 space-y-6">
       {/* Header */}
-      <div className="flex items-center gap-3">
-        <Globe className="w-7 h-7 text-violet-400" />
-        <h1 className="text-xl font-bold">US 주식 대시보드</h1>
-        {regime && (
-          <span className={`ml-auto text-xs px-2 py-0.5 rounded ${regimeColor[regime.regime] || "badge-yellow"}`}>
-            {regime.regime}
-          </span>
+      <div className="flex items-center justify-between">
+        <div className="flex items-center space-x-3">
+          <Globe className="w-8 h-8 text-accent" />
+          <div>
+            <h1 className="text-2xl font-bold text-text-primary">미국 주식</h1>
+            <p className="text-text-secondary text-sm">S&P 500 / NASDAQ 실시간 모니터링</p>
+          </div>
+        </div>
+        {system && (
+          <div className="flex items-center space-x-4 text-xs text-text-secondary">
+            <span>Alpaca: {system.alpaca_ok ? "🟢" : "🔴"}</span>
+            <span>CPU: {system.cpu}%</span>
+            <span>MEM: {system.mem_pct}%</span>
+          </div>
         )}
       </div>
 
-      {/* Market Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+      {/* Composite Score */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <StatCard
-          label="SPY"
-          value={regime?.spy_price ? `$${fmt(regime.spy_price)}` : "—"}
-          sub={regime?.spy_ma200 ? `200MA: $${fmt(regime.spy_ma200)}` : null}
-          trend={regime?.spy_above_200ma ? "up" : "down"}
+          label="종합 점수"
+          value={composite?.total || 0}
+          sub={`SPY: ${composite?.spy || 0} | QQQ: ${composite?.qqq || 0}`}
+          icon={Gauge}
+          trend={composite?.trend === "UP" ? "up" : composite?.trend === "DOWN" ? "down" : null}
+          tooltip="S&P 500 / NASDAQ 종합 시장 점수"
+        />
+        <StatCard
+          label="거래량"
+          value={composite?.volume || 0}
+          sub="시장 거래량 지표"
           icon={TrendingUp}
+          tooltip="전체 시장 거래량"
         />
         <StatCard
-          label="VIX"
-          value={regime?.vix ?? "—"}
-          trend={regime?.vix > 25 ? "up" : regime?.vix < 18 ? "down" : null}
-          icon={ShieldAlert}
-        />
-        <StatCard label="보유 종목" value={openPositions.length} icon={Wallet} />
-        <StatCard
-          label="미실현 손익"
-          value={`$${totalPnl >= 0 ? "+" : ""}${totalPnl.toFixed(1)}`}
-          trend={totalPnl > 0 ? "up" : totalPnl < 0 ? "down" : null}
-          icon={DollarSign}
-        />
-        <StatCard
-          label="환율"
-          value={fx?.usdkrw ? `₩${fmt(fx.usdkrw)}` : "—"}
-          icon={DollarSign}
+          label="시장 심리"
+          value={composite?.sentiment || 0}
+          sub="투자자 심리 지수"
+          icon={Newspaper}
+          tooltip="시장 참여자 심리 상태"
         />
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <StatCard label={`${US_REALTIME_SYMBOL} 실시간`} value={rtPrice?.price ? `$${fmt(rtPrice.price)}` : "—"} />
-        <StatCard
-          label="검색 트렌드"
-          value={rtAlt?.search_trend_7d ?? "—"}
-          trend={rtAlt?.search_trend_7d > 60 ? "up" : rtAlt?.search_trend_7d < 30 ? "down" : null}
-        />
-        <StatCard
-          label="소셜 감정"
-          value={rtAlt?.sentiment_score ?? "—"}
-          trend={rtAlt?.sentiment_score > 0 ? "up" : rtAlt?.sentiment_score < 0 ? "down" : null}
-          icon={ShieldAlert}
-        />
-        <StatCard label="소셜 멘션" value={rtAlt?.social_mentions_24h ?? "—"} />
+      {/* Portfolio Summary */}
+      <div className="card">
+        <div className="card-header">
+          <Wallet className="w-5 h-5" />
+          <h3>포트폴리오 요약</h3>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="text-center">
+            <div className="data-label">예수금</div>
+            <div className="data-value">${fmt(summary?.usd_balance)}</div>
+          </div>
+          <div className="text-center">
+            <div className="data-label">총 평가</div>
+            <div className="data-value">${fmt(summary?.total_current)}</div>
+          </div>
+          <div className="text-center">
+            <div className="data-label">미실현 손익</div>
+            <div className={`data-value ${summary?.unrealized_pnl >= 0 ? "profit-text" : "loss-text"}`}>
+              ${fmt(summary?.unrealized_pnl)}
+            </div>
+          </div>
+          <div className="text-center">
+            <div className="data-label">보유 종목</div>
+            <div className="data-value">{summary?.open_count || 0}개</div>
+          </div>
+        </div>
       </div>
 
       {/* Open Positions */}
-      {openPositions.length > 0 && (
+      {positions.length > 0 && (
         <div className="card">
-          <h3 className="text-sm font-medium text-gray-400 mb-3">보유 포지션 (모의투자)</h3>
-          <div className="space-y-2">
-            {openPositions.map((p, i) => {
-              const entry = Number(p.price);
-              const cur = Number(p.current_price || entry);
-              const pnlPct = entry > 0 ? ((cur - entry) / entry * 100) : 0;
-              const pnlUsd = (cur - entry) * (p.quantity || 0);
-              return (
-                <div key={i} className="flex items-center justify-between py-2 px-3 bg-gray-800/30 rounded-lg text-sm">
-                  <div>
-                    <span className="font-medium">{p.symbol}</span>
-                    <span className="text-xs text-gray-500 ml-2">{p.quantity}주 × ${entry.toFixed(2)}</span>
-                  </div>
-                  <div className="text-right">
-                    <div>${cur.toFixed(2)}</div>
-                    <div className={`text-xs ${pnlPct >= 0 ? "text-emerald-400" : "text-red-400"}`}>
-                      {pct(pnlPct)} (${pnlUsd >= 0 ? "+" : ""}{pnlUsd.toFixed(1)})
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
+          <div className="card-header">
+            <DollarSign className="w-5 h-5" />
+            <h3>보유 포지션</h3>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border">
+                  <th className="text-left py-2 px-3">종목</th>
+                  <th className="text-right py-2 px-3">수량</th>
+                  <th className="text-right py-2 px-3">진입가</th>
+                  <th className="text-right py-2 px-3">현재가</th>
+                  <th className="text-right py-2 px-3">수익률</th>
+                  <th className="text-right py-2 px-3">P&L</th>
+                </tr>
+              </thead>
+              <tbody>
+                {positions.slice(0, 5).map((pos) => (
+                  <tr key={pos.id} className="border-b border-border/50">
+                    <td className="py-2 px-3 font-mono">{pos.symbol}</td>
+                    <td className="text-right py-2 px-3">{fmt(pos.quantity)}</td>
+                    <td className="text-right py-2 px-3">${fmt(pos.price)}</td>
+                    <td className="text-right py-2 px-3">${fmt(pos.current_price)}</td>
+                    <td className={`text-right py-2 px-3 ${pos.pnl_pct >= 0 ? "profit-text" : "loss-text"}`}>
+                      {pct(pos.pnl_pct)}
+                    </td>
+                    <td className={`text-right py-2 px-3 ${pos.pnl_usd >= 0 ? "profit-text" : "loss-text"}`}>
+                      ${fmt(pos.pnl_usd)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       )}
 
+      {/* Recent Trades */}
       <div className="card">
-        <h3 className="text-sm font-medium text-gray-400 mb-3 flex items-center gap-2">
-          <Newspaper className="w-4 h-4" /> US 실시간 뉴스
-        </h3>
-        <ul className="space-y-1 text-xs text-gray-400 max-h-32 overflow-y-auto">
-          {newsItems.slice(0, 6).map((row, i) => (
-            <li key={i} className="truncate">• {row.headline || row.title}</li>
-          ))}
-        </ul>
+        <div className="card-header">
+          <Clock className="w-5 h-5" />
+          <h3>최근 거래</h3>
+        </div>
+        <TradeTable
+          trades={trades?.slice(0, 10) || []}
+          columns={TRADE_COLS}
+        />
       </div>
 
-      {/* Trades */}
-      <div>
-        <h3 className="text-sm font-medium text-gray-400 mb-3">최근 거래</h3>
-        <TradeTable trades={Array.isArray(trades) ? trades : []} columns={TRADE_COLS} />
-      </div>
+      {/* Top Stocks */}
+      {topStocks && topStocks.length > 0 && (
+        <div className="card">
+          <div className="card-header">
+            <TrendingUp className="w-5 h-5" />
+            <h3>TOP 종목</h3>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {topStocks.slice(0, 9).map((stock) => (
+              <div key={stock.id} className="p-3 border border-border rounded-lg">
+                <div className="flex justify-between items-center">
+                  <span className="font-mono font-semibold">{stock.symbol}</span>
+                  <span className={`text-sm ${stock.ret_5d >= 0 ? "profit-text" : "loss-text"}`}>
+                    {pct(stock.ret_5d)}
+                  </span>
+                </div>
+                <div className="text-xs text-text-secondary mt-1">
+                  Score: {stock.score} | 변동률: {pct(stock.ret_20d)}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

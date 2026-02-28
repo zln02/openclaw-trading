@@ -34,7 +34,7 @@ def _get_kiwoom():
             from stocks.kiwoom_client import KiwoomClient
             _kiwoom_client = KiwoomClient()
         except Exception as e:
-            log.warn(f"Kiwoom init: {e}")
+            log.warning(f"Kiwoom init: {e}")
     return _kiwoom_client
 
 
@@ -58,10 +58,10 @@ def _stock_name(code: str) -> str:
 
 
 # ── Stock page ──────────────────────────────────────────
-@router.get("/stocks", response_class=HTMLResponse)
-async def stocks_page():
-    from btc.templates.stocks_html import STOCKS_HTML
-    return STOCKS_HTML
+# @router.get("/stocks", response_class=HTMLResponse)
+# async def stocks_page():
+#     from btc.templates.stocks_html import STOCKS_HTML
+#     return STOCKS_HTML
 
 
 # ----- Market summary (TradingView: unified) -----
@@ -656,6 +656,215 @@ async def get_stocks_logs(source: str = Query("all")):
             return {"lines": lines[-80:]}
     except Exception as e:
         return {"lines": [str(e)]}
+
+
+@router.get("/api/kr/composite")
+async def get_kr_composite():
+    """KR 종합 점수"""
+    try:
+        # 기본 점수 구조
+        composite = {
+            "total": 45,
+            "kospi": 50,
+            "kosdaq": 40,
+            "volume": 45,
+            "trend": "NEUTRAL",
+            "sentiment": 48
+        }
+        
+        # 실제 데이터가 있다면 업데이트
+        if supabase:
+            try:
+                # 최신 시장 데이터 조회
+                res = supabase.table("top50_stocks").select("*").order("created_at", desc=True).limit(50).execute()
+                if res.data:
+                    avg_score = sum(item.get("score", 50) for item in res.data) / len(res.data)
+                    composite["total"] = int(avg_score)
+            except Exception:
+                pass
+        
+        return composite
+    except Exception as e:
+        log.error(f"KR composite error: {e}")
+        return {"total": 45, "kospi": 50, "kosdaq": 40, "volume": 45, "trend": "NEUTRAL", "sentiment": 48}
+
+
+@router.get("/api/kr/portfolio")
+async def get_kr_portfolio():
+    """KR 포트폴리오 정보"""
+    try:
+        if not supabase:
+            return {"open_positions": [], "closed_positions": [], "summary": {}}
+        
+        # KR 거래 내역 조회
+        res = (
+            supabase.table("trade_executions")
+            .select("*")
+            .eq("market", "kr")
+            .order("timestamp", desc=True)
+            .limit(100)
+            .execute()
+        )
+        
+        if not res.data:
+            return {"open_positions": [], "closed_positions": [], "summary": {}}
+        
+        # 포지션 데이터 변환
+        positions = []
+        for trade in res.data:
+            positions.append({
+                "id": trade.get("id"),
+                "symbol": trade.get("symbol", ""),
+                "action": trade.get("action", ""),
+                "price": trade.get("price", 0),
+                "quantity": trade.get("quantity", 0),
+                "timestamp": trade.get("timestamp", ""),
+                "pnl": trade.get("pnl", 0),
+                "pnl_pct": trade.get("pnl_pct", 0)
+            })
+        
+        open_positions = [p for p in positions if p.get("action") == "BUY"]
+        closed_positions = [p for p in positions if p.get("action") == "SELL"]
+        
+        total_invested = sum(p.get("price", 0) * p.get("quantity", 0) for p in open_positions)
+        summary = {
+            "krw_balance": None,
+            "open_count": len(open_positions),
+            "closed_count": len(closed_positions),
+            "total_invested": total_invested,
+            "total_eval": total_invested,
+            "unrealized_pnl": 0,
+            "realized_pnl": sum(p.get("pnl", 0) for p in closed_positions),
+        }
+        
+        return {
+            "open_positions": open_positions,
+            "closed_positions": closed_positions,
+            "summary": summary
+        }
+    except Exception as e:
+        log.error(f"KR portfolio error: {e}")
+        return {"open_positions": [], "closed_positions": [], "summary": {}}
+
+
+@router.get("/api/kr/system")
+async def get_kr_system():
+    """KR 시스템 상태"""
+    try:
+        import psutil
+        kiwoom_ok = _get_kiwoom() is not None
+        mem = psutil.virtual_memory()
+        disk = psutil.disk_usage('/')
+        return {
+            "cpu": round(psutil.cpu_percent(interval=0), 1),
+            "mem_used": round(mem.used / (1024**3), 1),
+            "mem_total": round(mem.total / (1024**3), 1),
+            "mem_pct": mem.percent,
+            "disk_used": round(disk.used / (1024**3), 1),
+            "disk_total": round(disk.total / (1024**3), 1),
+            "disk_pct": disk.percent,
+            "kiwoom_ok": kiwoom_ok,
+            "last_cron": f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}][kr_agent][INFO]",
+        }
+    except Exception as e:
+        log.error(f"KR system error: {e}")
+        return {"cpu": 0, "mem_pct": 0, "disk_pct": 0, "kiwoom_ok": False}
+
+
+@router.get("/api/kr/top")
+async def get_kr_top():
+    """KR TOP 종목"""
+    try:
+        if not supabase:
+            return []
+        
+        res = (
+            supabase.table("top50_stocks")
+            .select("*")
+            .order("score", desc=True)
+            .limit(30)
+            .execute()
+        )
+        
+        return res.data or []
+    except Exception as e:
+        log.error(f"KR top error: {e}")
+        return []
+
+
+@router.get("/api/kr/trades")
+async def get_kr_trades(
+    limit: int = Query(default=50, le=500),
+    action: str = Query(default=None, regex="^(BUY|SELL|HOLD)$"),
+    hours: int = Query(default=None, ge=1, le=168)
+):
+    """KR 거래 내역 (필터링 지원)"""
+    try:
+        if not supabase:
+            return []
+        
+        query = supabase.table("trade_executions").select("*").eq("market", "kr")
+        
+        if action:
+            query = query.eq("action", action)
+        
+        if hours:
+            cutoff = (datetime.now() - timedelta(hours=hours)).isoformat()
+            query = query.gte("timestamp", cutoff)
+        
+        res = query.order("timestamp", desc=True).limit(limit).execute()
+        return res.data or []
+    except Exception as e:
+        log.error(f"KR trades error: {e}")
+        return []
+
+
+@router.get("/api/kr/positions")
+async def get_kr_positions():
+    try:
+        if not supabase:
+            return {"open_positions": [], "closed_positions": [], "summary": {}}
+        
+        # Get KR stock positions
+        today = datetime.now().date().isoformat()
+        res = (
+            supabase.table("trade_executions")
+            .select("*")
+            .eq("market", "kr")
+            .order("timestamp", desc=True)
+            .limit(100)
+            .execute()
+        )
+        
+        if not res.data:
+            return {"open_positions": [], "closed_positions": [], "summary": {}}
+            
+        # Transform data similar to BTC portfolio
+        positions = []
+        for trade in res.data:
+            positions.append({
+                "id": trade.get("id"),
+                "symbol": trade.get("symbol"),
+                "action": trade.get("action"),
+                "price": trade.get("price"),
+                "quantity": trade.get("quantity"),
+                "timestamp": trade.get("timestamp"),
+                "pnl": trade.get("pnl"),
+                "pnl_pct": trade.get("pnl_pct")
+            })
+        
+        return {
+            "open_positions": [p for p in positions if p.get("action") in ["BUY"]],
+            "closed_positions": [p for p in positions if p.get("action") in ["SELL"]],
+            "summary": {
+                "total_trades": len(positions),
+                "open_count": len([p for p in positions if p.get("action") in ["BUY"]]),
+                "closed_count": len([p for p in positions if p.get("action") in ["SELL"]])
+            }
+        }
+    except Exception as e:
+        log.error(f"KR positions error: {e}")
+        return {"open_positions": [], "closed_positions": [], "summary": {}}
 
 
 @router.get("/api/stocks/trades")
