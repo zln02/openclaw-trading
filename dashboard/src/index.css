@@ -1,27 +1,66 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
   body {
-    @apply bg-gray-950 text-gray-100 font-sans antialiased;
+    @apply bg-background text-text-primary font-sans antialiased;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+  }
+  
+  * {
+    @apply border-border;
   }
 }
 
 @layer components {
   .card {
-    @apply bg-gray-900 border border-gray-800 rounded-xl p-4;
+    @apply bg-card border border-border rounded-card p-4 shadow-card transition-all duration-200 hover:shadow-lg;
   }
+  
+  .card-header {
+    @apply flex items-center justify-between pb-3 mb-3 border-b border-border;
+  }
+  
   .badge-green {
-    @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-emerald-500/20 text-emerald-400;
+    @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-profit/20 text-profit;
   }
+  
   .badge-red {
-    @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-500/20 text-red-400;
+    @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-loss/20 text-loss;
   }
+  
   .badge-yellow {
     @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-500/20 text-amber-400;
   }
+  
   .badge-blue {
-    @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-500/20 text-blue-400;
+    @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-accent/20 text-accent;
+  }
+  
+  .tab-active {
+    @apply bg-card text-text-primary border-b-2 border-accent;
+  }
+  
+  .tab-inactive {
+    @apply text-text-secondary hover:text-text-primary hover:bg-card/50;
+  }
+  
+  .profit-text {
+    @apply text-profit font-mono font-medium;
+  }
+  
+  .loss-text {
+    @apply text-loss font-mono font-medium;
+  }
+  
+  .data-value {
+    @apply font-mono font-semibold text-text-primary;
+  }
+  
+  .data-label {
+    @apply text-xs text-text-secondary uppercase tracking-wide;
   }
 }

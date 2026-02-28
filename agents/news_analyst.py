@@ -21,6 +21,7 @@ from common.config import BRAIN_PATH
 from common.data import NewsStream, collect_news_once
 from common.env_loader import load_env
 from common.logger import get_logger
+from common.utils import safe_float as _safe_float
 
 load_env()
 log = get_logger("news_analyst")
@@ -34,7 +35,7 @@ def _read_json_file(path: Path, default):
         if path.exists():
             return json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:
-        log.warn("state file read failed", path=str(path), error=exc)
+        log.warning("state file read failed", path=str(path), error=exc)
     return default
 
 
@@ -43,7 +44,7 @@ def _write_json_file(path: Path, payload: dict | list) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception as exc:
-        log.warn("state file write failed", path=str(path), error=exc)
+        log.warning("state file write failed", path=str(path), error=exc)
 
 
 def _utc_now() -> datetime:
@@ -52,15 +53,6 @@ def _utc_now() -> datetime:
 
 def _today_key(now: Optional[datetime] = None) -> str:
     return (now or _utc_now()).date().isoformat()
-
-
-def _safe_float(value, default: float = 0.0) -> float:
-    try:
-        if value is None:
-            return default
-        return float(value)
-    except Exception:
-        return default
 
 
 def _json_parse(raw: str) -> dict:
@@ -255,7 +247,7 @@ time: {item.get('timestamp','')}
                 "estimated_cost_usd": round(est_cost, 6),
             }
         except Exception as exc:
-            log.warn("llm news analysis failed", error=exc)
+            log.warning("llm news analysis failed", error=exc)
             return None
 
     def analyze_item(self, item: dict, symbol: str) -> dict:
@@ -263,6 +255,95 @@ time: {item.get('timestamp','')}
         if llm is not None:
             return llm
         return _heuristic_analysis(item, symbol)
+
+    def _batch_analyze_items(self, items: List[dict], symbol: str) -> List[Optional[dict]]:
+        """Analyze multiple news items in a single LLM call.
+
+        Returns a list aligned 1-to-1 with *items*.
+        None entries mean LLM failed for that item → caller should fall back to heuristic.
+        """
+        api_key = os.environ.get("OPENAI_API_KEY", "")
+        if not api_key or not items:
+            return [None] * len(items)
+
+        # Build numbered list of headlines for the batch prompt
+        lines: List[str] = []
+        for i, item in enumerate(items, 1):
+            lines.append(f"{i}. headline: {str(item.get('headline', ''))[:200]}")
+            lines.append(f"   source: {item.get('source', '')}")
+            lines.append(f"   time: {item.get('timestamp', '')}")
+
+        prompt = (
+            f"아래 {len(items)}개 뉴스가 {symbol} 가격에 향후 1~3일 미칠 영향을 각각 분석해줘.\n\n"
+            + "\n".join(lines)
+            + "\n\n다음 JSON 배열만 출력 (뉴스 번호 순서와 동일):\n"
+            '[\n  {"idx": 1, "label": "POSITIVE|NEGATIVE|NEUTRAL", "strength": 1, "reason": "20자 내 요약", "confidence": 0.0},\n  ...\n]'
+        )
+
+        # ~100 completion tokens per item; cap at 2000
+        est_cost, est_tokens = self._estimate_cost_usd(prompt, completion_tokens=min(100 * len(items), 2000))
+        if not self._within_budget(est_cost):
+            return [None] * len(items)
+
+        try:
+            from openai import OpenAI
+
+            client = OpenAI(api_key=api_key)
+            res = client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+                max_tokens=min(100 * len(items), 2000),
+            )
+            raw = (res.choices[0].message.content or "").strip()
+
+            # Extract JSON array from response
+            text = raw.replace("```json", "").replace("```", "").strip()
+            s = text.find("[")
+            e = text.rfind("]")
+            if s < 0 or e <= s:
+                raise ValueError("JSON array not found in batch response")
+            parsed_list = json.loads(text[s : e + 1])
+
+            # Update budget state once for the whole batch
+            st = self.get_budget_state()
+            st["spent_usd"] = round(_safe_float(st.get("spent_usd"), 0.0) + est_cost, 6)
+            st["calls"] = int(st.get("calls", 0)) + 1
+            st["estimated_tokens"] = int(st.get("estimated_tokens", 0)) + est_tokens
+            self._save_budget_state(st)
+
+            # Build a map keyed by 1-based idx
+            result_map: dict[int, dict] = {}
+            for r in parsed_list:
+                if isinstance(r, dict):
+                    try:
+                        result_map[int(r["idx"])] = r
+                    except (KeyError, ValueError, TypeError):
+                        pass
+
+            cost_per_item = round(est_cost / len(items), 6)
+            results: List[Optional[dict]] = []
+            for i in range(1, len(items) + 1):
+                r = result_map.get(i)
+                if r is None:
+                    results.append(None)
+                else:
+                    results.append(
+                        {
+                            "symbol": symbol,
+                            "label": _normalize_label(r.get("label")),
+                            "strength": _clip_strength(r.get("strength")),
+                            "reason": str(r.get("reason") or "")[:100],
+                            "confidence": max(0.0, min(1.0, _safe_float(r.get("confidence"), 0.6))),
+                            "model": self.model,
+                            "estimated_cost_usd": cost_per_item,
+                        }
+                    )
+            return results
+
+        except Exception as exc:
+            log.warning("batch llm news analysis failed", error=exc)
+            return [None] * len(items)
 
     def _score_one(self, row: dict) -> float:
         label = _normalize_label(row.get("label"))
@@ -321,18 +402,45 @@ time: {item.get('timestamp','')}
         return str(default_symbol or "BTC").strip().upper()
 
     def analyze_news_items(self, items: List[dict], default_symbol: str = "BTC") -> List[dict]:
+        from collections import defaultdict
+
         seen = self._load_seen_ids()
         now = _utc_now()
-        analyzed: List[dict] = []
 
+        # ── 1. Filter unseen items, assign symbol ──────────────────────────────
+        # pending: list of (seq_idx, sym, item) in original order
+        pending: List[tuple[int, str, dict]] = []
         for item in items:
             nid = str(item.get("id") or "")
             if not nid or nid in seen:
                 continue
             seen.add(nid)
-
             sym = self._pick_symbol(item, default_symbol)
-            result = self.analyze_item(item, sym)
+            pending.append((len(pending), sym, item))
+
+        if not pending:
+            self._save_seen_ids(seen)
+            return []
+
+        # ── 2. Group by symbol and batch-analyze ──────────────────────────────
+        by_symbol: dict[str, List[tuple[int, dict]]] = defaultdict(list)
+        for seq_idx, sym, item in pending:
+            by_symbol[sym].append((seq_idx, item))
+
+        results: dict[int, dict] = {}
+        for sym, idx_items in by_symbol.items():
+            batch_items = [it for _, it in idx_items]
+            batch_results = self._batch_analyze_items(batch_items, sym)
+            for (seq_idx, item), res in zip(idx_items, batch_results):
+                if res is None:
+                    res = _heuristic_analysis(item, sym)
+                results[seq_idx] = res
+
+        # ── 3. Reconstruct in original order ──────────────────────────────────
+        analyzed: List[dict] = []
+        for seq_idx, sym, item in pending:
+            nid = str(item.get("id") or "")
+            result = results.get(seq_idx, _heuristic_analysis(item, sym))
             analyzed.append(
                 {
                     "id": nid,
@@ -402,7 +510,7 @@ time: {item.get('timestamp','')}
                 if fresh:
                     buffered_items.extend(fresh)
             except Exception as exc:
-                log.warn("news stream pump failed", error=exc)
+                log.warning("news stream pump failed", error=exc)
 
             now_ts = time.time()
             if (now_ts - last_flush) >= self.batch_minutes * 60:

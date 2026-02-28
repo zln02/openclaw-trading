@@ -4,9 +4,12 @@ Notion 스킬: notion-client를 사용한 페이지 생성 및 DB 조회.
 """
 import os
 import re
+import time
 from typing import Any, Optional
 
 from notion_client import Client
+
+from common.telegram import send_telegram
 
 
 def _normalize_id(raw: str) -> str:
@@ -50,9 +53,30 @@ def create_notion_note(title: str, content: str = "", parent_page_id: Optional[s
     if not parent_id:
         raise ValueError("NOTION_PAGE_ID가 .env에 설정되지 않았습니다.")
     body = {"parent": {"page_id": parent_id}, "properties": {"title": {"title": [{"type": "text", "text": {"content": title[:2000]}}]}}}
-    page = client.pages.create(**body)
+    page = None
+    last_exc: Optional[Exception] = None
+    for attempt in range(1, 4):
+        try:
+            page = client.pages.create(**body)
+            break
+        except Exception as e:
+            last_exc = e
+            if attempt < 3:
+                time.sleep(attempt)
+    if page is None:
+        send_telegram(f"⚠️ Notion 페이지 생성 실패 (3회 시도): {last_exc}")
+        return {"ok": False, "error": str(last_exc)}
     if content:
-        client.blocks.children.append(block_id=page["id"], children=[{"object": "block", "type": "paragraph", "paragraph": {"rich_text": [{"type": "text", "text": {"content": content[:2000]}}]}}])
+        for attempt in range(1, 4):
+            try:
+                client.blocks.children.append(block_id=page["id"], children=[{"object": "block", "type": "paragraph", "paragraph": {"rich_text": [{"type": "text", "text": {"content": content[:2000]}}]}}])
+                break
+            except Exception as e:
+                last_exc = e
+                if attempt < 3:
+                    time.sleep(attempt)
+                else:
+                    send_telegram(f"⚠️ Notion 콘텐츠 추가 실패 (3회 시도): {last_exc}")
     return {"ok": True, "page_id": page["id"], "url": page.get("url", ""), "title": title}
 
 
@@ -71,7 +95,19 @@ def update_notion_todo(database_id: Optional[str] = None, page_id: Optional[str]
         return {"ok": True, "page_id": target_id, "updated": list(props.keys())}
     db_id = _resolve_to_database_id(client, raw_id)
     props = {"Name": {"title": [{"type": "text", "text": {"content": (title or "할 일")[:2000]}}]}, "Done": {"checkbox": done if done is not None else False}}
-    page = client.pages.create(parent={"database_id": db_id}, properties=props)
+    page = None
+    last_exc: Optional[Exception] = None
+    for attempt in range(1, 4):
+        try:
+            page = client.pages.create(parent={"database_id": db_id}, properties=props)
+            break
+        except Exception as e:
+            last_exc = e
+            if attempt < 3:
+                time.sleep(attempt)
+    if page is None:
+        send_telegram(f"⚠️ Notion DB 항목 생성 실패 (3회 시도): {last_exc}")
+        return {"ok": False, "error": str(last_exc)}
     return {"ok": True, "page_id": page["id"], "url": page.get("url", ""), "title": title or "할 일"}
 
 

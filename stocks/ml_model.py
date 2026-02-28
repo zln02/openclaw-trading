@@ -274,87 +274,291 @@ def load_training_data(target_days=3, target_return=0.02):
 # ─────────────────────────────────────────────
 # 모델 학습
 # ─────────────────────────────────────────────
+def _build_model(scale_pos_weight: float = 1.0):
+    """XGBClassifier 인스턴스 공통 생성."""
+    from xgboost import XGBClassifier
+    return XGBClassifier(
+        n_estimators=200,
+        max_depth=5,
+        learning_rate=0.05,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        scale_pos_weight=scale_pos_weight,
+        eval_metric='logloss',
+        random_state=42,
+        use_label_encoder=False,
+    )
+
+
+def walk_forward_validate(X: np.ndarray, y: np.ndarray, n_splits: int = 5) -> dict:
+    """
+    Walk-forward 교차검증 (시계열 전용).
+
+    각 폴드에서 과거로 학습 → 미래로 검증.
+    랜덤 분할 금지 (미래 데이터 누수 방지).
+
+    Returns:
+        {
+          'fold_aucs': list[float],
+          'fold_precisions': list[float],
+          'mean_auc': float,
+          'mean_precision': float,
+          'std_auc': float,
+        }
+    """
+    try:
+        from xgboost import XGBClassifier
+        from sklearn.model_selection import TimeSeriesSplit
+        from sklearn.metrics import roc_auc_score, precision_score
+    except ImportError as e:
+        print(f'의존성 부족: {e}')
+        return {}
+
+    tscv = TimeSeriesSplit(n_splits=n_splits)
+    fold_aucs, fold_precisions = [], []
+
+    print(f'\n=== Walk-forward 교차검증 ({n_splits}폴드) ===')
+    for fold, (train_idx, test_idx) in enumerate(tscv.split(X), 1):
+        X_tr, X_te = X[train_idx], X[test_idx]
+        y_tr, y_te = y[train_idx], y[test_idx]
+
+        if len(np.unique(y_te)) < 2:
+            continue  # 라벨 단일 폴드 스킵
+
+        pos = max(int(y_tr.sum()), 1)
+        neg = max(len(y_tr) - pos, 1)
+        model = _build_model(scale_pos_weight=neg / pos)
+        model.fit(X_tr, y_tr, verbose=False)
+
+        y_prob = model.predict_proba(X_te)[:, 1]
+        y_pred = (y_prob >= 0.65).astype(int)
+
+        auc = roc_auc_score(y_te, y_prob)
+        prec = precision_score(y_te, y_pred, zero_division=0)
+
+        fold_aucs.append(auc)
+        fold_precisions.append(prec)
+        print(f'  Fold {fold}: AUC={auc:.3f}  Precision@0.65={prec:.3f}  '
+              f'(train={len(X_tr)}, test={len(X_te)})')
+
+    if not fold_aucs:
+        return {}
+
+    result = {
+        'fold_aucs':       fold_aucs,
+        'fold_precisions': fold_precisions,
+        'mean_auc':        round(float(np.mean(fold_aucs)), 4),
+        'std_auc':         round(float(np.std(fold_aucs)), 4),
+        'mean_precision':  round(float(np.mean(fold_precisions)), 4),
+    }
+    print(f'\n  평균 AUC: {result["mean_auc"]:.3f} ± {result["std_auc"]:.3f}')
+    print(f'  평균 Precision@0.65: {result["mean_precision"]:.3f}')
+    return result
+
+
+def compute_shap_values(model, X_sample: np.ndarray) -> dict:
+    """
+    SHAP 값으로 피처 기여도 분석.
+
+    Args:
+        model: 학습된 XGBClassifier
+        X_sample: 분석할 샘플 (최대 500개 사용)
+
+    Returns:
+        {'feature': shap_mean_abs, ...} — 내림차순 정렬
+    """
+    try:
+        import shap
+    except ImportError:
+        print('shap 미설치: pip install shap')
+        return {}
+
+    sample = X_sample[:500] if len(X_sample) > 500 else X_sample
+    explainer = shap.TreeExplainer(model)
+    shap_vals = explainer.shap_values(sample)
+
+    # 이진 분류: shap_vals shape = (n_samples, n_features)
+    if isinstance(shap_vals, list):
+        shap_vals = shap_vals[1]  # 클래스 1 (매수)
+
+    mean_abs = np.abs(shap_vals).mean(axis=0)
+    ranking = sorted(
+        zip(FEATURE_NAMES, mean_abs.tolist()),
+        key=lambda x: x[1], reverse=True,
+    )
+
+    print('\n=== SHAP 피처 기여도 (평균 절댓값) ===')
+    for name, val in ranking[:10]:
+        bar = '█' * int(val * 200)
+        print(f'  {name:<20} {val:.4f}  {bar}')
+
+    return {name: round(val, 6) for name, val in ranking}
+
+
 def train_model():
-    """XGBoost 모델 학습"""
+    """XGBoost 모델 학습 (Walk-forward + SHAP + AUC 포함)."""
     try:
         from xgboost import XGBClassifier
     except ImportError:
         print('xgboost 미설치. pip install xgboost')
         return
 
-    from sklearn.metrics import classification_report, accuracy_score
+    from sklearn.metrics import (
+        classification_report, accuracy_score,
+        roc_auc_score, average_precision_score,
+    )
 
     X, y = load_training_data(target_days=3, target_return=0.02)
     if X is None or len(X) < 100:
         print('데이터 부족 (최소 100개 필요)')
         return
 
-    # 시간순 분할: 앞 80% 학습, 뒤 20% 테스트
+    # ── Walk-forward 교차검증 ──
+    wf = walk_forward_validate(X, y, n_splits=5)
+
+    # ── 최종 모델: 앞 80% 학습 / 뒤 20% OOS 테스트 ──
     split_idx = int(len(X) * 0.8)
     X_train, X_test = X[:split_idx], X[split_idx:]
     y_train, y_test = y[:split_idx], y[split_idx:]
 
-    print(f'\n학습: {len(X_train)}개 / 테스트: {len(X_test)}개')
+    print(f'\n최종 모델 학습: {len(X_train)}개 / OOS 테스트: {len(X_test)}개')
 
-    # 클래스 불균형 보정
     pos = max(int(y_train.sum()), 1)
     neg = max(len(y_train) - pos, 1)
-    scale = neg / pos
+    model = _build_model(scale_pos_weight=neg / pos)
+    model.fit(X_train, y_train, eval_set=[(X_test, y_test)], verbose=False)
 
-    model = XGBClassifier(
-        n_estimators=200,
-        max_depth=5,
-        learning_rate=0.05,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        scale_pos_weight=scale,
-        eval_metric='logloss',
-        random_state=42,
-        use_label_encoder=False,
-    )
-
-    model.fit(
-        X_train,
-        y_train,
-        eval_set=[(X_test, y_test)],
-        verbose=False,
-    )
-
-    # 평가
     y_pred = model.predict(X_test)
     y_prob = model.predict_proba(X_test)[:, 1]
 
-    print('\n=== 모델 성과 ===')
-    print(f'정확도: {accuracy_score(y_test, y_pred) * 100:.1f}%')
+    print('\n=== OOS 모델 성과 ===')
+    print(f'  정확도:     {accuracy_score(y_test, y_pred) * 100:.1f}%')
+    if len(np.unique(y_test)) > 1:
+        print(f'  AUC-ROC:    {roc_auc_score(y_test, y_prob):.3f}')
+        print(f'  AP (PR):    {average_precision_score(y_test, y_prob):.3f}')
     print(classification_report(y_test, y_pred, target_names=['관망', '매수']))
 
-    # 피처 중요도
+    # ── XGBoost 피처 중요도 ──
     importances = sorted(
         zip(FEATURE_NAMES, model.feature_importances_),
-        key=lambda x: x[1],
-        reverse=True,
+        key=lambda x: x[1], reverse=True,
     )
-    print('\n=== 피처 중요도 TOP 10 ===')
+    print('\n=== XGBoost 피처 중요도 TOP 10 ===')
     for name, imp in importances[:10]:
         print(f'  {name}: {imp:.4f}')
 
-    # 확률별 간단 백테스트
+    # ── SHAP 분석 ──
+    shap_ranking = compute_shap_values(model, X_test)
+
+    # ── 확률 임계값별 승률 ──
     thresholds = [0.5, 0.6, 0.65, 0.7, 0.8]
-    print('\n=== 확률별 승률 ===')
+    print('\n=== 확률 임계값별 Precision ===')
     for thresh in thresholds:
         mask = y_prob >= thresh
         if mask.sum() == 0:
             continue
-        actual_buys = y_test[mask]
-        precision = actual_buys.sum() / len(actual_buys) * 100
-        print(f'  확률 ≥{thresh:.2f}: {mask.sum()}건 매수 → 승률 {precision:.1f}%')
+        prec = y_test[mask].sum() / mask.sum() * 100
+        print(f'  ≥{thresh:.2f}: {int(mask.sum())}건 → Precision {prec:.1f}%')
 
-    # 모델 저장
+    # ── 모델 메타데이터와 함께 저장 ──
+    meta = {
+        'walk_forward': wf,
+        'shap_ranking': list(shap_ranking.items())[:10] if shap_ranking else [],
+        'trained_at': str(Path(__file__).stat().st_mtime),
+        'n_samples': len(X),
+        'feature_importance': [(n, round(float(v), 6)) for n, v in importances],
+    }
+    META_PATH = MODEL_PATH.with_suffix('.meta.json')
+    META_PATH.write_text(json.dumps(meta, ensure_ascii=False, indent=2))
+
     with open(MODEL_PATH, 'wb') as f:
         pickle.dump(model, f)
     print(f'\n모델 저장: {MODEL_PATH}')
+    print(f'메타 저장: {META_PATH}')
 
     return model
+
+
+def retrain_from_live_trades(min_samples: int = 30) -> bool:
+    """
+    실제 매매 결과(trade_executions)로 모델 재학습 (온라인 학습).
+
+    XGBoost의 incremental fit은 부재 → 전체 재학습이지만
+    라이브 거래 라벨(성공/실패)을 추가 학습 데이터로 포함.
+
+    Args:
+        min_samples: 재학습 최소 라이브 샘플 수
+
+    Returns:
+        True if 재학습 성공
+    """
+    if not supabase:
+        print('Supabase 미연결')
+        return False
+
+    # 실매매 결과 로드
+    try:
+        rows = (
+            supabase.table('trade_executions')
+            .select('stock_code,price,result,pnl_pct,created_at')
+            .in_('result', ['CLOSED', 'SELL'])
+            .order('created_at', desc=False)
+            .execute()
+            .data or []
+        )
+    except Exception as e:
+        print(f'거래 데이터 로드 실패: {e}')
+        return False
+
+    if len(rows) < min_samples:
+        print(f'라이브 샘플 부족: {len(rows)} < {min_samples}')
+        return False
+
+    # 라이브 라벨 생성: pnl_pct >= 2% → 1(성공)
+    live_X, live_y = [], []
+    for r in rows:
+        code = r.get('stock_code', '')
+        pred = predict_stock(code)
+        if 'error' in pred:
+            continue
+        features = list(pred['features'].values())
+        pnl = float(r.get('pnl_pct') or 0)
+        label = 1 if pnl >= 2.0 else 0
+        live_X.append(features)
+        live_y.append(label)
+
+    if len(live_X) < min_samples:
+        print(f'유효 라이브 샘플 부족: {len(live_X)}')
+        return False
+
+    # 히스토리컬 데이터와 병합
+    X_hist, y_hist = load_training_data()
+    if X_hist is not None and len(X_hist) > 0:
+        X_all = np.vstack([X_hist, np.array(live_X, dtype=float)])
+        y_all = np.concatenate([y_hist, np.array(live_y, dtype=int)])
+    else:
+        X_all = np.array(live_X, dtype=float)
+        y_all = np.array(live_y, dtype=int)
+
+    live_wins = sum(live_y)
+    print(f'\n실매매 데이터 {len(live_X)}건 추가 (성공: {live_wins} / 실패: {len(live_y)-live_wins})')
+    print(f'전체 학습 데이터: {len(X_all)}건')
+
+    # 재학습
+    pos = max(int(y_all.sum()), 1)
+    neg = max(len(y_all) - pos, 1)
+    model = _build_model(scale_pos_weight=neg / pos)
+    split_idx = int(len(X_all) * 0.85)
+    model.fit(
+        X_all[:split_idx], y_all[:split_idx],
+        eval_set=[(X_all[split_idx:], y_all[split_idx:])],
+        verbose=False,
+    )
+
+    with open(MODEL_PATH, 'wb') as f:
+        pickle.dump(model, f)
+    print(f'실매매 반영 모델 저장: {MODEL_PATH}')
+    return True
 
 
 # ─────────────────────────────────────────────
@@ -489,10 +693,30 @@ if __name__ == '__main__':
         predict_all()
     elif cmd == 'evaluate':
         train_model()
+    elif cmd == 'retrain':
+        # 실매매 결과로 재학습
+        min_s = int(sys.argv[2]) if len(sys.argv) > 2 else 30
+        ok = retrain_from_live_trades(min_samples=min_s)
+        print('재학습 성공' if ok else '재학습 실패')
+    elif cmd == 'validate':
+        # Walk-forward 검증만 실행
+        X, y = load_training_data()
+        if X is not None:
+            walk_forward_validate(X, y)
+    elif cmd == 'shap' and len(sys.argv) > 2:
+        # 특정 종목 SHAP 분석
+        res = predict_stock(sys.argv[2])
+        if 'error' not in res:
+            model = _load_model()
+            if model:
+                feats = np.array([list(res['features'].values())], dtype=float)
+                compute_shap_values(model, feats)
     else:
         print('사용법:')
-        print('  python3 ml_model.py train')
-        print('  python3 ml_model.py predict 005930')
-        print('  python3 ml_model.py predict_all')
-        print('  python3 ml_model.py evaluate')
+        print('  python3 ml_model.py train              # 전체 학습 + Walk-forward + SHAP')
+        print('  python3 ml_model.py validate           # Walk-forward 검증만')
+        print('  python3 ml_model.py retrain [n]        # 실매매 결과 반영 재학습')
+        print('  python3 ml_model.py predict 005930     # 특정 종목 예측')
+        print('  python3 ml_model.py shap 005930        # 특정 종목 SHAP 분석')
+        print('  python3 ml_model.py predict_all        # 전체 종목 예측')
 

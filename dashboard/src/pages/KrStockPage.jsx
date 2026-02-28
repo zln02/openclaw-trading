@@ -1,183 +1,194 @@
-import { BarChart3, TrendingUp, Wallet, ShieldAlert } from "lucide-react";
+import { Building2, Gauge, Wallet, Clock, Newspaper, TrendingUp, DollarSign } from "lucide-react";
 import usePolling from "../hooks/usePolling";
 import StatCard from "../components/StatCard";
 import TradeTable from "../components/TradeTable";
-import {
-  getStockOverview,
-  getStockPortfolio,
-  getStockTrades,
-  getStockMarket,
-  getStockStrategy,
-  getStockRealtimePrice,
-  getStockRealtimeOrderbook,
-  getStockRealtimeAlt,
-} from "../api";
 
 const fmt = (n) => n != null ? Number(n).toLocaleString() : "—";
 const pct = (n) => n != null ? `${Number(n) >= 0 ? "+" : ""}${Number(n).toFixed(2)}%` : "—";
 
 const TRADE_COLS = [
-  { key: "created_at", label: "시간", render: (_v, row) => (row.created_at || row.timestamp || "").slice(5, 16) },
-  {
-    key: "trade_type",
-    label: "구분",
-    render: (_v, row) => {
-      const side = row.trade_type || row.action || "";
-      return (
-        <span className={side === "BUY" ? "text-emerald-400 font-medium" : side === "SELL" ? "text-red-400 font-medium" : "text-gray-400"}>
-          {side || "—"}
-        </span>
-      );
-    },
-  },
-  { key: "symbol", label: "종목", render: (_v, row) => row.symbol || row.stock_code || row.code || "—" },
-  { key: "price", label: "가격", render: (_v, row) => `₩${fmt(row.price ?? row.avg_price)}` },
-  { key: "quantity", label: "수량", render: (_v, row) => row.quantity ?? row.qty ?? "—" },
-  {
-    key: "reason",
-    label: "사유",
-    render: (_v, row) => <span className="text-gray-400 text-xs max-w-[180px] truncate block">{row.reason || row.strategy || ""}</span>,
-  },
+  { key: "timestamp", label: "시간", render: (v) => v?.slice(5, 16) },
+  { key: "action", label: "구분", render: (v) => (
+    <span className={v === "BUY" ? "profit-text" : v === "SELL" ? "loss-text" : "text-text-secondary"}>{v}</span>
+  )},
+  { key: "symbol", label: "종목", render: (v) => <span className="font-mono">{v}</span> },
+  { key: "price", label: "가격", render: (v) => <span className="font-mono">₩{fmt(v)}</span> },
+  { key: "quantity", label: "수량", render: (v) => <span className="font-mono">{fmt(v)}</span> },
+  { key: "pnl_pct", label: "수익률", render: (v) => (
+    <span className={v > 0 ? "profit-text" : v < 0 ? "loss-text" : "text-text-secondary"}>
+      {pct(v)}
+    </span>
+  )},
 ];
 
-const fetchKrRtPrice = () => getStockRealtimePrice("005930");
-const fetchKrRtOrderbook = () => getStockRealtimeOrderbook("005930");
-const fetchKrRtAlt = () => getStockRealtimeAlt("005930");
+async function apiFetch(path) {
+  const res = await fetch(path);
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  return res.json();
+}
+
+const getKrComposite = () => apiFetch("/api/kr/composite");
+const getKrPortfolio  = () => apiFetch("/api/kr/portfolio");
+const getKrTrades     = () => apiFetch("/api/kr/trades");
+const getKrSystem     = () => apiFetch("/api/kr/system");
+const getKrTop        = () => apiFetch("/api/kr/top");
 
 export default function KrStockPage() {
-  const { data: overview } = usePolling(getStockOverview, 30000);
-  const { data: portfolio } = usePolling(getStockPortfolio, 30000);
-  const { data: trades } = usePolling(getStockTrades, 60000);
-  const { data: market } = usePolling(getStockMarket, 60000);
-  const { data: strategy } = usePolling(getStockStrategy, 120000);
-  const { data: rtPrice } = usePolling(fetchKrRtPrice, 5000);
-  const { data: rtOrderbook } = usePolling(fetchKrRtOrderbook, 5000);
-  const { data: rtAlt } = usePolling(fetchKrRtAlt, 60000);
+  const { data: composite } = usePolling(getKrComposite, 10000);
+  const { data: portfolio } = usePolling(getKrPortfolio, 15000);
+  const { data: trades } = usePolling(getKrTrades, 20000);
+  const { data: system } = usePolling(getKrSystem, 30000);
+  const { data: topStocks } = usePolling(getKrTop, 60000);
 
-  const movers = Array.isArray(overview) ? overview : [];
-  const portfolioData = portfolio || {};
-  const positions = portfolioData.positions || [];
-  const kospi = market?.kospi;
-  const isOpen = portfolioData.is_market_open;
-  const strategyData = strategy?.strategy || null;
-  const candidates = strategyData?.candidates || [];
-  const todayTrades = Array.isArray(trades) ? trades.length : 0;
-  const topMover = movers[0] || null;
+  const summary = portfolio?.summary || {};
+  const positions = portfolio?.open_positions || [];
 
   return (
-    <div className="space-y-6">
+    <div className="p-6 space-y-6">
       {/* Header */}
-      <div className="flex items-center gap-3">
-        <BarChart3 className="w-7 h-7 text-blue-400" />
-        <h1 className="text-xl font-bold">KR 주식 대시보드</h1>
-        {isOpen != null && (
-          <span className={`ml-auto text-xs px-2 py-0.5 rounded ${isOpen ? "badge-green" : "badge-red"}`}>
-            {isOpen ? "장중" : "장 마감"}
-          </span>
+      <div className="flex items-center justify-between">
+        <div className="flex items-center space-x-3">
+          <Building2 className="w-8 h-8 text-accent" />
+          <div>
+            <h1 className="text-2xl font-bold text-text-primary">한국 주식</h1>
+            <p className="text-text-secondary text-sm">KOSPI/KOSDAQ 실시간 모니터링</p>
+          </div>
+        </div>
+        {system && (
+          <div className="flex items-center space-x-4 text-xs text-text-secondary">
+            <span>Kiwoom: {system.kiwoom_ok ? "🟢" : "🔴"}</span>
+            <span>CPU: {system.cpu}%</span>
+            <span>MEM: {system.mem_pct}%</span>
+          </div>
         )}
       </div>
 
-      {/* Market Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      {/* Composite Score */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <StatCard
-          label="KOSPI"
-          value={kospi?.price ? fmt(kospi.price) : "—"}
-          sub={kospi?.change_pct ? pct(kospi.change_pct) : null}
-          trend={kospi?.change_pct > 0 ? "up" : kospi?.change_pct < 0 ? "down" : null}
+          label="종합 점수"
+          value={composite?.total || 0}
+          sub={`KOSPI: ${composite?.kospi || 0} | KOSDAQ: ${composite?.kosdaq || 0}`}
+          icon={Gauge}
+          trend={composite?.trend === "UP" ? "up" : composite?.trend === "DOWN" ? "down" : null}
+          tooltip="KOSPI/KOSDAQ 종합 시장 점수"
+        />
+        <StatCard
+          label="거래량"
+          value={composite?.volume || 0}
+          sub="시장 거래량 지표"
           icon={TrendingUp}
-        />
-        <StatCard label="보유 종목" value={positions.length} icon={Wallet} />
-        <StatCard
-          label="오늘 손익"
-          value={portfolioData?.today_pnl != null ? `₩${fmt(portfolioData.today_pnl)}` : "—"}
-          trend={portfolioData?.today_pnl > 0 ? "up" : portfolioData?.today_pnl < 0 ? "down" : null}
+          tooltip="전체 시장 거래량"
         />
         <StatCard
-          label="오늘 매매"
-          value={`${todayTrades}건`}
-          icon={ShieldAlert}
-          sub={topMover ? `변동상위: ${topMover.name || topMover.code}` : null}
-          trend={topMover?.change > 0 ? "up" : topMover?.change < 0 ? "down" : null}
+          label="시장 심리"
+          value={composite?.sentiment || 0}
+          sub="투자자 심리 지수"
+          icon={Newspaper}
+          tooltip="시장 참여자 심리 상태"
         />
       </div>
 
-      {/* Realtime Phase 9 */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <StatCard label="삼성전자 실시간" value={rtPrice?.price ? `₩${fmt(rtPrice.price)}` : "—"} />
-        <StatCard
-          label="호가 불균형"
-          value={rtOrderbook?.imbalance ?? "—"}
-          trend={rtOrderbook?.imbalance > 0 ? "up" : rtOrderbook?.imbalance < 0 ? "down" : null}
-          sub={rtOrderbook?.source || null}
-        />
-        <StatCard
-          label="검색 트렌드"
-          value={rtAlt?.search_trend_7d ?? "—"}
-          trend={rtAlt?.search_trend_7d > 60 ? "up" : rtAlt?.search_trend_7d < 30 ? "down" : null}
-        />
-        <StatCard
-          label="소셜 감정"
-          value={rtAlt?.sentiment_score ?? "—"}
-          trend={rtAlt?.sentiment_score > 0 ? "up" : rtAlt?.sentiment_score < 0 ? "down" : null}
-          icon={ShieldAlert}
-        />
-      </div>
-
-      {/* Strategy */}
-      {strategyData && (
-        <div className="card">
-          <h3 className="text-sm font-medium text-gray-400 mb-3">오늘의 전략</h3>
-          {candidates.length > 0 ? (
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-              {candidates.slice(0, 8).map((c, i) => (
-                <div key={i} className="bg-gray-800/50 rounded-lg p-3 text-sm">
-                  <div className="font-medium text-white">{c.symbol || c.name}</div>
-                  <div className="text-xs text-gray-500 mt-1">
-                    {c.score ? `스코어: ${c.score}` : ""}
-                    {c.sector ? ` · ${c.sector}` : ""}
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="text-gray-600 text-sm">전략 데이터 없음</div>
-          )}
+      {/* Portfolio Summary */}
+      <div className="card">
+        <div className="card-header">
+          <Wallet className="w-5 h-5" />
+          <h3>포트폴리오 요약</h3>
         </div>
-      )}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="text-center">
+            <div className="data-label">예수금</div>
+            <div className="data-value">₩{fmt(summary?.krw_balance)}</div>
+          </div>
+          <div className="text-center">
+            <div className="data-label">총 평가</div>
+            <div className="data-value">₩{fmt(summary?.total_eval)}</div>
+          </div>
+          <div className="text-center">
+            <div className="data-label">미실현 손익</div>
+            <div className={`data-value ${summary?.unrealized_pnl >= 0 ? "profit-text" : "loss-text"}`}>
+              ₩{fmt(summary?.unrealized_pnl)}
+            </div>
+          </div>
+          <div className="text-center">
+            <div className="data-label">보유 종목</div>
+            <div className="data-value">{summary?.open_count || 0}개</div>
+          </div>
+        </div>
+      </div>
 
-      {/* Positions */}
+      {/* Open Positions */}
       {positions.length > 0 && (
         <div className="card">
-          <h3 className="text-sm font-medium text-gray-400 mb-3">보유 포지션</h3>
-          <div className="space-y-2">
-            {positions.map((p, i) => {
-              const entry = Number(p.avg_entry ?? p.entry_price ?? 0);
-              const current = Number(p.current_price ?? p.price ?? 0);
-              const pnlPct = p.pnl_pct ?? (entry > 0 ? ((current - entry) / entry) * 100 : 0);
-              return (
-                <div key={i} className="flex items-center justify-between py-2 px-3 bg-gray-800/30 rounded-lg text-sm">
-                  <div>
-                    <span className="font-medium">{p.symbol || p.code || p.name}</span>
-                    <span className="text-xs text-gray-500 ml-2">{p.quantity}주</span>
-                  </div>
-                  <div className="text-right">
-                    <div>₩{fmt(current)}</div>
-                    <div className={`text-xs ${pnlPct >= 0 ? "text-emerald-400" : "text-red-400"}`}>
-                      {pct(pnlPct)}
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
+          <div className="card-header">
+            <DollarSign className="w-5 h-5" />
+            <h3>보유 포지션</h3>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border">
+                  <th className="text-left py-2 px-3">종목</th>
+                  <th className="text-right py-2 px-3">수량</th>
+                  <th className="text-right py-2 px-3">진입가</th>
+                  <th className="text-right py-2 px-3">현재가</th>
+                  <th className="text-right py-2 px-3">수익률</th>
+                </tr>
+              </thead>
+              <tbody>
+                {positions.slice(0, 5).map((pos) => (
+                  <tr key={pos.id} className="border-b border-border/50">
+                    <td className="py-2 px-3 font-mono">{pos.symbol}</td>
+                    <td className="text-right py-2 px-3">{fmt(pos.quantity)}</td>
+                    <td className="text-right py-2 px-3">₩{fmt(pos.price)}</td>
+                    <td className="text-right py-2 px-3">₩{fmt(pos.current_price ?? pos.price)}</td>
+                    <td className={`text-right py-2 px-3 ${pos.pnl_pct >= 0 ? "profit-text" : "loss-text"}`}>
+                      {pct(pos.pnl_pct)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       )}
 
-      {/* Trades */}
-      <div>
-        <h3 className="text-sm font-medium text-gray-400 mb-3">최근 거래</h3>
-        <TradeTable trades={Array.isArray(trades) ? trades : []} columns={TRADE_COLS} />
+      {/* Recent Trades */}
+      <div className="card">
+        <div className="card-header">
+          <Clock className="w-5 h-5" />
+          <h3>최근 거래</h3>
+        </div>
+        <TradeTable
+          trades={trades?.slice(0, 10) || []}
+          columns={TRADE_COLS}
+        />
       </div>
+
+      {/* Top Stocks */}
+      {topStocks && topStocks.length > 0 && (
+        <div className="card">
+          <div className="card-header">
+            <TrendingUp className="w-5 h-5" />
+            <h3>TOP 종목</h3>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {topStocks.slice(0, 9).map((stock) => (
+              <div key={stock.id} className="p-3 border border-border rounded-lg">
+                <div className="flex justify-between items-center">
+                  <span className="font-mono font-semibold">{stock.symbol}</span>
+                  <span className={`text-sm ${stock.ret_5d >= 0 ? "profit-text" : "loss-text"}`}>
+                    {pct(stock.ret_5d)}
+                  </span>
+                </div>
+                <div className="text-xs text-text-secondary mt-1">
+                  Score: {stock.score} | 변동률: {pct(stock.ret_20d)}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

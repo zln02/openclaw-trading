@@ -80,10 +80,10 @@ def get_upbit_cache():
 
 
 # ── BTC page ────────────────────────────────────────────
-@router.get("/", response_class=HTMLResponse)
-async def index():
-    from btc.templates.btc_html import BTC_HTML
-    return BTC_HTML
+# @router.get("/", response_class=HTMLResponse)
+# async def index():
+#     from btc.templates.btc_html import BTC_HTML
+#     return BTC_HTML
 
 
 def _compute_composite_sync():
@@ -350,12 +350,31 @@ async def get_stats():
 
 
 @router.get("/api/trades")
-async def get_trades():
+async def get_trades(
+    limit: int = Query(default=50, le=500),
+    action: str = Query(default=None, regex="^(BUY|SELL|HOLD)$"),
+    hours: int = Query(default=None, ge=1, le=168)  # 1시간~7일
+):
+    """거래 내역 조회 (필터링 지원)"""
     if not supabase:
         return []
     try:
-        res = supabase.table("btc_trades").select("*").order("timestamp", desc=True).limit(100).execute()
+        query = supabase.table("btc_trades").select("*")
+        
+        # 액션 필터링
+        if action:
+            query = query.eq("action", action)
+        
+        # 시간 필터링
+        if hours:
+            from datetime import datetime, timedelta
+            cutoff = (datetime.now() - timedelta(hours=hours)).isoformat()
+            query = query.gte("timestamp", cutoff)
+        
+        # 정렬 및 제한
+        res = query.order("timestamp", desc=True).limit(limit).execute()
         data = res.data or []
+        
         for t in data:
             if t.get("timestamp"):
                 t["timestamp"] = t["timestamp"][:19]

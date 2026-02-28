@@ -26,6 +26,7 @@ from common.config import BRAIN_PATH
 from common.env_loader import load_env
 from common.logger import get_logger
 from common.retry import retry_call
+from common.utils import safe_float as _safe_float
 
 load_env()
 log = get_logger("regime_classifier")
@@ -59,15 +60,6 @@ REGIME_PRESETS = {
         "stop_loss_scale": 0.80,
     },
 }
-
-
-def _safe_float(value, default: float = 0.0) -> float:
-    try:
-        if value is None:
-            return default
-        return float(value)
-    except Exception:
-        return default
 
 
 def _to_iso_day(value: str | date | datetime | None = None) -> str:

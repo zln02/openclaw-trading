@@ -33,3 +33,11 @@ psutil>=5.9.0
 
 # Utilities
 python-dotenv>=1.0.0
+
+# Google Sheets (optional, for sheets_logger fallback when gog CLI unavailable)
+# gspread>=5.12.0
+# google-auth>=2.25.0
+
+# ML explainability
+shap>=0.44.0
+numpy>=1.24.0
