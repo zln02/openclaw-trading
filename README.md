@@ -92,10 +92,12 @@ BTC · KR 주식 · US 주식 자동매매 통합 플랫폼 + 고급 Google Shee
 
 | 시트 | 목적 | 링크 |
 |------|------|------|
-| **메인 거래기록** | 모든 거래 상세 기록 | [바로가기](https://docs.google.com/spreadsheets/d/1HXBiwg38i2LrgOgC3mjokH0sTk7qgq7Q8o4jdWOe58s/edit) |
-| **포트폴리오 요약** | 실시간 자산 현황 | [바로가기](https://docs.google.com/spreadsheets/d/12nutQo_rA6BVo9xjbIrFhS6PLaz4uC_m82pdIMUIuZA/edit) |
-| **통계 분석** | 거래 통계 및 성과 | [바로가기](https://docs.google.com/spreadsheets/d/16ai_PTJ6XfIpPaio-AnaNY7aQaDPrdqtrvpA91nUH14/edit) |
-| **위험 관리** | 위험 지표 및 관리 | [바로가기](https://docs.google.com/spreadsheets/d/1MijDcgoFp6hY1bhl9fhHKTBFpK4yBXZL9lzNZ_MaK-w/edit) |
+| **메인 거래기록** | 모든 거래 상세 기록 | [개인 설정 필요] |
+| **포트폴리오 요약** | 실시간 자산 현황 | [개인 설정 필요] |
+| **통계 분석** | 거래 통계 및 성과 | [개인 설정 필요] |
+| **위험 관리** | 위험 지표 및 관리 | [개인 설정 필요] |
+
+> ⚠️ **보안 참고**: 실제 Google Sheets ID는 보안을 위해 환경변수로 설정하거나 개인적으로 관리하세요.
 
 ## 프로젝트 구조
 
@@ -227,12 +229,15 @@ OPENDART_API_KEY=
 ```
 
 ### 📊 Google Sheets 환경변수 (🆕)
-```
-GOOGLE_SHEET_ID=1HXBiwg38i2LrgOgC3mjokH0sTk7qgq7Q8o4jdWOe58s
+```bash
+# 개인 Google Sheets ID (보안을 위해 .env 파일에 저장)
+GOOGLE_SHEET_ID=your_personal_sheet_id
 GOOGLE_SHEET_TAB=시트1
 USE_GOG=true
-GOG_KEYRING_PASSWORD=openclaw-gog-secret
+GOG_KEYRING_PASSWORD=your_secure_password
 ```
+
+> 🔒 **보안 경고**: Google Sheets ID와 비밀번호는 절대 공개 저장소에 커밋하지 마세요! `.env` 파일이나 환경변수로 안전하게 관리하세요.
 
 ### 🔍 선택적 환경변수
 ```
