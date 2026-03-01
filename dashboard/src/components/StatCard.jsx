@@ -1,3 +1,4 @@
+import PropTypes from "prop-types";
 import { TrendingUp, TrendingDown, Minus, Info } from "lucide-react";
 
 export default function StatCard({ 
@@ -57,3 +58,13 @@ export default function StatCard({
     </div>
   );
 }
+
+StatCard.propTypes = {
+  label: PropTypes.string,
+  value: PropTypes.node,
+  sub: PropTypes.node,
+  trend: PropTypes.oneOf(["up", "down", "neutral"]),
+  icon: PropTypes.elementType,
+  size: PropTypes.oneOf(["compact", "default", "large"]),
+  tooltip: PropTypes.string,
+};

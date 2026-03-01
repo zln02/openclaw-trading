@@ -1,3 +1,5 @@
+import PropTypes from "prop-types";
+
 export default function TradeTable({ trades = [], columns = [] }) {
   if (!trades.length) {
     return <div className="text-center py-8 text-text-secondary text-sm">거래 내역 없음</div>;
@@ -30,3 +32,14 @@ export default function TradeTable({ trades = [], columns = [] }) {
     </div>
   );
 }
+
+TradeTable.propTypes = {
+  trades: PropTypes.arrayOf(PropTypes.object),
+  columns: PropTypes.arrayOf(
+    PropTypes.shape({
+      key: PropTypes.string.isRequired,
+      label: PropTypes.string.isRequired,
+      render: PropTypes.func,
+    })
+  ),
+};

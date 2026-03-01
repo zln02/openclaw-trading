@@ -1,4 +1,4 @@
-import { Bitcoin, Gauge, Wallet, Clock, Newspaper, TrendingUp, TrendingDown } from "lucide-react";
+import { Bitcoin, Gauge, Wallet, Clock, Newspaper, TrendingUp } from "lucide-react";
 import usePolling from "../hooks/usePolling";
 import StatCard from "../components/StatCard";
 import ScoreGauge from "../components/ScoreGauge";
