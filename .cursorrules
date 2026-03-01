@@ -1,0 +1,147 @@
+# OpenClaw Trading System — Cursor Rules
+# 자동으로 이 규칙을 읽고 코드 작성 시 준수할 것
+
+## 프로젝트 개요
+OpenClaw Trading System v5.0은 BTC·KR 주식·US 주식 자동매매 통합 플랫폼이다.
+- 서버: GCP e2-small (24시간 운영)
+- 언어: Python 3.11+
+- AI 판단: GPT-4o-mini (openai)
+- DB: Supabase (PostgreSQL)
+- 알림: Telegram Bot
+- 대시보드: FastAPI + Lightweight Charts (포트 8080)
+- ML: XGBoost (KR 주식 매수 예측)
+
+---
+
+## 폴더 구조 및 역할
+
+| 폴더 | 역할 |
+|------|------|
+| `btc/` | BTC 매매 에이전트, 대시보드(FastAPI), 라우터, 백테스트, 뉴스수집 |
+| `btc/routes/` | FastAPI 라우터 (btc_api, stock_api, us_api) |
+| `btc/signals/` | BTC 신호 (고래추적, 오더플로우, 아비트라지 탐지) |
+| `btc/strategies/` | BTC 전략 (펀딩 캐리) |
+| `btc/templates/` | 대시보드 HTML 템플릿 |
+| `stocks/` | KR·US 주식 에이전트, 키움 API, ML 모델, 백테스트, 텔레그램 봇 |
+| `stocks/signals/` | 주식 신호 (DART 실시간, 옵션플로우, 오더북, SEC 13F, 숏인터레스트) |
+| `stocks/strategies/` | 주식 전략 (섹터 로테이션) |
+| `common/` | 공통 유틸 (config, env_loader, logger, indicators, supabase_client, telegram, retry) |
+| `common/data/` | 실시간 데이터 (뉴스스트림, 오더북, 실시간 가격, 대안 데이터) |
+| `agents/` | AI 전략 에이전트 (뉴스 분석, 레짐 분류, 전략 리뷰, 알림 관리, 일간/주간 리포트) |
+| `quant/` | 퀀트 엔진 (백테스트, 팩터, 포트폴리오 최적화, 리스크) |
+| `quant/backtest/` | 백테스트 엔진 및 유니버스 정의 |
+| `quant/factors/` | 팩터 분석기, 결합기, 레지스트리 |
+| `quant/portfolio/` | 포트폴리오 최적화, 리밸런서, 성과 귀인 |
+| `quant/risk/` | 리스크 관리 (VaR, 드로우다운, 포지션 사이징, 상관관계, 익스포저) |
+| `execution/` | 주문 실행 (TWAP, VWAP, 스마트 라우팅, 슬리피지 추적) |
+| `secretary/` | 비서 에이전트 (자율 리서치, 승인 플로우, 메모리) |
+| `secretary/core/` | 비서 핵심 모듈 (agency_memory, approval, autonomous_research, notion_skill) |
+| `brain/` | AI 분석 결과 저장소 (레짐 모델, 뉴스 분석, 전략 히스토리) |
+| `memory/` | 장기 메모리 저장소 |
+| `schema/` | Supabase SQL 스키마 |
+| `docs/` | 시스템 문서 |
+| `scripts/` | 크론 실행 스크립트 (btc, dashboard, dry-test, health) |
+| `prompts/` | AI 프롬프트 및 대화 기록 |
+| `archive/` | 레거시 파일 보관 (btc_legacy, kiwoom_legacy) |
+| `tests/` | 페이즈별 통합 테스트 |
+
+---
+
+## 사용 중인 API 목록
+
+| API | 용도 | 모듈 |
+|-----|------|------|
+| Upbit REST/WebSocket | BTC 실거래 (매수/매도/잔고) | `btc/btc_trading_agent.py`, `pyupbit` |
+| 키움증권 REST API | KR 주식 모의투자 (주문, 잔고, 체결) | `stocks/kiwoom_client.py` |
+| yfinance | US 주식 가격 데이터 (DRY-RUN) | `stocks/us_stock_trading_agent.py` |
+| OpenAI GPT-4o-mini | AI 매매 판단, 뉴스 분석, 전략 리뷰 | `agents/`, `btc/btc_trading_agent.py` |
+| Supabase (PostgreSQL) | 거래 기록, 포지션, 전략 데이터 저장 | `common/supabase_client.py` |
+| Telegram Bot API | 알림 발송, 인터랙티브 봇 제어 | `common/telegram.py`, `stocks/telegram_bot.py` |
+| OpenDart API | 한국 공시 정보 (재무제표, 공시) | `stocks/stock_data_collector.py` |
+| Notion API | 비서 에이전트 메모 저장 | `secretary/core/notion_skill.py` |
+| pytrends | Google 트렌드 데이터 | `common/data/alt_data.py` |
+| WebSocket (crypto) | 실시간 오더북/가격 스트림 | `common/data/orderbook.py`, `realtime_price.py` |
+
+---
+
+## 코드 규칙
+
+### 필수 규칙
+1. **모든 외부 API 호출은 try/except로 감쌀 것** — Upbit, 키움, OpenAI, Supabase, Telegram, Notion
+2. **`common/env_loader.py`의 `load_env()`를 통해서만 환경변수를 로드할 것** — os.environ.get() 직접 사용 금지
+3. **`common/logger.py`의 `get_logger()`를 사용할 것** — print() 직접 사용 금지 (디버그 제외)
+4. **`common/config.py`에 경로 상수가 있으면 재사용할 것** — 하드코딩 절대 경로 금지
+5. **`common/retry.py`의 `retry_call()`로 네트워크 호출에 재시도 로직을 적용할 것**
+6. **타입 힌트를 모든 public 함수에 추가할 것** — 특히 반환 타입 필수
+
+### 설정값 규칙 (하드코딩 금지 대상)
+- 손절/익절 비율 (`-0.03`, `+0.15`, `+0.08`, `-0.05`, `+0.12`)
+- AI 모델명 (`gpt-4o-mini`)
+- 슬립/폴링 간격 (`time.sleep(30)`, `time.sleep(60)`)
+- 일일 예산 (`daily_budget_usd: float = 2.0`)
+- 쿨다운 초 (`cooldown_seconds: int = 600`)
+- 대시보드 포트 (`8080` → `DASHBOARD_PORT` 상수 사용)
+- 최대 포지션 수, 투자 비율
+
+### 로깅 규칙
+- 매매 진입/청산 시 반드시 로그 남길 것
+- OpenAI API 호출 전후 로그 남길 것 (비용 추적)
+- 에러 발생 시 `log.error()` 또는 `log.warn()` 사용 (print 금지)
+- Supabase 쓰기 작업 전후 로그 남길 것
+
+---
+
+## 리스크 코드 수정 시 주의사항
+
+### CRITICAL — 수정 금지 또는 극도로 주의
+1. **`stocks/kiwoom_client.py`의 `place_order()`** — 실제 주문 발송. 수정 전 반드시 모의투자 환경에서 검증
+2. **`btc/btc_trading_agent.py`의 매수/매도 로직** — Upbit 실거래. 손절/익절 비율 변경 시 극도로 주의
+3. **`stocks/sync_manager.py`** — 키움-Supabase 포지션 동기화. 데이터 불일치 발생 가능
+4. **`common/supabase_client.py`** — 모든 거래 데이터의 기반. 스키마 변경 시 마이그레이션 필수
+
+### HIGH — 충분한 테스트 후 수정
+5. **`stocks/ml_model.py`** — XGBoost 매수 예측 모델 (승률 기준 78%). 재학습 로직 변경 주의
+6. **`agents/regime_classifier.py`** — 시장 레짐이 모든 매매 파라미터를 오버라이드함. CRISIS 모드 변경 금지
+7. **`quant/risk/position_sizer.py`** — 포지션 크기 결정. 과투자 방지 로직 보존 필수
+8. **`quant/risk/drawdown_guard.py`** — 드로우다운 가드. 비활성화 절대 금지
+9. **`stocks/telegram_bot.py`의 `/sell_all` 핸들러** — 실제 전량 매도 발동. 확인 단계 제거 금지
+
+### MEDIUM — 주의하여 수정
+10. **`common/telegram.py`** — 모든 알림의 공통 경로. 변경 시 전체 알림 영향
+11. **`agents/alert_manager.py`의 임계값** — 드로우다운/VaR/쿨다운 임계값은 config로 관리
+12. **크론 스케줄 (`scripts/`)** — 장중 실행 타이밍 변경 시 시장 영향 검토
+
+---
+
+## 환경변수 목록 (`common/env_loader.py`)
+
+```
+UPBIT_ACCESS_KEY       # Upbit 거래 접근키 (실거래)
+UPBIT_SECRET_KEY       # Upbit 시크릿 (실거래)
+SUPABASE_URL           # Supabase 프로젝트 URL
+SUPABASE_SECRET_KEY    # Supabase service role key
+OPENAI_API_KEY         # OpenAI API key (GPT-4o-mini)
+TELEGRAM_BOT_TOKEN     # Telegram 봇 토큰
+TELEGRAM_CHAT_ID       # 알림 수신 채팅 ID
+KIWOOM_APP_KEY         # 키움증권 앱 키 (모의투자)
+KIWOOM_APP_SECRET      # 키움증권 시크릿
+OPENDART_API_KEY       # OpenDart 공시 API 키
+```
+
+---
+
+## 개발 환경 설정
+
+```bash
+# 가상환경 활성화
+source /home/wlsdud5035/.openclaw/workspace/.venv/bin/activate
+
+# 의존성 설치
+pip install -r requirements.txt
+
+# 실행
+python btc/btc_trading_agent.py           # BTC 매매 에이전트
+python stocks/stock_trading_agent.py      # KR 주식 에이전트
+python stocks/us_stock_trading_agent.py   # US 주식 에이전트
+python btc/btc_dashboard.py               # 대시보드 (포트 8080)
+```

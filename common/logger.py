@@ -9,6 +9,7 @@ Usage:
 """
 from __future__ import annotations
 
+import json
 import logging
 import sys
 from pathlib import Path
@@ -27,6 +28,32 @@ TRADE_LEVEL = 25
 logging.addLevelName(TRADE_LEVEL, "TRADE")
 
 _loggers: dict[str, "AgentLogger"] = {}
+
+_JSON_RESERVED = {
+    "name", "msg", "args", "levelname", "pathname", "filename", "module",
+    "exc_info", "exc_text", "stack_info", "lineno", "funcName", "created",
+    "msecs", "relativeCreated", "thread", "threadName", "processName",
+    "process", "message", "asctime",
+}
+
+
+class JsonFormatter(logging.Formatter):
+    """로그 레코드를 JSON-line 으로 직렬화 (구조화 로그용)."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        record.message = record.getMessage()
+        payload: dict = {
+            "ts":     self.formatTime(record, "%Y-%m-%dT%H:%M:%S"),
+            "level":  record.levelname,
+            "logger": record.name,
+            "event":  record.message,
+        }
+        # log.trade("BTC 매수", market="btc", action="buy", price=142000000)
+        # → extra 필드로 JSON에 포함
+        for key, val in record.__dict__.items():
+            if key not in _JSON_RESERVED and not key.startswith("_"):
+                payload[key] = val
+        return json.dumps(payload, ensure_ascii=False)
 
 
 class AgentLogger:
@@ -55,7 +82,7 @@ class AgentLogger:
         ch.setFormatter(formatter)
         self._log.addHandler(ch)
 
-        # File handler (DEBUG+)
+        # File handler — 텍스트 (DEBUG+, 하위 호환)
         if log_file is None:
             log_file = LOG_DIR / f"{name}.log"
         fh = logging.FileHandler(log_file, encoding="utf-8")
@@ -63,28 +90,37 @@ class AgentLogger:
         fh.setFormatter(formatter)
         self._log.addHandler(fh)
 
+        # JSON handler — 구조화 로그 (DEBUG+)
+        json_dir = LOG_DIR / "json"
+        json_dir.mkdir(parents=True, exist_ok=True)
+        jfh = logging.FileHandler(json_dir / f"{name}.jsonl", encoding="utf-8")
+        jfh.setLevel(logging.DEBUG)
+        jfh.setFormatter(JsonFormatter())
+        self._log.addHandler(jfh)
+
     # ── convenience methods ──
 
     def debug(self, msg: str, **kw):
-        self._log.debug(self._fmt(msg, "DEBUG", **kw))
+        self._log.debug(self._fmt(msg, "DEBUG", **kw), extra=kw)
 
     def info(self, msg: str, **kw):
-        self._log.info(self._fmt(msg, "INFO", **kw))
+        self._log.info(self._fmt(msg, "INFO", **kw), extra=kw)
 
     def trade(self, msg: str, **kw):
-        self._log.log(TRADE_LEVEL, self._fmt(msg, "TRADE", **kw))
+        self._log.log(TRADE_LEVEL, self._fmt(msg, "TRADE", **kw), extra=kw)
 
     def warn(self, msg: str, **kw):
-        self._log.warning(self._fmt(msg, "WARNING", **kw))
+        self._log.warning(self._fmt(msg, "WARNING", **kw), extra=kw)
 
     def error(self, msg: str, **kw):
-        self._log.error(self._fmt(msg, "ERROR", **kw))
+        self._log.error(self._fmt(msg, "ERROR", **kw), extra=kw)
 
     def critical(self, msg: str, **kw):
-        self._log.critical(self._fmt(msg, "CRITICAL", **kw))
+        self._log.critical(self._fmt(msg, "CRITICAL", **kw), extra=kw)
 
     @classmethod
     def _fmt(cls, msg: str, level: str, **kw) -> str:
+        """텍스트 로그 포맷 (기존 형식 유지)."""
         prefix = cls.EMOJI.get(level, "")
         extra = ""
         if kw:
