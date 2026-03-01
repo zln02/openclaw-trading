@@ -11,7 +11,7 @@ import json
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Any, Dict, List, Optional
 import subprocess
 
 # 프로젝트 경로 설정
@@ -496,6 +496,57 @@ class AdvancedSheetsManager:
         
         return message
     
+    def log_strategy_change(
+        self,
+        item: str,
+        old_value: Any,
+        new_value: Any,
+        reason: str,
+        sheet_id: Optional[str] = None,
+        tab: str = "전략 변경 이력",
+    ) -> bool:
+        """전략 변경 이력을 구글 시트에 한 행 추가.
+
+        컬럼 순서: 날짜 | 변경 항목 | 이전값 | 신규값 | 변경 사유
+
+        Args:
+            item: 변경 항목명 (예: "stop_loss_rate", "factor_weight.momentum")
+            old_value: 변경 전 값
+            new_value: 변경 후 값
+            reason: 변경 사유
+            sheet_id: 대상 시트 ID (None이면 GOOGLE_SHEET_ID 환경변수 사용)
+            tab: 시트 탭명 (기본: "전략 변경 이력")
+        """
+        try:
+            target_id = sheet_id or MAIN_SHEET_ID
+            if not target_id:
+                log.warn("GOOGLE_SHEET_ID 미설정 — 전략 이력 기록 건너뜀")
+                return False
+
+            date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            row = [
+                date_str,
+                str(item),
+                str(old_value),
+                str(new_value),
+                str(reason)[:300],
+            ]
+            values_json = json.dumps([row], ensure_ascii=False)
+            ok = self._run_gog([
+                "sheets", "append", target_id,
+                f"{tab}!A:E",
+                "--values-json", values_json,
+                "--insert", "INSERT_ROWS",
+            ])
+            if ok:
+                log.info("전략 변경 이력 기록", item=item, old=str(old_value), new=str(new_value))
+            else:
+                log.warn("전략 변경 이력 기록 실패 (gog)", item=item)
+            return ok
+        except Exception as e:
+            log.error(f"전략 변경 이력 기록 오류: {e}")
+            return False
+
     def run_full_update(self) -> bool:
         """전체 업데이트 실행"""
         try:

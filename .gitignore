@@ -26,3 +26,7 @@ node_modules/
 # Excluded directories
 archive/
 logs/
+
+# gog binary (Google Sheets CLI, 22 MB — 로컬 전용)
+gog-docker
+gog

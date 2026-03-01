@@ -2,6 +2,52 @@
 
 BTC · KR 주식 · US 주식 자동매매 통합 플랫폼 + Google Sheets 기록/대시보드
 
+## 아키텍처
+
+```mermaid
+flowchart LR
+    subgraph Ext["📡 외부 API"]
+        Upbit["Upbit\nBTC 실거래"]
+        Kiwoom["키움증권\nKR 모의투자"]
+        YF["yfinance\nUS DRY-RUN"]
+        GPT["GPT-4o-mini\nAI 판단"]
+        Dart["OpenDart\n재무데이터"]
+    end
+
+    subgraph Core["🤖 에이전트 · 엔진"]
+        BTC["BTC Agent"]
+        KR["KR Stock Agent"]
+        US["US Stock Agent"]
+        News["News Analyst"]
+        Rev["Strategy Reviewer"]
+        Quant["Quant Engine\nSignal · Risk · Portfolio"]
+        Exec["Execution Layer\nTWAP · VWAP · SmartRouter"]
+    end
+
+    subgraph DB["🗄️ Supabase (PostgreSQL)"]
+        Pos["btc_position\ntrade_executions\nus_trade_executions"]
+    end
+
+    subgraph Dash["📊 대시보드 · 리포트"]
+        Web["Web Dashboard\nFastAPI :8080"]
+        Sheets["Google Sheets\n거래기록 · 포트폴리오 · 통계 · 위험"]
+    end
+
+    TG["🔔 Telegram Bot\n체결 · 일일리포트 · 긴급알림"]
+
+    Upbit --> BTC
+    Kiwoom --> KR
+    YF --> US
+    GPT --> News & Rev
+    Dart --> KR
+    Quant --> BTC & KR & US
+    Exec --> US
+    BTC & KR & US --> Pos
+    Pos --> Web
+    Web -.-> Sheets
+    BTC & KR & US & Rev --> TG
+```
+
 ## 시스템 구성
 
 | 항목 | 스택 |
@@ -121,12 +167,24 @@ workspace/
 │   └── top-tier-phases.md
 ├── schema/                         # Supabase 스키마
 ├── supabase/                       # US 스키마 등
-├── prompts/
-├── brain/
-├── secretary/                      # Notion/자율학습 등
-├── quant/                          # 시그널 평가 등
-├── execution/                      # 스마트 라우터 등
-└── archive/                        # 레거시
+├── brain/                          # AI 분석 결과 저장소 (일일요약·뉴스·시장·워치리스트)
+├── secretary/                      # 비서 에이전트 (Notion 연동·메모리·자율학습)
+│   └── core/                       #   agency_memory, approval, notion_skill 등
+├── quant/                          # 퀀트 엔진
+│   ├── signal_evaluator.py         #   신호 IC/IR 측정 + Supabase 저장
+│   ├── backtest/                   #   백테스트 엔진 + 유니버스
+│   ├── factors/                    #   팩터 레지스트리·분석·결합
+│   ├── portfolio/                  #   최적화·리밸런싱·귀속분석
+│   └── risk/                       #   VaR·낙폭가드·포지션사이징·상관관계
+├── execution/                      # 주문 실행 레이어
+│   ├── twap.py                     #   TWAP 알고리즘
+│   ├── vwap.py                     #   VWAP 알고리즘
+│   ├── smart_router.py             #   스마트 라우팅 (us_broker 연동)
+│   └── slippage_tracker.py         #   슬리피지 추적
+├── skills/                         # 참조 스킬 라이브러리 (15개)
+│   │                               #   btc-indicators · kiwoom-api · upbit-api
+│   │                               #   opendart-api · supabase-best-practices 등
+└── archive/                        # 레거시 + 미사용 폴더 보관
 ```
 
 ## 실행
