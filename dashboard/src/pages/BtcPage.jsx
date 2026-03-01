@@ -1,4 +1,4 @@
-import { Bitcoin, Gauge, Wallet, Clock, Newspaper, TrendingUp } from "lucide-react";
+import { Bitcoin, Gauge, Wallet, Clock, Newspaper, TrendingUp, TrendingDown, Minus } from "lucide-react";
 import usePolling from "../hooks/usePolling";
 import StatCard from "../components/StatCard";
 import ScoreGauge from "../components/ScoreGauge";
@@ -19,13 +19,25 @@ const pct = (n) => n != null ? `${Number(n) >= 0 ? "+" : ""}${Number(n).toFixed(
 
 const TRADE_COLS = [
   { key: "timestamp", label: "시간", render: (v) => v?.slice(5, 16) },
-  { key: "action", label: "구분", render: (v) => (
-    <span className={v === "BUY" ? "profit-text" : v === "SELL" ? "loss-text" : "text-text-secondary"}>{v}</span>
-  )},
+  { key: "action", label: "구분", render: (v) => {
+    const u = String(v || "").toUpperCase();
+    if (u === "BUY")  return <span className="badge-green">매수</span>;
+    if (u === "SELL") return <span className="badge-red">매도</span>;
+    return <span className="badge-yellow">{v}</span>;
+  }},
   { key: "price", label: "가격", render: (v) => <span className="font-mono">₩{fmt(v)}</span> },
+  { key: "pnl_pct", label: "수익률", render: (v) => (
+    <span className={v > 0 ? "profit-text" : v < 0 ? "loss-text" : "text-text-secondary"}>
+      {v != null ? pct(v) : "—"}
+    </span>
+  )},
   { key: "rsi", label: "RSI" },
-  { key: "confidence", label: "신뢰도", render: (v) => v != null ? `${v}%` : "—" },
-  { key: "reason", label: "사유", render: (v) => <span className="text-text-secondary text-xs max-w-[200px] truncate block">{v}</span> },
+  { key: "confidence", label: "신뢰도", render: (v) => (
+    <span className="text-text-secondary">{v != null ? `${v}%` : "—"}</span>
+  )},
+  { key: "reason", label: "사유", render: (v) => (
+    <span className="text-text-secondary text-xs max-w-[200px] truncate block">{v}</span>
+  )},
 ];
 
 const fetchBtcRtPrice = () => getBtcRealtimePrice("KRW-BTC", "btc");
@@ -82,18 +94,50 @@ export default function BtcPage() {
           icon={Gauge}
           tooltip="시장 심리 지수 (0-100)"
         />
-        <StatCard
-          label="1시간 추세"
-          value={comp?.trend ?? "—"}
-          icon={TrendingUp}
-          tooltip="1시간봉 기술적 추세"
-        />
-        <StatCard
-          label="일봉 RSI"
-          value={comp?.rsi_d ?? "—"}
-          trend={comp?.rsi_d < 40 ? "down" : comp?.rsi_d > 65 ? "up" : null}
-          tooltip="상대강도지수 (과매수: >70, 과매도: <30)"
-        />
+        {/* 1시간 추세 — 방향 화살표 */}
+        {(() => {
+          const t = String(comp?.trend ?? "");
+          const isUp   = t.includes("UP")   && !t.includes("DOWN");
+          const isDown = t.includes("DOWN");
+          const Icon   = isUp ? TrendingUp : isDown ? TrendingDown : Minus;
+          const color  = isUp ? "text-profit" : isDown ? "text-loss" : "text-text-secondary";
+          return (
+            <div className="card p-4">
+              <div className="data-label mb-3">1시간 추세</div>
+              <div className="flex items-center gap-2">
+                <Icon className={`w-6 h-6 ${color}`} />
+                <span className={`font-mono font-bold text-xl ${color}`}>{t || "—"}</span>
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* 일봉 RSI — 게이지 바 */}
+        <div className="card p-4">
+          <div className="data-label mb-2">일봉 RSI</div>
+          <div className={`data-value text-xl mb-3 ${
+            comp?.rsi_d < 30 ? "text-profit" : comp?.rsi_d > 70 ? "text-loss" : "text-text-primary"
+          }`}>
+            {comp?.rsi_d ?? "—"}
+          </div>
+          {comp?.rsi_d != null && (
+            <>
+              <div className="relative w-full h-2 rounded-full overflow-hidden bg-card/50 border border-border/50">
+                <div className="absolute inset-y-0 left-0 w-[30%] bg-profit/20" />
+                <div className="absolute inset-y-0 right-0 w-[30%] bg-loss/20" />
+                <div
+                  className={`absolute top-0 bottom-0 w-1.5 rounded-full ${
+                    comp.rsi_d < 30 ? "bg-profit" : comp.rsi_d > 70 ? "bg-loss" : "bg-amber-400"
+                  }`}
+                  style={{ left: `calc(${Math.min(Math.max(comp.rsi_d, 0), 100)}% - 3px)` }}
+                />
+              </div>
+              <div className="flex justify-between text-xs text-text-muted mt-1">
+                <span>과매도</span><span>중립</span><span>과매수</span>
+              </div>
+            </>
+          )}
+        </div>
       </div>
 
       {/* Market Metrics */}

@@ -1,5 +1,6 @@
 import { NavLink, Outlet } from "react-router-dom";
 import { Bitcoin, BarChart3, Globe, Activity, Settings } from "lucide-react";
+import PortfolioBanner from "./PortfolioBanner";
 
 const NAV = [
   { to: "/", icon: Bitcoin, label: "BTC" },
@@ -53,6 +54,9 @@ export default function Layout() {
           </div>
         </div>
       </header>
+
+      {/* Portfolio Banner — 모든 탭 공통 */}
+      <PortfolioBanner />
 
       {/* Main Content */}
       <main className="p-4 lg:p-6">

@@ -25,6 +25,7 @@ export const getBtcRealtimePrice = (symbol = "KRW-BTC", market = "btc") =>
   fetchJSON(`/api/realtime/price/${encodeURIComponent(symbol)}?market=${encodeURIComponent(market)}`);
 
 // KR Stocks
+export const getKrPortfolio = () => fetchJSON("/api/kr/portfolio");
 export const getStockOverview = () => fetchJSON("/api/stocks/overview");
 export const getStockPortfolio = () => fetchJSON("/api/stocks/portfolio");
 export const getStockTrades = () => fetchJSON("/api/stocks/trades?limit=20");
