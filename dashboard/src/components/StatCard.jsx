@@ -11,7 +11,7 @@ export default function StatCard({
   tooltip 
 }) {
   const trendColor =
-    trend === "up" ? "text-profit" : trend === "down" ? "text-loss" : "text-text-secondary";
+    trend === "up" ? "text-profit" : trend === "down" ? "text-loss" : trend === "warning" ? "text-yellow-400" : "text-text-secondary";
   const TrendIcon =
     trend === "up" ? TrendingUp : trend === "down" ? TrendingDown : Minus;
 
@@ -63,7 +63,7 @@ StatCard.propTypes = {
   label: PropTypes.string,
   value: PropTypes.node,
   sub: PropTypes.node,
-  trend: PropTypes.oneOf(["up", "down", "neutral"]),
+  trend: PropTypes.oneOf(["up", "down", "neutral", "warning"]),
   icon: PropTypes.elementType,
   size: PropTypes.oneOf(["compact", "default", "large"]),
   tooltip: PropTypes.string,
