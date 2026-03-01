@@ -3,6 +3,36 @@ import usePolling from "../hooks/usePolling";
 import StatCard from "../components/StatCard";
 import ScoreGauge from "../components/ScoreGauge";
 import TradeTable from "../components/TradeTable";
+import TvWidget from "../components/TvWidget";
+
+const TV_KR_CONFIG = {
+  colorTheme: "dark",
+  dateRange: "3M",
+  showChart: true,
+  locale: "kr",
+  isTransparent: false,
+  showSymbolLogo: true,
+  showFloatingTooltip: false,
+  tabs: [
+    {
+      title: "한국 지수",
+      symbols: [
+        { s: "KRX:KOSPI",    d: "KOSPI" },
+        { s: "KRX:KOSDAQ",   d: "KOSDAQ" },
+        { s: "KRX:KOSPI200", d: "KOSPI 200" },
+      ],
+    },
+    {
+      title: "주요 종목",
+      symbols: [
+        { s: "KRX:A005930", d: "삼성전자" },
+        { s: "KRX:A000660", d: "SK하이닉스" },
+        { s: "KRX:A035720", d: "카카오" },
+        { s: "KRX:A035420", d: "NAVER" },
+      ],
+    },
+  ],
+};
 
 const fmt = (n) => n != null ? Number(n).toLocaleString() : "—";
 const pct = (n) => n != null ? `${Number(n) >= 0 ? "+" : ""}${Number(n).toFixed(2)}%` : "—";
@@ -187,6 +217,15 @@ export default function KrStockPage() {
           </div>
         </div>
       )}
+
+      {/* TradingView — KR 지수 & 주요 종목 */}
+      <div className="card p-0 overflow-hidden">
+        <div className="px-4 pt-4 pb-2 border-b border-border">
+          <h3 className="text-sm font-medium text-text-primary">KR 시장 — 실시간 지수 & 종목</h3>
+          <p className="text-xs text-text-secondary mt-0.5">KOSPI · KOSDAQ · 주요 종목 — TradingView 제공</p>
+        </div>
+        <TvWidget widgetType="market-overview" config={TV_KR_CONFIG} height={420} />
+      </div>
 
       {/* System Status */}
       {system && (

@@ -3,6 +3,21 @@ import usePolling from "../hooks/usePolling";
 import StatCard from "../components/StatCard";
 import ScoreGauge from "../components/ScoreGauge";
 import TradeTable from "../components/TradeTable";
+import TvWidget from "../components/TvWidget";
+
+const TV_BTC_CONFIG = {
+  symbol: "UPBIT:BTCKRW",
+  interval: "60",
+  timezone: "Asia/Seoul",
+  theme: "dark",
+  style: "1",
+  locale: "kr",
+  allow_symbol_change: true,
+  hide_top_toolbar: false,
+  hide_legend: false,
+  hide_volume: false,
+  support_host: "https://www.tradingview.com",
+};
 import {
   getBtcComposite,
   getBtcPortfolio,
@@ -273,6 +288,15 @@ export default function BtcPage() {
             )}
           </div>
         </div>
+      </div>
+
+      {/* TradingView — BTC/KRW 실시간 차트 */}
+      <div className="card p-0 overflow-hidden">
+        <div className="px-4 pt-4 pb-2 border-b border-border">
+          <h3 className="text-sm font-medium text-text-primary">실시간 차트 (UPBIT:BTCKRW)</h3>
+          <p className="text-xs text-text-secondary mt-0.5">인디케이터·드로잉 도구 포함 — TradingView 제공</p>
+        </div>
+        <TvWidget widgetType="advanced-chart" config={TV_BTC_CONFIG} height={440} />
       </div>
 
       {/* System Status */}

@@ -3,6 +3,61 @@ import usePolling from "../hooks/usePolling";
 import StatCard from "../components/StatCard";
 import ScoreGauge from "../components/ScoreGauge";
 import TradeTable from "../components/TradeTable";
+import TvWidget from "../components/TvWidget";
+
+const TV_US_OVERVIEW_CONFIG = {
+  colorTheme: "dark",
+  dateRange: "3M",
+  showChart: true,
+  locale: "en",
+  isTransparent: false,
+  showSymbolLogo: true,
+  showFloatingTooltip: false,
+  tabs: [
+    {
+      title: "US Indices",
+      symbols: [
+        { s: "FOREXCOM:SPXUSD", d: "S&P 500" },
+        { s: "FOREXCOM:NSXUSD", d: "NASDAQ 100" },
+        { s: "FOREXCOM:DJI",    d: "Dow Jones" },
+      ],
+    },
+    {
+      title: "ETFs",
+      symbols: [
+        { s: "AMEX:SPY",    d: "SPY" },
+        { s: "NASDAQ:QQQ",  d: "QQQ" },
+        { s: "AMEX:IWM",    d: "IWM (Russell)" },
+        { s: "NASDAQ:TQQQ", d: "TQQQ (3x)" },
+      ],
+    },
+    {
+      title: "Sectors",
+      symbols: [
+        { s: "AMEX:XLK",  d: "Technology" },
+        { s: "AMEX:XLF",  d: "Financials" },
+        { s: "AMEX:XLE",  d: "Energy" },
+        { s: "AMEX:XLV",  d: "Health Care" },
+      ],
+    },
+  ],
+};
+
+const TV_TICKER_CONFIG = {
+  symbols: [
+    { proName: "FOREXCOM:SPXUSD", title: "S&P 500" },
+    { proName: "FOREXCOM:NSXUSD", title: "NASDAQ 100" },
+    { proName: "AMEX:SPY",        title: "SPY" },
+    { proName: "NASDAQ:QQQ",      title: "QQQ" },
+    { proName: "BITSTAMP:BTCUSD", title: "Bitcoin" },
+    { proName: "FX_IDC:USDKRW",   title: "USD/KRW" },
+  ],
+  showSymbolLogo: true,
+  isTransparent: false,
+  displayMode: "adaptive",
+  colorTheme: "dark",
+  locale: "en",
+};
 
 const fmt = (n) => n != null ? Number(n).toLocaleString() : "—";
 const pct = (n) => n != null ? `${Number(n) >= 0 ? "+" : ""}${Number(n).toFixed(2)}%` : "—";
@@ -46,6 +101,11 @@ export default function UsStockPage() {
 
   return (
     <div className="space-y-6">
+      {/* Ticker Tape — 미국 주요 지수 실시간 */}
+      <div className="card p-0 overflow-hidden rounded-lg">
+        <TvWidget widgetType="ticker-tape" config={TV_TICKER_CONFIG} height={56} />
+      </div>
+
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
@@ -190,6 +250,15 @@ export default function UsStockPage() {
           </div>
         </div>
       )}
+
+      {/* TradingView — US 지수 & ETF Market Overview */}
+      <div className="card p-0 overflow-hidden">
+        <div className="px-4 pt-4 pb-2 border-b border-border">
+          <h3 className="text-sm font-medium text-text-primary">US 시장 — 실시간 지수 & ETF</h3>
+          <p className="text-xs text-text-secondary mt-0.5">S&P 500 · NASDAQ · Dow Jones · ETF · 섹터 — TradingView 제공</p>
+        </div>
+        <TvWidget widgetType="market-overview" config={TV_US_OVERVIEW_CONFIG} height={440} />
+      </div>
 
       {/* System Status */}
       {system && (
