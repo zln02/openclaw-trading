@@ -1,3 +1,5 @@
+import PropTypes from "prop-types";
+
 export default function ScoreGauge({ score = 0, label = "복합 스코어", max = 100 }) {
   const pct = Math.min(Math.max(score / max, 0), 1);
   const color =
@@ -20,3 +22,9 @@ export default function ScoreGauge({ score = 0, label = "복합 스코어", max 
     </div>
   );
 }
+
+ScoreGauge.propTypes = {
+  score: PropTypes.number,
+  label: PropTypes.string,
+  max: PropTypes.number,
+};
