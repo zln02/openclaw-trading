@@ -290,50 +290,51 @@ export default function BtcPage() {
         </div>
       </div>
 
-      {/* TradingView — BTC/KRW 실시간 차트 */}
-      <div className="card p-0 overflow-hidden">
-        <div className="px-4 pt-4 pb-2 border-b border-border">
-          <h3 className="text-sm font-medium text-text-primary">실시간 차트 (UPBIT:BTCKRW)</h3>
-          <p className="text-xs text-text-secondary mt-0.5">인디케이터·드로잉 도구 포함 — TradingView 제공</p>
+      {/* TradingView + System Status — 묶음 (간격 축소) */}
+      <div className="space-y-3">
+        <div className="card p-0 overflow-hidden">
+          <div className="px-4 pt-4 pb-2 border-b border-border">
+            <h3 className="text-sm font-medium text-text-primary">실시간 차트 (UPBIT:BTCKRW)</h3>
+            <p className="text-xs text-text-secondary mt-0.5">인디케이터·드로잉 도구 포함 — TradingView 제공</p>
+          </div>
+          <TvWidget widgetType="advanced-chart" config={TV_BTC_CONFIG} height={500} />
         </div>
-        <TvWidget widgetType="advanced-chart" config={TV_BTC_CONFIG} height={440} />
-      </div>
 
-      {/* System Status */}
-      {sys && (
-        <div className="card">
-          <div className="card-header">
-            <h3 className="text-sm font-medium text-text-primary">시스템 상태</h3>
+        {sys && (
+          <div className="card">
+            <div className="card-header">
+              <h3 className="text-sm font-medium text-text-primary">시스템 상태</h3>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <StatCard
+                label="CPU"
+                value={`${sys.cpu ?? 0}%`}
+                size="compact"
+                tooltip="시스템 CPU 사용률"
+              />
+              <StatCard
+                label="메모리"
+                value={`${sys.mem_pct ?? 0}%`}
+                size="compact"
+                tooltip="시스템 메모리 사용률"
+              />
+              <StatCard
+                label="디스크"
+                value={`${sys.disk_pct ?? 0}%`}
+                size="compact"
+                tooltip="디스크 사용률"
+              />
+              <StatCard
+                label="업비트 연동"
+                value={sys.upbit_ok ? "정상" : "오류"}
+                trend={sys.upbit_ok ? "up" : "down"}
+                size="compact"
+                tooltip="거래소 API 연결 상태"
+              />
+            </div>
           </div>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <StatCard
-              label="CPU"
-              value={`${sys.cpu ?? 0}%`}
-              size="compact"
-              tooltip="시스템 CPU 사용률"
-            />
-            <StatCard
-              label="메모리"
-              value={`${sys.mem_pct ?? 0}%`}
-              size="compact"
-              tooltip="시스템 메모리 사용률"
-            />
-            <StatCard
-              label="디스크"
-              value={`${sys.disk_pct ?? 0}%`}
-              size="compact"
-              tooltip="디스크 사용률"
-            />
-            <StatCard
-              label="업비트 연동"
-              value={sys.upbit_ok ? "정상" : "오류"}
-              trend={sys.upbit_ok ? "up" : "down"}
-              size="compact"
-              tooltip="거래소 API 연결 상태"
-            />
-          </div>
-        </div>
-      )}
+        )}
+      </div>
 
       {/* Recent Trades */}
       <div className="card">

@@ -5,33 +5,23 @@ import ScoreGauge from "../components/ScoreGauge";
 import TradeTable from "../components/TradeTable";
 import TvWidget from "../components/TvWidget";
 
+// symbol-overview: 지수/종목을 개별 미니차트로 표시 (market-overview 대비 KRX 호환성 우수)
 const TV_KR_CONFIG = {
-  colorTheme: "dark",
-  dateRange: "3M",
-  showChart: true,
-  locale: "kr",
-  isTransparent: false,
-  showSymbolLogo: true,
-  showFloatingTooltip: false,
-  tabs: [
-    {
-      title: "한국 지수",
-      symbols: [
-        { s: "KRX:KOSPI",    d: "KOSPI" },
-        { s: "KRX:KOSDAQ",   d: "KOSDAQ" },
-        { s: "KRX:KOSPI200", d: "KOSPI 200" },
-      ],
-    },
-    {
-      title: "주요 종목",
-      symbols: [
-        { s: "KRX:A005930", d: "삼성전자" },
-        { s: "KRX:A000660", d: "SK하이닉스" },
-        { s: "KRX:A035720", d: "카카오" },
-        { s: "KRX:A035420", d: "NAVER" },
-      ],
-    },
+  symbols: [
+    ["KOSPI",   "KRX:KOSPI|3M"],
+    ["KOSDAQ",  "KRX:KOSDAQ|3M"],
+    ["삼성전자", "KRX:A005930|3M"],
+    ["SK하이닉스","KRX:A000660|3M"],
   ],
+  chartOnly: false,
+  colorTheme: "dark",
+  locale: "kr",
+  autosize: true,
+  showVolume: false,
+  changeMode: "price-and-percent",
+  chartType: "area",
+  lineWidth: 2,
+  dateRanges: ["1d|1", "1m|30", "3m|60", "12m|1D"],
 };
 
 const fmt = (n) => n != null ? Number(n).toLocaleString() : "—";
@@ -131,26 +121,33 @@ export default function KrStockPage() {
               <Wallet className="w-4 h-4" /> 포트폴리오 요약
             </h3>
           </div>
-          <div className="grid grid-cols-2 gap-4 text-sm">
-            <div>
-              <div className="text-text-secondary mb-1">예수금</div>
-              <div className="font-mono font-medium">₩{fmt(summary?.krw_balance)}</div>
+          {(summary?.open_count ?? 0) === 0 && !summary?.krw_balance ? (
+            <div className="py-6 text-center">
+              <div className="text-text-secondary text-sm">모의투자 대기 중</div>
+              <div className="text-text-muted text-xs mt-1">키움 API 연결 또는 장 개시 후 업데이트</div>
             </div>
-            <div>
-              <div className="text-text-secondary mb-1">총 평가</div>
-              <div className="font-mono font-medium">₩{fmt(summary?.total_eval)}</div>
-            </div>
-            <div>
-              <div className="text-text-secondary mb-1">미실현 손익</div>
-              <div className={`font-mono font-medium ${summary?.unrealized_pnl >= 0 ? "profit-text" : "loss-text"}`}>
-                ₩{fmt(summary?.unrealized_pnl)}
+          ) : (
+            <div className="grid grid-cols-2 gap-4 text-sm">
+              <div>
+                <div className="text-text-secondary mb-1">예수금</div>
+                <div className="font-mono font-medium">₩{fmt(summary?.krw_balance)}</div>
+              </div>
+              <div>
+                <div className="text-text-secondary mb-1">총 평가</div>
+                <div className="font-mono font-medium">₩{fmt(summary?.total_eval)}</div>
+              </div>
+              <div>
+                <div className="text-text-secondary mb-1">미실현 손익</div>
+                <div className={`font-mono font-medium ${summary?.unrealized_pnl >= 0 ? "profit-text" : "loss-text"}`}>
+                  ₩{fmt(summary?.unrealized_pnl)}
+                </div>
+              </div>
+              <div>
+                <div className="text-text-secondary mb-1">보유 종목</div>
+                <div className="font-mono font-medium">{summary?.open_count ?? 0}개</div>
               </div>
             </div>
-            <div>
-              <div className="text-text-secondary mb-1">보유 종목</div>
-              <div className="font-mono font-medium">{summary?.open_count ?? 0}개</div>
-            </div>
-          </div>
+          )}
         </div>
 
         {/* Top Stocks */}
@@ -177,7 +174,10 @@ export default function KrStockPage() {
                 </div>
               ))
             ) : (
-              <div className="text-center py-6 text-text-secondary text-sm">데이터 없음</div>
+              <div className="text-center py-6">
+                <div className="text-text-secondary text-sm">장 마감</div>
+                <div className="text-text-muted text-xs mt-1">다음 스캔: 내일 08:00 KST</div>
+              </div>
             )}
           </div>
         </div>
@@ -222,9 +222,9 @@ export default function KrStockPage() {
       <div className="card p-0 overflow-hidden">
         <div className="px-4 pt-4 pb-2 border-b border-border">
           <h3 className="text-sm font-medium text-text-primary">KR 시장 — 실시간 지수 & 종목</h3>
-          <p className="text-xs text-text-secondary mt-0.5">KOSPI · KOSDAQ · 주요 종목 — TradingView 제공</p>
+          <p className="text-xs text-text-secondary mt-0.5">KOSPI · KOSDAQ · 삼성전자 · SK하이닉스 — TradingView 제공</p>
         </div>
-        <TvWidget widgetType="market-overview" config={TV_KR_CONFIG} height={420} />
+        <TvWidget widgetType="symbol-overview" config={TV_KR_CONFIG} height={340} />
       </div>
 
       {/* System Status */}
@@ -254,10 +254,10 @@ export default function KrStockPage() {
             />
             <StatCard
               label="키움 연동"
-              value={system.kiwoom_ok ? "정상" : "오류"}
-              trend={system.kiwoom_ok ? "up" : "down"}
+              value={system.kiwoom_ok ? "정상" : "대기"}
+              trend={system.kiwoom_ok ? "up" : "warning"}
               size="compact"
-              tooltip="키움증권 API 연결 상태"
+              tooltip="키움증권 API 연결 상태 (모의투자)"
             />
           </div>
         </div>

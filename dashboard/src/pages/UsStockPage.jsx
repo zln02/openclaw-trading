@@ -207,7 +207,10 @@ export default function UsStockPage() {
                 </div>
               ))
             ) : (
-              <div className="text-center py-6 text-text-secondary text-sm">데이터 없음</div>
+              <div className="text-center py-6">
+                <div className="text-text-secondary text-sm">스캔 대기 중</div>
+                <div className="text-text-muted text-xs mt-1">다음 스캔: 22:30 KST (프리마켓)</div>
+              </div>
             )}
           </div>
         </div>
@@ -287,10 +290,11 @@ export default function UsStockPage() {
             />
             <StatCard
               label="브로커 연동"
-              value={system.alpaca_ok ? "정상" : "오류"}
-              trend={system.alpaca_ok ? "up" : "down"}
+              value={system.alpaca_ok ? "정상" : "DRY-RUN"}
+              trend={system.alpaca_ok ? "up" : "warning"}
+              sub={system.alpaca_ok ? null : "시뮬레이션 모드"}
               size="compact"
-              tooltip="US 브로커 API 연결 상태"
+              tooltip="Alpaca 브로커 API (DRY-RUN = 실제 주문 없음)"
             />
           </div>
         </div>
