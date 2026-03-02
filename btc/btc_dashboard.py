@@ -64,11 +64,26 @@ if _DIST.is_dir():
 
     @app.get("/{full_path:path}")
     async def spa_fallback(full_path: str):
-        """SPA fallback — serve index.html for non-API routes."""
+        """SPA fallback — serve index.html for non-API routes only."""
+        # API 경로는 FastAPI 라우터가 처리하므로 여기서 처리하지 않음
+        # API 경로가 아닌 경우에만 SPA fallback 적용
+        
+        # API 경로 패턴
+        if full_path.startswith("api/"):
+            return Response(status_code=404, content="API endpoint not found")
+        
+        # 정적 파일 확장자
+        static_extensions = ["js", "css", "png", "jpg", "jpeg", "gif", "svg", "ico", "woff", "woff2"]
+        if "." in full_path:
+            ext = full_path.split(".")[-1].lower()
+            if ext in static_extensions:
+                return Response(status_code=404, content="Static file not found")
+        
+        # SPA fallback
         index = _DIST / "index.html"
         if index.exists():
             return FileResponse(str(index))
-        return Response(status_code=404)
+        return Response(status_code=404, content="Index file not found")
 
 
 if __name__ == "__main__":

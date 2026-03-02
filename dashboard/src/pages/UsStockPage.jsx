@@ -1,9 +1,10 @@
-import { Globe, Wallet, Clock, TrendingUp, BarChart2, Activity } from "lucide-react";
+import { Globe, Wallet, Clock, TrendingUp, BarChart2, Activity, AlertTriangle } from "lucide-react";
 import usePolling from "../hooks/usePolling";
 import StatCard from "../components/StatCard";
 import ScoreGauge from "../components/ScoreGauge";
 import TradeTable from "../components/TradeTable";
 import TvWidget from "../components/TvWidget";
+import { getUsComposite, getUsPositions, getUsTrades, getUsSystem } from "../api";
 
 const TV_US_OVERVIEW_CONFIG = {
   colorTheme: "dark",
@@ -77,20 +78,12 @@ const TRADE_COLS = [
   )},
 ];
 
-async function apiFetch(path) {
-  const res = await fetch(path);
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-  return res.json();
-}
-
-const getUsComposite = () => apiFetch("/api/us/composite");
-const getUsPortfolio  = () => apiFetch("/api/us/portfolio");
-const getUsTrades     = () => apiFetch("/api/us/trades");
-const getUsSystem     = () => apiFetch("/api/us/system");
-const getUsTop        = () => apiFetch("/api/us/top");
+// 엔드포인트 함수는 ../api.js 중앙화 모듈에서 import
+const getUsPortfolio = getUsPositions;  // positions = portfolio open positions
+const getUsTop = () => Promise.resolve([]);  // US top stocks 엔드포인트 미구현 시 빈 배열 반환
 
 export default function UsStockPage() {
-  const { data: composite } = usePolling(getUsComposite, 10000);
+  const { data: composite, error: compositeError } = usePolling(getUsComposite, 10000);
   const { data: portfolio }  = usePolling(getUsPortfolio, 15000);
   const { data: trades }     = usePolling(getUsTrades, 20000);
   const { data: system }     = usePolling(getUsSystem, 30000);
@@ -101,6 +94,14 @@ export default function UsStockPage() {
 
   return (
     <div className="space-y-6">
+      {/* API Error Banner */}
+      {compositeError && (
+        <div className="flex items-center gap-2 px-4 py-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-sm">
+          <AlertTriangle className="w-4 h-4 shrink-0" />
+          US 데이터 로드 실패: {compositeError}
+        </div>
+      )}
+
       {/* Ticker Tape — 미국 주요 지수 실시간 */}
       <div className="card p-0 overflow-hidden rounded-lg">
         <TvWidget widgetType="ticker-tape" config={TV_TICKER_CONFIG} height={56} />

@@ -1,9 +1,10 @@
-import { Building2, Wallet, Clock, TrendingUp, Activity, BarChart2 } from "lucide-react";
+import { Building2, Wallet, Clock, TrendingUp, Activity, BarChart2, AlertTriangle } from "lucide-react";
 import usePolling from "../hooks/usePolling";
 import StatCard from "../components/StatCard";
 import ScoreGauge from "../components/ScoreGauge";
 import TradeTable from "../components/TradeTable";
 import TvWidget from "../components/TvWidget";
+import { getKrComposite, getKrPortfolio, getKrTrades, getKrSystem, getKrTop } from "../api";
 
 // symbol-overview: 지수/종목을 개별 미니차트로 표시 (market-overview 대비 KRX 호환성 우수)
 const TV_KR_CONFIG = {
@@ -42,20 +43,10 @@ const TRADE_COLS = [
   )},
 ];
 
-async function apiFetch(path) {
-  const res = await fetch(path);
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-  return res.json();
-}
-
-const getKrComposite = () => apiFetch("/api/kr/composite");
-const getKrPortfolio  = () => apiFetch("/api/kr/portfolio");
-const getKrTrades     = () => apiFetch("/api/kr/trades");
-const getKrSystem     = () => apiFetch("/api/kr/system");
-const getKrTop        = () => apiFetch("/api/kr/top");
+// 엔드포인트 함수는 ../api.js 중앙화 모듈에서 import
 
 export default function KrStockPage() {
-  const { data: composite } = usePolling(getKrComposite, 10000);
+  const { data: composite, error: compositeError } = usePolling(getKrComposite, 10000);
   const { data: portfolio }  = usePolling(getKrPortfolio, 15000);
   const { data: trades }     = usePolling(getKrTrades, 20000);
   const { data: system }     = usePolling(getKrSystem, 30000);
@@ -66,6 +57,14 @@ export default function KrStockPage() {
 
   return (
     <div className="space-y-6">
+      {/* API Error Banner */}
+      {compositeError && (
+        <div className="flex items-center gap-2 px-4 py-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-sm">
+          <AlertTriangle className="w-4 h-4 shrink-0" />
+          KR 데이터 로드 실패: {compositeError}
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">

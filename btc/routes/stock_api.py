@@ -95,7 +95,7 @@ def _fetch_market_summary_dict():
             change_pct = (change / prev * 100) if prev and prev > 0 else 0
             result[key] = {"price": round(price, 2), "change": round(change, 2), "change_pct": round(change_pct, 2)}
         except Exception as e:
-            log.warn(f"market-summary {key}: {e}")
+            log.warning(f"market-summary {key}: {e}")
             result[key] = {"price": 0, "change": 0, "change_pct": 0}
     return result
 

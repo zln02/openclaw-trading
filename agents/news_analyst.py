@@ -1,10 +1,17 @@
-"""Realtime news impact analyst (Phase 12).
+"""Realtime news impact analyst (Phase 12 + Claude upgrade).
 
 Features:
 - Consume Phase 9 normalized news items
 - Classify short-term impact: POSITIVE/NEGATIVE/NEUTRAL + strength 1~5
 - Maintain daily cost budget (default $2/day)
 - Generate aggregated news_sentiment_score every batch
+- Claude API support: claude-haiku-4-5 (batch), claude-sonnet-4-6 (deep analysis)
+- OpenAI GPT-4o-mini fallback 유지
+
+Model selection:
+  model="claude-haiku"   → claude-haiku-4-5-20251001  (저비용 배치)
+  model="claude-sonnet"  → claude-sonnet-4-6           (고품질 분석)
+  model="gpt-4o-mini"    → OpenAI GPT-4o-mini          (기존 기본값)
 """
 from __future__ import annotations
 
@@ -25,6 +32,22 @@ from common.utils import safe_float as _safe_float
 
 load_env()
 log = get_logger("news_analyst")
+
+# ── Claude 모델 ID 매핑 ─────────────────────────────────────────────────────
+_CLAUDE_MODEL_MAP = {
+    "claude-haiku": "claude-haiku-4-5-20251001",
+    "claude-haiku-4-5": "claude-haiku-4-5-20251001",
+    "claude-sonnet": "claude-sonnet-4-6",
+    "claude-sonnet-4-6": "claude-sonnet-4-6",
+    "claude-opus": "claude-opus-4-6",
+}
+
+# Claude 토큰 단가 추정 ($/1K tokens, 보수적)
+_CLAUDE_PRICING = {
+    "claude-haiku-4-5-20251001": {"input": 0.00025, "output": 0.00125},
+    "claude-sonnet-4-6": {"input": 0.003, "output": 0.015},
+    "claude-opus-4-6": {"input": 0.015, "output": 0.075},
+}
 
 NEWS_ANALYSIS_DIR = BRAIN_PATH / "news-analysis"
 STATE_DIR = NEWS_ANALYSIS_DIR / "_state"
@@ -131,6 +154,14 @@ def _heuristic_analysis(item: dict, symbol: str) -> dict:
     }
 
 
+def _is_claude_model(model: str) -> bool:
+    return model.startswith("claude") or model in _CLAUDE_MODEL_MAP
+
+
+def _resolve_claude_id(model: str) -> str:
+    return _CLAUDE_MODEL_MAP.get(model, model)
+
+
 class NewsAnalyst:
     def __init__(
         self,
@@ -138,7 +169,8 @@ class NewsAnalyst:
         daily_budget_usd: float = 2.0,
         batch_minutes: int = 5,
     ):
-        self.model = model
+        # claude-haiku / claude-sonnet 단축명 → 실제 ID 해석
+        self.model = _resolve_claude_id(model) if _is_claude_model(model) else model
         self.daily_budget_usd = max(daily_budget_usd, 0.0)
         self.batch_minutes = max(batch_minutes, 1)
 
@@ -181,16 +213,65 @@ class NewsAnalyst:
         return _safe_float(st.get("spent_usd"), 0.0) + max(estimated_increment_usd, 0.0) <= self.daily_budget_usd
 
     def _estimate_cost_usd(self, prompt_text: str, completion_tokens: int = 180) -> tuple[float, int]:
-        # rough estimation for gpt-4o-mini class pricing
         in_tokens = max(1, int(len(prompt_text) / 4))
         out_tokens = max(1, completion_tokens)
-        # conservative estimate: $0.0002 / 1K input, $0.0008 / 1K output
-        usd = (in_tokens / 1000.0) * 0.0002 + (out_tokens / 1000.0) * 0.0008
+        pricing = _CLAUDE_PRICING.get(self.model)
+        if pricing:
+            usd = (in_tokens / 1000.0) * pricing["input"] + (out_tokens / 1000.0) * pricing["output"]
+        else:
+            # GPT-4o-mini conservative estimate
+            usd = (in_tokens / 1000.0) * 0.0002 + (out_tokens / 1000.0) * 0.0008
         return float(usd), int(in_tokens + out_tokens)
 
-    def _llm_analyze(self, item: dict, symbol: str) -> Optional[dict]:
+    def _call_claude(self, prompt: str, max_tokens: int = 180) -> Optional[str]:
+        """Anthropic Claude API 호출 (단일 메시지)."""
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        if not api_key:
+            return None
+        try:
+            import anthropic
+            client = anthropic.Anthropic(api_key=api_key)
+            msg = client.messages.create(
+                model=self.model,
+                max_tokens=max_tokens,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            return (msg.content[0].text or "").strip() if msg.content else None
+        except Exception as exc:
+            log.warning("claude api call failed", model=self.model, error=exc)
+            return None
+
+    def _call_openai(self, prompt: str, max_tokens: int = 180) -> Optional[str]:
+        """OpenAI API 호출 (단일 메시지)."""
         api_key = os.environ.get("OPENAI_API_KEY", "")
         if not api_key:
+            return None
+        try:
+            from openai import OpenAI
+            client = OpenAI(api_key=api_key)
+            res = client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+                max_tokens=max_tokens,
+            )
+            return (res.choices[0].message.content or "").strip()
+        except Exception as exc:
+            log.warning("openai api call failed", model=self.model, error=exc)
+            return None
+
+    def _call_llm(self, prompt: str, max_tokens: int = 180) -> Optional[str]:
+        """모델에 따라 Claude 또는 OpenAI 호출."""
+        if _is_claude_model(self.model):
+            return self._call_claude(prompt, max_tokens)
+        return self._call_openai(prompt, max_tokens)
+
+    def _llm_analyze(self, item: dict, symbol: str) -> Optional[dict]:
+        use_claude = _is_claude_model(self.model)
+        api_key_set = bool(
+            os.environ.get("ANTHROPIC_API_KEY") if use_claude else os.environ.get("OPENAI_API_KEY")
+        )
+        if not api_key_set:
             return None
 
         prompt = f"""
@@ -214,16 +295,9 @@ time: {item.get('timestamp','')}
             return None
 
         try:
-            from openai import OpenAI
-
-            client = OpenAI(api_key=api_key)
-            res = client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                max_tokens=180,
-            )
-            raw = (res.choices[0].message.content or "").strip()
+            raw = self._call_llm(prompt, max_tokens=180)
+            if not raw:
+                return None
             parsed = _json_parse(raw)
 
             label = _normalize_label(parsed.get("label"))
@@ -257,12 +331,15 @@ time: {item.get('timestamp','')}
         return _heuristic_analysis(item, symbol)
 
     def _batch_analyze_items(self, items: List[dict], symbol: str) -> List[Optional[dict]]:
-        """Analyze multiple news items in a single LLM call.
+        """N개 뉴스를 단일 LLM 호출로 배치 분석 (~80% 비용 절감).
 
         Returns a list aligned 1-to-1 with *items*.
-        None entries mean LLM failed for that item → caller should fall back to heuristic.
+        None entries mean LLM failed for that item → caller falls back to heuristic.
+        Claude: claude-haiku-4-5 (저비용 배치 기본값), claude-sonnet-4-6 (고품질)
+        OpenAI: gpt-4o-mini (기존 기본값, fallback)
         """
-        api_key = os.environ.get("OPENAI_API_KEY", "")
+        use_claude = _is_claude_model(self.model)
+        api_key = os.environ.get("ANTHROPIC_API_KEY" if use_claude else "OPENAI_API_KEY", "")
         if not api_key or not items:
             return [None] * len(items)
 
@@ -280,22 +357,15 @@ time: {item.get('timestamp','')}
             '[\n  {"idx": 1, "label": "POSITIVE|NEGATIVE|NEUTRAL", "strength": 1, "reason": "20자 내 요약", "confidence": 0.0},\n  ...\n]'
         )
 
-        # ~100 completion tokens per item; cap at 2000
-        est_cost, est_tokens = self._estimate_cost_usd(prompt, completion_tokens=min(100 * len(items), 2000))
+        max_tokens = min(100 * len(items), 2000)
+        est_cost, est_tokens = self._estimate_cost_usd(prompt, completion_tokens=max_tokens)
         if not self._within_budget(est_cost):
             return [None] * len(items)
 
         try:
-            from openai import OpenAI
-
-            client = OpenAI(api_key=api_key)
-            res = client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                max_tokens=min(100 * len(items), 2000),
-            )
-            raw = (res.choices[0].message.content or "").strip()
+            raw = self._call_llm(prompt, max_tokens=max_tokens)
+            if not raw:
+                return [None] * len(items)
 
             # Extract JSON array from response
             text = raw.replace("```json", "").replace("```", "").strip()
@@ -553,7 +623,11 @@ def _cli() -> int:
     parser = argparse.ArgumentParser(description="News sentiment analyst")
     parser.add_argument("--symbols", default="BTC", help="comma-separated symbols")
     parser.add_argument("--budget", type=float, default=2.0)
-    parser.add_argument("--model", default="gpt-4o-mini")
+    parser.add_argument(
+        "--model",
+        default="gpt-4o-mini",
+        help="모델 선택: gpt-4o-mini | claude-haiku | claude-sonnet (claude-haiku = claude-haiku-4-5-20251001)",
+    )
     parser.add_argument("--stream-seconds", type=int, default=0, help="run realtime stream mode for N seconds")
     parser.add_argument("--poll-interval", type=float, default=15.0)
     args = parser.parse_args()

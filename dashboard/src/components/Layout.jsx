@@ -1,11 +1,12 @@
 import { NavLink, Outlet } from "react-router-dom";
-import { Bitcoin, BarChart3, Globe, Activity, Settings } from "lucide-react";
+import { Bitcoin, BarChart3, Globe, Bot, Activity, Settings } from "lucide-react";
 import PortfolioBanner from "./PortfolioBanner";
 
 const NAV = [
   { to: "/", icon: Bitcoin, label: "BTC" },
   { to: "/kr", icon: BarChart3, label: "KR 주식" },
   { to: "/us", icon: Globe, label: "US 주식" },
+  { to: "/agents", icon: Bot, label: "에이전트" },
 ];
 
 export default function Layout() {

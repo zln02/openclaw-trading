@@ -29,7 +29,7 @@ from common.config import BRAIN_PATH, SIGNAL_IC_MIN, SIGNAL_IC_IR_MIN
 from common.env_loader import load_env
 from common.logger import get_logger
 from common.supabase_client import get_supabase
-from common.telegram import send_telegram
+from common.telegram import Priority, send_telegram
 from common.utils import safe_float as _safe_float
 
 load_env()
@@ -308,7 +308,7 @@ class SignalEvaluator:
             lines.append(f"\n비활성 신호: {', '.join(inactive_names)}")
 
         try:
-            send_telegram("\n".join(lines))
+            send_telegram("\n".join(lines), priority=Priority.INFO)
         except Exception as exc:
             log.warning("IC report telegram send failed", error=exc)
 

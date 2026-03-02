@@ -20,7 +20,7 @@ from common.env_loader import load_env
 from common.logger import get_logger
 from common.market_data import get_market_regime
 from common.supabase_client import get_supabase
-from common.telegram import send_telegram
+from common.telegram import Priority, send_telegram
 from common.utils import safe_float as _safe_float
 
 load_env()
@@ -510,7 +510,7 @@ class StrategyReviewer:
 
         if notify:
             try:
-                send_telegram(msg)
+                send_telegram(msg, priority=Priority.INFO)
             except Exception as exc:
                 log.warning("daily check telegram send failed", error=exc)
 

@@ -291,6 +291,58 @@ def _empty_stats():
     }
 
 
+@router.get("/api/btc/filters")
+async def api_btc_filters():
+    """매매 필터 상태 — 김치프리미엄·펀딩비·일일 횟수·손실 한도"""
+    try:
+        # 1. 김치 프리미엄
+        from btc.btc_trading_agent import get_kimchi_premium
+        kimchi = await asyncio.to_thread(get_kimchi_premium)
+
+        # 2. 펀딩비 (rate는 이미 % 단위로 반환됨)
+        from common.market_data import get_btc_funding_rate
+        fr = await asyncio.to_thread(get_btc_funding_rate)
+        funding_rate = round(float(fr.get("rate", 0)), 4)
+        funding_signal = fr.get("signal", "NEUTRAL")
+
+        # 3. 오늘 매매 횟수 (btc_position open today)
+        today = datetime.now().date().isoformat()
+        today_count = 0
+        today_pnl_pct = 0.0
+        if supabase:
+            pos_res = supabase.table("btc_position").select(
+                "entry_krw,pnl,pnl_pct,status,entry_time"
+            ).gte("entry_time", today).execute()
+            rows = pos_res.data or []
+            today_count = len(rows)
+            closed_today = [r for r in rows if r.get("status") == "CLOSED"]
+            total_inv = sum(float(r.get("entry_krw") or 0) for r in closed_today)
+            total_pnl = sum(float(r.get("pnl") or 0) for r in closed_today)
+            today_pnl_pct = round(total_pnl / total_inv * 100, 2) if total_inv > 0 else 0.0
+
+        from common.config import BTC_RISK_DEFAULTS
+        return {
+            "kimchi_premium": round(float(kimchi or 0), 2),
+            "kimchi_blocked": float(kimchi or 0) >= 5.0,
+            "funding_rate": funding_rate,
+            "funding_signal": funding_signal,
+            "funding_overheated": funding_signal in ("LONG_CROWDED",),
+            "today_trades": today_count,
+            "max_trades_per_day": int(BTC_RISK_DEFAULTS.get("max_trades_per_day", 3)),
+            "today_pnl_pct": today_pnl_pct,
+            "max_daily_loss": round(BTC_RISK_DEFAULTS.get("max_daily_loss", -0.08) * 100, 1),
+            "max_drawdown": round(BTC_RISK_DEFAULTS.get("max_drawdown", -0.15) * 100, 1),
+        }
+    except Exception as e:
+        log.error(f"btc_filters: {e}")
+        return {
+            "kimchi_premium": None, "kimchi_blocked": False,
+            "funding_rate": None, "funding_signal": "NEUTRAL", "funding_overheated": False,
+            "today_trades": 0, "max_trades_per_day": 3,
+            "today_pnl_pct": 0, "max_daily_loss": -8.0, "max_drawdown": -15.0,
+        }
+
+
 @router.get("/api/stats")
 async def get_stats():
     if not supabase:
@@ -604,3 +656,20 @@ async def get_brain():
     except Exception as e:
         log.error(f"brain: {e}")
         return {"error": str(e)}
+
+
+@router.get("/api/agents/decisions")
+async def get_agent_decisions(limit: int = 20):
+    """최근 에이전트 팀 결정 이력 반환."""
+    try:
+        rows = (
+            supabase.table("agent_decisions")
+            .select("*")
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        return {"decisions": rows.data or []}
+    except Exception as e:
+        log.warning(f"agent_decisions: {e}")
+        return {"decisions": [], "error": str(e)}

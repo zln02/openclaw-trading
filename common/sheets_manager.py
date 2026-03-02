@@ -394,19 +394,129 @@ class AdvancedSheetsManager:
             log.error(f"위험 관리 지표 업데이트 실패: {e}")
             return False
     
-    def _calculate_risk_indicators(self) -> Dict[str, Any]:
-        """위험 관리 지표 계산"""
-        risk_data = {
-            "mdd": {"btc": 0, "kr": 0, "us": 0, "total": 0},
-            "win_loss_ratio": {"btc": 0, "kr": 0, "us": 0, "total": 0},
-            "sharpe_ratio": {"btc": 0, "kr": 0, "us": 0, "total": 0},
-            "max_position_size": {"btc": 0, "kr": 0, "us": 0, "total": 0},
-            "risk_level": "낮음"
+    def _calc_mdd(self, pnl_list: List[float]) -> float:
+        """최대낙폭(MDD) 계산 — 누적 PnL 시계열 기준."""
+        if not pnl_list:
+            return 0.0
+        peak = 0.0
+        mdd = 0.0
+        cum = 0.0
+        for p in pnl_list:
+            cum += p
+            if cum > peak:
+                peak = cum
+            dd = (peak - cum) / (abs(peak) + 1e-9) * 100
+            if dd > mdd:
+                mdd = dd
+        return round(mdd, 2)
+
+    def _calc_sharpe(self, returns: List[float], risk_free: float = 0.0) -> float:
+        """샤프 비율 계산 (일간 기준)."""
+        if len(returns) < 2:
+            return 0.0
+        import statistics
+        avg = statistics.mean(returns)
+        std = statistics.stdev(returns)
+        if std == 0:
+            return 0.0
+        return round((avg - risk_free) / std * (252 ** 0.5), 2)
+
+    def _get_market_trades(self, market: str, days: int = 30) -> List[Dict]:
+        """특정 마켓의 최근 청산 거래 조회."""
+        if not self.supabase:
+            return []
+        try:
+            table = "btc_trades" if market == "btc" else "trade_executions"
+            cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+            res = (
+                self.supabase.table(table)
+                .select("pnl,pnl_pct,quantity,price,entry_price,timestamp")
+                .gte("timestamp", cutoff)
+                .order("timestamp")
+                .execute()
+            )
+            return res.data or []
+        except Exception as e:
+            log.warning(f"거래 조회 실패 ({market}): {e}")
+            return []
+
+    def _calc_market_risk(self, trades: List[Dict]) -> Dict[str, float]:
+        """단일 마켓 리스크 지표 산출."""
+        if not trades:
+            return {"mdd": 0.0, "win_loss_ratio": 0.0, "sharpe": 0.0, "max_pos": 0.0}
+
+        pnl_list = [self._safe_float(t.get("pnl")) for t in trades]
+        pnl_pct_list = [self._safe_float(t.get("pnl_pct")) for t in trades]
+        returns = [p for p in pnl_pct_list if p != 0]
+
+        wins = [p for p in pnl_list if p > 0]
+        losses = [abs(p) for p in pnl_list if p < 0]
+        avg_win = sum(wins) / len(wins) if wins else 0
+        avg_loss = sum(losses) / len(losses) if losses else 1
+        wl_ratio = round(avg_win / avg_loss, 2) if avg_loss > 0 else 0.0
+
+        # 최대 포지션 크기 (가격 × 수량)
+        pos_sizes = [
+            self._safe_float(t.get("price") or t.get("entry_price", 0)) * self._safe_float(t.get("quantity", 0))
+            for t in trades
+        ]
+        max_pos = round(max(pos_sizes, default=0), 0)
+
+        return {
+            "mdd": self._calc_mdd(pnl_list),
+            "win_loss_ratio": wl_ratio,
+            "sharpe": self._calc_sharpe(returns),
+            "max_pos": max_pos,
         }
-        
-        # 실제 위험 지표 계산 로직 (간소화됨)
-        # 여기에 실제 데이터 기반 계산 로직 추가
-        
+
+    def _calculate_risk_indicators(self) -> Dict[str, Any]:
+        """위험 관리 지표 계산 — Supabase 실거래 데이터 기반."""
+        risk_data: Dict[str, Any] = {
+            "mdd": {"btc": 0.0, "kr": 0.0, "us": 0.0, "total": 0.0},
+            "win_loss_ratio": {"btc": 0.0, "kr": 0.0, "us": 0.0, "total": 0.0},
+            "sharpe_ratio": {"btc": 0.0, "kr": 0.0, "us": 0.0, "total": 0.0},
+            "max_position_size": {"btc": 0.0, "kr": 0.0, "us": 0.0, "total": 0.0},
+            "risk_level": "낮음",
+        }
+
+        all_pnl: List[float] = []
+        all_returns: List[float] = []
+
+        for market in ("btc", "kr", "us"):
+            trades = self._get_market_trades(market)
+            m = self._calc_market_risk(trades)
+            risk_data["mdd"][market] = m["mdd"]
+            risk_data["win_loss_ratio"][market] = m["win_loss_ratio"]
+            risk_data["sharpe_ratio"][market] = m["sharpe"]
+            risk_data["max_position_size"][market] = m["max_pos"]
+            all_pnl.extend(self._safe_float(t.get("pnl")) for t in trades)
+            all_returns.extend(
+                self._safe_float(t.get("pnl_pct")) for t in trades
+                if t.get("pnl_pct") is not None
+            )
+
+        risk_data["mdd"]["total"] = self._calc_mdd(all_pnl)
+        risk_data["sharpe_ratio"]["total"] = self._calc_sharpe([r for r in all_returns if r != 0])
+        wins_all = [p for p in all_pnl if p > 0]
+        losses_all = [abs(p) for p in all_pnl if p < 0]
+        avg_w = sum(wins_all) / len(wins_all) if wins_all else 0
+        avg_l = sum(losses_all) / len(losses_all) if losses_all else 1
+        risk_data["win_loss_ratio"]["total"] = round(avg_w / avg_l, 2) if avg_l > 0 else 0.0
+        risk_data["max_position_size"]["total"] = max(
+            risk_data["max_position_size"][m] for m in ("btc", "kr", "us")
+        )
+
+        # 리스크 레벨 판단
+        total_mdd = risk_data["mdd"]["total"]
+        if total_mdd >= 15:
+            risk_data["risk_level"] = "매우 높음"
+        elif total_mdd >= 10:
+            risk_data["risk_level"] = "높음"
+        elif total_mdd >= 5:
+            risk_data["risk_level"] = "중간"
+        else:
+            risk_data["risk_level"] = "낮음"
+
         return risk_data
     
     def _update_risk_sheet(self, risk_data: Dict[str, Any]) -> bool:
@@ -520,7 +630,7 @@ class AdvancedSheetsManager:
         try:
             target_id = sheet_id or MAIN_SHEET_ID
             if not target_id:
-                log.warn("GOOGLE_SHEET_ID 미설정 — 전략 이력 기록 건너뜀")
+                log.warning("GOOGLE_SHEET_ID 미설정 — 전략 이력 기록 건너뜀")
                 return False
 
             date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -541,7 +651,7 @@ class AdvancedSheetsManager:
             if ok:
                 log.info("전략 변경 이력 기록", item=item, old=str(old_value), new=str(new_value))
             else:
-                log.warn("전략 변경 이력 기록 실패 (gog)", item=item)
+                log.warning("전략 변경 이력 기록 실패 (gog)", item=item)
             return ok
         except Exception as e:
             log.error(f"전략 변경 이력 기록 오류: {e}")

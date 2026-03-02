@@ -1,6 +1,14 @@
-"""Telegram message sender utility with retry."""
+"""Telegram message sender with priority-based routing.
+
+Priority.URGENT    🔴  즉시 발송: 손절 체결·에이전트 다운·API 에러
+Priority.IMPORTANT 🟡  즉시 발송: 매수/매도 체결·스코어 급변
+Priority.INFO      🟢  버퍼 저장: 일일 리포트에만 포함 (개별 발송 안 함)
+"""
+import json
 import os
 import time
+from enum import Enum
+from pathlib import Path
 from typing import Optional
 
 import requests
@@ -8,19 +16,74 @@ import requests
 _last_send_ts = 0.0
 _MIN_INTERVAL = 1.0  # rate-limit: 1 msg/sec
 
+# INFO 등급 버퍼 — 프로세스 간 공유를 위해 파일 기반
+_INFO_BUFFER_FILE = Path(__file__).resolve().parents[1] / ".telegram_info_buffer.json"
 
-def send_telegram(msg: str, parse_mode: str = "HTML", retries: int = 2) -> bool:
-    """Send a telegram message with retry and rate-limiting.
 
-    Returns True on success, False otherwise.
+class Priority(str, Enum):
+    """메시지 전송 우선순위."""
+    URGENT    = "urgent"     # 🔴 즉시 발송
+    IMPORTANT = "important"  # 🟡 즉시 발송
+    INFO      = "info"       # 🟢 일일 리포트 버퍼에만 저장
+
+
+def append_info_buffer(msg: str) -> None:
+    """INFO 등급 메시지를 일일 버퍼에 추가 (즉시 발송하지 않음)."""
+    try:
+        today = time.strftime("%Y-%m-%d")
+        data: dict = {}
+        if _INFO_BUFFER_FILE.exists():
+            try:
+                data = json.loads(_INFO_BUFFER_FILE.read_text(encoding="utf-8"))
+            except Exception:
+                data = {}
+        if data.get("date") != today:
+            data = {"date": today, "msgs": []}
+        data["msgs"].append(msg)
+        _INFO_BUFFER_FILE.write_text(
+            json.dumps(data, ensure_ascii=False), encoding="utf-8"
+        )
+    except Exception:
+        pass
+
+
+def flush_info_buffer() -> list:
+    """버퍼에 쌓인 INFO 메시지를 반환하고 초기화. 일일 리포트 발송 시 호출."""
+    try:
+        if not _INFO_BUFFER_FILE.exists():
+            return []
+        data = json.loads(_INFO_BUFFER_FILE.read_text(encoding="utf-8"))
+        msgs = data.get("msgs", [])
+        _INFO_BUFFER_FILE.write_text(
+            json.dumps({"date": time.strftime("%Y-%m-%d"), "msgs": []}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        return msgs
+    except Exception:
+        return []
+
+
+def send_telegram(
+    msg: str,
+    parse_mode: str = "HTML",
+    retries: int = 2,
+    priority: Priority = Priority.URGENT,
+) -> bool:
+    """메시지 전송.
+
+    priority=INFO  → 버퍼에 저장, 즉시 발송 안 함
+    priority=IMPORTANT/URGENT → 즉시 발송
     """
+    if priority == Priority.INFO:
+        append_info_buffer(msg)
+        return True
+
     global _last_send_ts
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
     if not token or not chat_id:
         return False
 
-    # rate-limit
     elapsed = time.time() - _last_send_ts
     if elapsed < _MIN_INTERVAL:
         time.sleep(_MIN_INTERVAL - elapsed)
@@ -98,7 +161,7 @@ def send_trade_alert(
         f"⚖️ <b>포트폴리오 비중:</b> {portfolio_weight:.1f}%"
         f"{pnl_line}"
     )
-    return send_telegram(msg)
+    return send_telegram(msg, priority=Priority.IMPORTANT)
 
 
 def send_daily_report(
@@ -110,17 +173,7 @@ def send_daily_report(
     regime: str = "N/A",
     market_breakdown: Optional[dict] = None,
 ) -> bool:
-    """일일 리포트 — 승률·당일 PnL·누적 PnL 포함.
-
-    Args:
-        date_str: 리포트 날짜 (예: "2026-03-01")
-        win_rate: 승률 (0~100 %)
-        daily_pnl: 당일 손익 (원화 기준)
-        cumulative_pnl: 누적 손익 (원화 기준)
-        total_trades: 당일 총 거래 건수
-        regime: 시장 레짐 문자열 (예: "RISK_ON")
-        market_breakdown: {"btc": {"pnl": 0, "trades": 0}, "kr": ..., "us": ...}
-    """
+    """일일 리포트 — 승률·당일 PnL·누적 PnL 포함."""
     daily_sign = "+" if daily_pnl >= 0 else ""
     cum_sign   = "+" if cumulative_pnl >= 0 else ""
 
@@ -149,13 +202,7 @@ def send_emergency_alert(
     message: str,
     detail: str = "",
 ) -> bool:
-    """이상 상황 긴급 알림 — 연속 손절·API 에러·낙폭 경보 구분.
-
-    Args:
-        alert_type: "consecutive_loss" | "api_error" | "drawdown"
-        message: 핵심 경보 메시지 (1~2줄)
-        detail: 추가 상세 정보 (선택)
-    """
+    """이상 상황 긴급 알림 — 연속 손절·API 에러·낙폭 경보 구분."""
     icons = {
         "consecutive_loss": "🚨",
         "api_error":        "⛔",
@@ -178,4 +225,4 @@ def send_emergency_alert(
         f"{detail_line}\n"
         f"⏰ {_dt.datetime.now().strftime('%H:%M:%S')}"
     )
-    return send_telegram(msg)
+    return send_telegram(msg, priority=Priority.URGENT)

@@ -38,8 +38,8 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # 알림 매니저 (2분)
 */2 * * * * ALERT_DRAWDOWN=-0.01 ALERT_VAR95=0.018 ALERT_CORR_SHIFT=0.05 ALERT_VOLUME_SPIKE=1.4 /home/wlsdud5035/.openclaw/workspace/scripts/run_top_tier_cron.sh phase18-alert >> /home/wlsdud5035/.openclaw/logs/alert_manager.log 2>&1
 
-# 일간 리포트 (매일 21:00 KST)
-0 21 * * * /home/wlsdud5035/.openclaw/workspace/scripts/run_top_tier_cron.sh phase18-daily >> /home/wlsdud5035/.openclaw/logs/daily_report.log 2>&1
+# 일간 리포트 (매일 22:00 KST — INFO 버퍼 포함)
+0 22 * * * /home/wlsdud5035/.openclaw/workspace/scripts/run_top_tier_cron.sh phase18-daily >> /home/wlsdud5035/.openclaw/logs/daily_report.log 2>&1
 
 # 주간 리포트 (일요일 21:00 KST)
 0 21 * * 0 /home/wlsdud5035/.openclaw/workspace/scripts/run_top_tier_cron.sh phase18-weekly >> /home/wlsdud5035/.openclaw/logs/weekly_report.log 2>&1

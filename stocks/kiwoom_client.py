@@ -34,13 +34,29 @@ except ImportError:
 
 import httpx
 
-
-# ─────────────────────────────────────────────
-# 유틸리티
-# ─────────────────────────────────────────────
-def _log(msg: str, level: str = "INFO"):
-    ts = datetime.now().strftime("%H:%M:%S")
-    print(f"[kiwoom][{ts}] {level}: {msg}")
+try:
+    import sys as _sys
+    _ws = str(Path(__file__).resolve().parents[1])
+    if _ws not in _sys.path:
+        _sys.path.insert(0, _ws)
+    from common.logger import get_logger as _get_logger
+    _kiwoom_log = _get_logger("kiwoom_client")
+    def _log(msg: str, level: str = "INFO"):
+        level_upper = level.upper()
+        if level_upper in ("TRADE",):
+            _kiwoom_log.info(f"[TRADE] {msg}")
+        elif level_upper == "WARN":
+            _kiwoom_log.warning(msg)
+        elif level_upper == "ERROR":
+            _kiwoom_log.error(msg)
+        elif level_upper == "DEBUG":
+            _kiwoom_log.debug(msg)
+        else:
+            _kiwoom_log.info(msg)
+except Exception:
+    def _log(msg: str, level: str = "INFO"):
+        ts = datetime.now().strftime("%H:%M:%S")
+        print(f"[kiwoom][{ts}] {level}: {msg}")
 
 
 def _int(v) -> int:

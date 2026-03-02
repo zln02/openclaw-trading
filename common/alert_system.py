@@ -19,10 +19,32 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from common.env_loader import load_env
 from common.supabase_client import get_supabase
 from common.logger import get_logger
-from common.telegram import send_telegram
+from common.telegram import Priority, send_telegram
 
 load_env()
 log = get_logger("alert_system")
+
+# 일일 요약 알림은 하루 1회만 발송 (10분마다 중복 방지)
+_LAST_DAILY_ALERT_FILE = Path(__file__).resolve().parents[1] / ".last_daily_alert_sent"
+
+
+def _already_sent_daily_summary_today() -> bool:
+    try:
+        if _LAST_DAILY_ALERT_FILE.exists():
+            with open(_LAST_DAILY_ALERT_FILE) as f:
+                return f.read().strip() == datetime.now().strftime("%Y-%m-%d")
+    except Exception:
+        pass
+    return False
+
+
+def _mark_daily_summary_sent() -> None:
+    try:
+        _LAST_DAILY_ALERT_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _LAST_DAILY_ALERT_FILE.write_text(datetime.now().strftime("%Y-%m-%d"))
+    except Exception as e:
+        log.warning("일일 요약 발송일 기록 실패: %s", e)
+
 
 class AlertSystem:
     """OpenClaw 알림 시스템"""
@@ -286,10 +308,16 @@ class AlertSystem:
                 self.supabase.table("btc_trades").select("count").limit(1).execute()
                 status["supabase"] = True
             
-            # Telegram 연결 체크
-            test_msg = "🔔 OpenClaw 시스템 테스트"
-            send_telegram(test_msg)
-            status["telegram"] = True
+            # Telegram 연결 체크 (메시지 전송 없이 getUpdates로 토큰/연결만 검증)
+            import requests as _req
+            token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+            if token:
+                r = _req.get(
+                    f"https://api.telegram.org/bot{token}/getUpdates",
+                    params={"limit": 1},
+                    timeout=5,
+                )
+                status["telegram"] = r.ok
             
         except Exception as e:
             log.error(f"API 상태 체크 실패: {e}")
@@ -312,15 +340,18 @@ class AlertSystem:
             
             for alert in all_alerts:
                 message = alert["message"]
-                success = send_telegram(message, parse_mode="Markdown")
-                
+                # info 심각도는 일일 리포트 버퍼에만 저장 (개별 발송 안 함)
+                prio = Priority.INFO if alert.get("severity") == "info" else Priority.URGENT
+                success = send_telegram(message, parse_mode="Markdown", priority=prio)
+
                 if not success:
                     log.error(f"알림 전송 실패: {alert['type']}")
                     return False
-                
-                # 연속 전송 방지를 위한 딜레이
-                import time
-                time.sleep(1)
+
+                # 연속 전송 방지를 위한 딜레이 (즉시 발송 알림만)
+                if prio != Priority.INFO:
+                    import time
+                    time.sleep(1)
             
             log.info(f"알림 {len(alerts)}건 전송 완료")
             return True
@@ -340,9 +371,10 @@ class AlertSystem:
             portfolio_alerts = self.check_portfolio_alerts()
             all_alerts.extend(portfolio_alerts)
             
-            # 일일 요약 알림 체크
+            # 일일 요약 알림 체크 (하루 1회만 발송)
             daily_alerts = self.check_daily_summary_alerts()
-            all_alerts.extend(daily_alerts)
+            if daily_alerts and not _already_sent_daily_summary_today():
+                all_alerts.extend(daily_alerts)
             
             # 시스템 알림 체크
             system_alerts = self.check_system_alerts()
@@ -350,7 +382,9 @@ class AlertSystem:
             
             # 알림 전송
             success = self.send_alerts(all_alerts)
-            
+            if daily_alerts and success:
+                _mark_daily_summary_sent()
+
             log.info(f"알림 체크 완료: {len(all_alerts)}건 발견, 전송 {'성공' if success else '실패'}")
             return success
             

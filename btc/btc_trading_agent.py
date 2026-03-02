@@ -13,7 +13,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from common.env_loader import load_env
-from common.telegram import send_telegram as _tg_send
+from common.telegram import send_telegram as _tg_send, Priority as _TgPriority
 from common.supabase_client import get_supabase
 from common.logger import get_logger
 from common.retry import retry, retry_call
@@ -74,8 +74,8 @@ RISK = {
 }
 
 # ── 텔레그램 ──────────────────────────────────────
-def send_telegram(msg: str):
-    _tg_send(msg)
+def send_telegram(msg: str, priority: "_TgPriority" = _TgPriority.URGENT) -> None:
+    _tg_send(msg, priority=priority)
 
 # ── 시장 데이터 ───────────────────────────────────
 def get_market_data():
@@ -674,13 +674,27 @@ def execute_trade(signal, indicators, fg=None, volume=None, comp=None) -> dict:
         else:
             log.info(f"[DRY_RUN] {stage}차 매수 — {invest_krw:,.0f}원")
 
+        qty_est = qty if not DRY_RUN else invest_krw / price
+        sl_price = int(price * (1 + RISK["stop_loss"]))
+        tp_price = int(price * (1 + RISK["take_profit"]))
+        comp_total = comp["total"] if comp else 0
+        btc_val = int(price * qty_est)
+        krw_remain = max(0, int(krw_balance - invest_krw))
+        total_asset = krw_remain + btc_val
+        btc_weight = round(btc_val / max(total_asset, 1) * 100)
         send_telegram(
-            f"🟢 <b>BTC {stage}차 매수</b>\n"
-            f"💰 가격: {price:,}원\n"
-            f"📊 RSI: {indicators['rsi']} ({stage}차)\n"
-            f"💵 투입: {invest_krw:,.0f}원\n"
-            f"🎯 신뢰도: {signal['confidence']}%\n"
-            f"📝 {signal['reason']}"
+            f"📈 <b>BTC 매수 체결</b>\n"
+            f"━━━━━━━━━━━━━━\n"
+            f"가격: ₩{price:,.0f} ({qty_est:.8f} BTC)\n"
+            f"복합스코어: {comp_total}/100\n"
+            f"진입근거: {signal['reason']}\n"
+            f"━━━━━━━━━━━━━━\n"
+            f"손절가: ₩{sl_price:,} ({RISK['stop_loss']*100:.0f}%)\n"
+            f"익절가: ₩{tp_price:,} (+{RISK['take_profit']*100:.0f}%)\n"
+            f"━━━━━━━━━━━━━━\n"
+            f"총자산: ₩{total_asset:,}\n"
+            f"BTC 비중: {btc_weight}%",
+            priority=_TgPriority.IMPORTANT,
         )
         if _sheets_append:
             try:
@@ -797,6 +811,21 @@ def run_trading_cycle():
         funding=funding, oi=oi, ls_ratio=ls_ratio, kimchi=kimchi,
         regime=market_regime,
     )
+
+    # 일일 리포트용 상태 캐시 저장
+    try:
+        _state_file = Path(__file__).resolve().parents[1] / "brain" / "market" / "last_btc_state.json"
+        _state_file.parent.mkdir(parents=True, exist_ok=True)
+        _state_file.write_text(json.dumps({
+            "composite": comp.get("total", 0) if comp else 0,
+            "trend": htf.get("trend", "UNKNOWN"),
+            "fg": fg_value,
+            "fg_label": fg.get("label", "중립"),
+            "rsi": rsi_d,
+            "updated": datetime.now().isoformat(),
+        }, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
 
     log.info(f"F&G: {fg['label']}({fg_value}) | 1h: {htf['trend']} | dRSI: {rsi_d} | 5mRSI: {rsi_5m}")
     log.info(f"BB: {momentum['bb_pct']:.0f}% | dVol: {momentum['vol_ratio_d']}x | 7d: {momentum['ret_7d']:+.1f}% | 30d: {momentum['ret_30d']:+.1f}%")
@@ -938,10 +967,10 @@ def build_hourly_summary() -> str:
         return f"⏰ BTC 매시 요약 생성 실패: {e}"
 
 def send_hourly_report():
-    """매시 정각 요약 리포트 — 텔레그램으로 발송 (cron 'report' 호출용)."""
+    """매시 정각 요약 — INFO 버퍼에 저장 (일일 리포트에 병합됨)."""
     msg = build_hourly_summary()
-    send_telegram(msg)
-    log.info(f"매시 요약 발송 완료")
+    send_telegram(msg, priority=_TgPriority.INFO)
+    log.info("매시 요약 INFO 버퍼 저장 완료")
 
 
 if __name__ == "__main__":
