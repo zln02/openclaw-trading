@@ -158,7 +158,7 @@ class SlippageTracker:
             try:
                 self.supabase.table(self.table_name).insert(row).execute()
             except Exception as exc:
-                log.warn("supabase execution_quality insert failed; fallback local", error=exc)
+                log.warning("supabase execution_quality insert failed; fallback local", error=exc)
                 self._append_local(row)
         else:
             self._append_local(row)
@@ -181,7 +181,7 @@ class SlippageTracker:
             )
             return rows
         except Exception as exc:
-            log.warn("supabase execution_quality query failed", error=exc)
+            log.warning("supabase execution_quality query failed", error=exc)
             return []
 
     def _query_local(self, start_iso: str, end_iso: str) -> List[dict]:
@@ -198,7 +198,7 @@ class SlippageTracker:
                         if _in_range(ts, start_iso, end_iso):
                             rows.append(row)
             except Exception as exc:
-                log.warn("local execution_quality read failed", path=str(p), error=exc)
+                log.warning("local execution_quality read failed", path=str(p), error=exc)
         rows.sort(key=lambda x: str(x.get("timestamp") or ""))
         return rows
 

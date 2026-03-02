@@ -91,10 +91,10 @@ def get_google_trend(symbol: str, window_days: int = 7) -> Dict:
         )
     except ImportError:
         out["source"] = "pytrends_unavailable"
-        log.warn("pytrends is not installed; trend fallback used")
+        log.warning("pytrends is not installed; trend fallback used")
     except Exception as exc:
         out["source"] = "pytrends_error"
-        log.warn("pytrends fetch failed", error=exc)
+        log.warning("pytrends fetch failed", error=exc)
 
     set_cached(cache_key, out, ttl=900)
     return out
@@ -158,7 +158,7 @@ def get_social_mentions(symbol: str, hours: int = 24) -> Dict:
         )
     except Exception as exc:
         out["source"] = "cryptopanic_parse_error"
-        log.warn("cryptopanic parse failed", error=exc)
+        log.warning("cryptopanic parse failed", error=exc)
 
     set_cached(cache_key, out, ttl=300)
     return out

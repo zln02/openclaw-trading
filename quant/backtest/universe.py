@@ -206,7 +206,7 @@ class UniverseProvider:
                     break
             return out
         except Exception as exc:
-            log.warn("KR universe from daily_ohlcv failed", error=exc)
+            log.warning("KR universe from daily_ohlcv failed", error=exc)
             return []
 
     def _get_kr_universe_from_top50(self) -> List[str]:
@@ -216,7 +216,7 @@ class UniverseProvider:
             rows = self.supabase.table("top50_stocks").select("stock_code").execute().data or []
             return [str(r.get("stock_code") or "").strip() for r in rows if r.get("stock_code")]
         except Exception as exc:
-            log.warn("KR universe fallback top50 failed", error=exc)
+            log.warning("KR universe fallback top50 failed", error=exc)
             return []
 
     def _kr_static_fallback(self) -> List[str]:
@@ -260,7 +260,7 @@ class UniverseProvider:
                             )
                         )
             except Exception as exc:
-                log.warn("sp500 history parse failed", path=str(p), error=exc)
+                log.warning("sp500 history parse failed", path=str(p), error=exc)
 
         if not rows:
             # fallback to static large-cap universe

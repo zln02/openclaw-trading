@@ -308,7 +308,7 @@ def fetch_return_matrix(symbols: List[str], lookback_days: int = 252) -> Dict[st
             if rets:
                 out[sym] = rets[-lookback_days:]
     except Exception as exc:
-        log.warn("fetch_return_matrix failed", error=exc)
+        log.warning("fetch_return_matrix failed", error=exc)
 
     return out
 

@@ -161,7 +161,7 @@ class SmartRouter:
                 return 15.0
             return max(0.0, (spread / mid) * 10000.0)
         except Exception as exc:
-            log.warn("spread fetch failed", symbol=sym, market=mk, error=exc)
+            log.warning("spread fetch failed", symbol=sym, market=mk, error=exc)
             return 15.0
 
     def _get_reference_price(self, symbol: str, market: str, price_hint: Optional[float], kiwoom_client=None) -> float:

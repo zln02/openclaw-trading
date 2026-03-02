@@ -157,7 +157,7 @@ class FactorCombiner:
                 return {n: 1.0 for n in names}
             return w
         except Exception as exc:
-            log.warn("ridge fit failed, fallback to equal", error=exc)
+            log.warning("ridge fit failed, fallback to equal", error=exc)
             return {n: 1.0 for n in names}
 
     def _fit_lasso(self, factor_matrix: List[Dict[str, float]], targets: List[float], names: List[str]) -> Dict[str, float]:
@@ -180,7 +180,7 @@ class FactorCombiner:
                 return {n: 1.0 for n in names}
             return w
         except Exception as exc:
-            log.warn("lasso fit failed, fallback to equal", error=exc)
+            log.warning("lasso fit failed, fallback to equal", error=exc)
             return {n: 1.0 for n in names}
 
 

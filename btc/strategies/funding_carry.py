@@ -121,7 +121,7 @@ class FundingCarryStrategy:
             # common.market_data.get_btc_funding_rate() returns percent already.
             return _safe_float(row.get("rate"), 0.0)
         except Exception as exc:
-            log.warn("funding fetch failed", error=exc)
+            log.warning("funding fetch failed", error=exc)
             return 0.0
 
     def evaluate(self, symbol: str = "BTCUSDT", funding_rate_pct: Optional[float] = None) -> dict:

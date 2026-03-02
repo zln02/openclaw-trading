@@ -71,7 +71,7 @@ class WeeklyReportGenerator:
                 return summary
             return "Strategy review present but summary is empty."
         except Exception as exc:
-            log.warn("failed to load strategy review summary", error=exc)
+            log.warning("failed to load strategy review summary", error=exc)
             return "Failed to read strategy reviewer result."
 
     def build_markdown(self, ctx: WeeklyReportContext, week_label: Optional[str] = None) -> str:

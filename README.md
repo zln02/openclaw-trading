@@ -2,6 +2,18 @@
 
 BTC · KR 주식 · US 주식 자동매매 통합 플랫폼 + Google Sheets 기록/대시보드
 
+## Phase 14 신규 모듈 (2026-03-02)
+
+| 모듈 | 설명 |
+|------|------|
+| `company/` | **AI 소프트웨어 회사** — CEO(opus-4-6)가 CTO·Backend·Frontend·Quant·DevOps·QA에 위임. `python -m company --task "요청"` |
+| `agents/trading_agent_team.py` | **5-에이전트 Claude 팀** — Orchestrator(opus-4-6) + MarketAnalyst + NewsAnalyst + RiskManager + Reporter. `python -m agents.trading_agent_team --market btc` |
+| `quant/signal_evaluator.py` | 신호 IC/IR 측정 시스템, Supabase 저장, 텔레그램 리포트 |
+| `supabase/agent_decisions_schema.sql` | 에이전트 결정 이력 테이블 |
+| `scripts/run_agent_team.sh` / `run_company.sh` | 크론 래퍼 스크립트 |
+
+**환경**: `ANTHROPIC_API_KEY` 추가 필요 (claude-opus-4-6 · claude-sonnet-4-6 · claude-haiku-4-5 사용)
+
 ## 아키텍처
 
 ```mermaid
@@ -126,6 +138,7 @@ workspace/
 │   ├── us_momentum_backtest.py
 │   └── performance_report.py
 ├── agents/
+│   ├── trading_agent_team.py       # 5-에이전트 Claude 팀 (Phase 14)
 │   ├── daily_loss_analyzer.py      # 일일 손실 분석 → 텔레그램
 │   ├── daily_report.py
 │   ├── weekly_report.py
@@ -133,6 +146,11 @@ workspace/
 │   ├── news_analyst.py
 │   ├── regime_classifier.py
 │   └── strategy_reviewer.py
+├── company/                        # AI 소프트웨어 회사 (Phase 14)
+│   ├── trading_company.py          #   CEO + 전문가 팀 (TradingCompany 클래스)
+│   ├── tools.py                    #   @beta_tool 파일/bash/git 도구
+│   ├── prompts.py                  #   각 직원 시스템 프롬프트
+│   └── __main__.py                 #   CLI 진입점
 ├── common/
 │   ├── config.py
 │   ├── env_loader.py
@@ -196,6 +214,14 @@ source .venv/bin/activate
 python btc/btc_trading_agent.py
 python stocks/stock_trading_agent.py
 python stocks/us_stock_trading_agent.py
+
+# 5-에이전트 Claude 팀 (Phase 14)
+python -m agents.trading_agent_team --market btc
+python -m agents.trading_agent_team --market kr --symbol 005930
+
+# AI 소프트웨어 회사 (Phase 14)
+python -m company --task "BTC 에이전트 성능 개선"
+python -m company --role qa --task "trading_agent_team.py 코드 리뷰"
 
 # Web 대시보드
 python btc/btc_dashboard.py

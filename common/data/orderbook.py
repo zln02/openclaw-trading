@@ -79,7 +79,7 @@ def fetch_binance_orderbook(symbol: str = "BTCUSDT", limit: int = 20) -> Dict:
         params={"symbol": symbol.upper(), "limit": min(max(limit, 5), 100)},
     )
     if res is None or not res.ok:
-        log.warn("binance orderbook request failed", symbol=symbol)
+        log.warning("binance orderbook request failed", symbol=symbol)
         return {
             "symbol": symbol.upper(),
             "bids": [],
@@ -132,7 +132,7 @@ def fetch_upbit_orderbook(market: str = "KRW-BTC") -> Dict:
 
     res = _request_get("https://api.upbit.com/v1/orderbook", params={"markets": market})
     if res is None or not res.ok:
-        log.warn("upbit orderbook request failed", market=market)
+        log.warning("upbit orderbook request failed", market=market)
         return {
             "symbol": market,
             "bids": [],
@@ -192,7 +192,7 @@ def fetch_kr_orderbook_snapshot(stock_code: str, kiwoom_client=None) -> Dict:
         try:
             price = float(kiwoom_client.get_current_price(code) or 0.0)
         except Exception as exc:
-            log.warn("kiwoom current price fetch failed", code=code, error=exc)
+            log.warning("kiwoom current price fetch failed", code=code, error=exc)
 
     if price <= 0:
         return {

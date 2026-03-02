@@ -156,7 +156,7 @@ class DARTRealtimeFilter:
                 payload = resp.json() or {}
                 rows.extend(payload.get("list") or [])
             except Exception as exc:
-                log.warn("dart parse failed", page=page_no, error=exc)
+                log.warning("dart parse failed", page=page_no, error=exc)
 
         clean = [r for r in rows if isinstance(r, dict)]
         set_cached(cache_key, clean, ttl=self.cache_ttl_seconds)

@@ -163,7 +163,7 @@ class KRFlowFactor:
                 )
             return rows
         except Exception as exc:
-            log.warn("pykrx flow fetch failed", symbol=code, error=exc)
+            log.warning("pykrx flow fetch failed", symbol=code, error=exc)
             return []
 
     def fetch(self, symbol: str, kiwoom_client=None, lookback_days: int = 10) -> list[dict]:

@@ -277,7 +277,7 @@ class FactorAnalyzer:
                 )
                 results.append(r.to_dict())
             except Exception as exc:
-                log.warn("factor analysis failed", factor=name, error=exc)
+                log.warning("factor analysis failed", factor=name, error=exc)
         results.sort(key=lambda x: (x.get("is_valid", False), x.get("ic_ir", 0.0), x.get("ic_mean", 0.0)), reverse=True)
         return results
 

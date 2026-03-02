@@ -13,7 +13,13 @@ secretary/.venv/
 # Environment / secrets
 .env
 *.log
-brain/kiwoom_token.json
+**/kiwoom_token.json
+.last_daily_alert_sent
+secretary/.env
+
+# Runtime data (AI output, market snapshots)
+brain/
+stocks/today_strategy.json
 
 # OS
 .DS_Store

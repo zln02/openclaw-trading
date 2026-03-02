@@ -100,7 +100,7 @@ class SectorRotationModel:
                 if len(closes) >= 2:
                     out[sector] = closes
             except Exception as exc:
-                log.warn("sector history fetch failed", sector=sector, ticker=ticker, error=exc)
+                log.warning("sector history fetch failed", sector=sector, ticker=ticker, error=exc)
         return out
 
     def compute_sector_returns(self, prices_by_sector: dict[str, list[float]]) -> dict[str, float]:

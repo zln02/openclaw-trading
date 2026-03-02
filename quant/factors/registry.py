@@ -256,7 +256,7 @@ class FactorContext:
                 )
             return out
         except Exception as exc:
-            log.warn("supabase series fetch failed", symbol=symbol, market=market, error=exc)
+            log.warning("supabase series fetch failed", symbol=symbol, market=market, error=exc)
             return []
 
     def _load_series_from_yfinance(self, symbol: str, market: str) -> List[dict]:
@@ -289,7 +289,7 @@ class FactorContext:
                 )
             return out
         except Exception as exc:
-            log.warn("yfinance series fetch failed", symbol=symbol, market=market, error=exc)
+            log.warning("yfinance series fetch failed", symbol=symbol, market=market, error=exc)
             return []
 
     def get_ohlcv(self, symbol: str, as_of_iso: str, market: str = "kr", lookback: int = 400) -> List[dict]:
@@ -350,7 +350,7 @@ class FactorContext:
                         "total_assets": _safe_float(r.get("total_assets")),
                     }
             except Exception as exc:
-                log.warn("KR fundamentals fetch failed", symbol=symbol, error=exc)
+                log.warning("KR fundamentals fetch failed", symbol=symbol, error=exc)
 
         if not data:
             try:
@@ -373,7 +373,7 @@ class FactorContext:
                     "total_assets": _safe_float(info.get("totalAssets")),
                 }
             except Exception as exc:
-                log.warn("yfinance fundamentals fetch failed", symbol=symbol, market=market, error=exc)
+                log.warning("yfinance fundamentals fetch failed", symbol=symbol, market=market, error=exc)
                 data = {}
 
         self._fund_cache[key] = data
@@ -430,7 +430,7 @@ class FactorContext:
                     snap = fetch_binance_orderbook("BTCUSDT")
                 imb = _safe_float(snap.get("imbalance"), 0.0)
         except Exception as exc:
-            log.warn("orderbook imbalance fetch failed", symbol=symbol, market=market, error=exc)
+            log.warning("orderbook imbalance fetch failed", symbol=symbol, market=market, error=exc)
 
         set_cached(cache_key, imb, ttl=2)
         return imb
@@ -467,7 +467,7 @@ def calc(
     try:
         return _safe_float(fd.fn(ctx, symbol, as_of_iso, mk), 0.0)
     except Exception as exc:
-        log.warn("factor calc failed", factor=factor_name, symbol=symbol, as_of=as_of_iso, error=exc)
+        log.warning("factor calc failed", factor=factor_name, symbol=symbol, as_of=as_of_iso, error=exc)
         return 0.0
 
 

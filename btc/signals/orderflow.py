@@ -181,7 +181,7 @@ def fetch_recent_binance_trades(symbol: str = "BTCUSDT", limit: int = 500) -> li
         default=None,
     )
     if resp is None or not getattr(resp, "ok", False):
-        log.warn("recent trades fetch failed", symbol=sym)
+        log.warning("recent trades fetch failed", symbol=sym)
         return []
 
     try:
@@ -190,7 +190,7 @@ def fetch_recent_binance_trades(symbol: str = "BTCUSDT", limit: int = 500) -> li
         set_cached(cache_key, out, ttl=2)
         return out
     except Exception as exc:
-        log.warn("recent trades parse failed", symbol=sym, error=exc)
+        log.warning("recent trades parse failed", symbol=sym, error=exc)
         return []
 
 
@@ -221,7 +221,7 @@ async def stream_binance_orderflow(
                     analyzer.process_trade(payload)
         return analyzer.snapshot()
     except Exception as exc:
-        log.warn("websocket stream failed; fallback to recent trades", symbol=sym.upper(), error=exc)
+        log.warning("websocket stream failed; fallback to recent trades", symbol=sym.upper(), error=exc)
         recent = fetch_recent_binance_trades(sym.upper(), limit=500)
         return analyze_trade_batch(
             recent,

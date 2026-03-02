@@ -62,7 +62,7 @@ def get_btc_price(market: str = "KRW-BTC") -> Dict:
             set_cached(cache_key, tick, ttl=1)
             return tick
     except Exception as exc:
-        log.warn("upbit price fetch failed", market=market, error=exc)
+        log.warning("upbit price fetch failed", market=market, error=exc)
 
     try:
         import yfinance as yf
@@ -84,7 +84,7 @@ def get_btc_price(market: str = "KRW-BTC") -> Dict:
                 }
             )
     except Exception as exc:
-        log.warn("yfinance btc fallback failed", error=exc)
+        log.warning("yfinance btc fallback failed", error=exc)
 
     set_cached(cache_key, tick, ttl=2)
     return tick
@@ -115,7 +115,7 @@ def get_us_price(symbol: str) -> Dict:
             tick["price"] = float(hist["Close"].iloc[-1])
             tick["volume"] = float(hist["Volume"].iloc[-1] or 0.0)
     except Exception as exc:
-        log.warn("us price fetch failed", symbol=sym, error=exc)
+        log.warning("us price fetch failed", symbol=sym, error=exc)
 
     set_cached(cache_key, tick, ttl=2)
     return tick
@@ -147,7 +147,7 @@ def get_kr_price(stock_code: str, kiwoom_client=None) -> Dict:
                 set_cached(cache_key, tick, ttl=1)
                 return tick
         except Exception as exc:
-            log.warn("kiwoom price fetch failed", code=code, error=exc)
+            log.warning("kiwoom price fetch failed", code=code, error=exc)
 
     try:
         import yfinance as yf
@@ -171,7 +171,7 @@ def get_kr_price(stock_code: str, kiwoom_client=None) -> Dict:
                 }
             )
     except Exception as exc:
-        log.warn("kr yfinance fallback failed", code=code, error=exc)
+        log.warning("kr yfinance fallback failed", code=code, error=exc)
 
     set_cached(cache_key, tick, ttl=2)
     return tick

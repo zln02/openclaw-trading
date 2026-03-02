@@ -72,10 +72,10 @@ def _fetch_cryptopanic_news(currencies: str = "BTC", limit: int = 20) -> List[di
     }
     res = _request_get(CRYPTOPANIC_URL, params=params)
     if res is None:
-        log.warn("cryptopanic request failed after retries")
+        log.warning("cryptopanic request failed after retries")
         return []
     if not res.ok:
-        log.warn("cryptopanic response not ok", status=res.status_code)
+        log.warning("cryptopanic response not ok", status=res.status_code)
         return []
 
     try:

@@ -3,15 +3,20 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Callable, Optional
 
-from common.cache import get_cached, set_cached
 from common.env_loader import load_env
 from common.logger import get_logger
 from common.telegram import send_telegram
 from common.utils import safe_float as _safe_float
+
+# 파일 기반 쿨다운 디렉토리 — cron 재시작 간 TTL 유지
+_COOLDOWN_DIR = Path("/tmp/openclaw_alert_cooldown")
 
 load_env()
 log = get_logger("alert_manager")
@@ -55,14 +60,26 @@ class AlertManager:
     def __init__(self, config: Optional[AlertConfig] = None):
         self.config = config or AlertConfig()
 
-    def _seen_key(self, key: str) -> str:
-        return f"alerts:cooldown:{key}"
+    def _cooldown_file(self, key: str) -> Path:
+        safe_key = key.replace(":", "_").replace("/", "_")
+        return _COOLDOWN_DIR / f"{safe_key}.ts"
 
     def _should_emit(self, key: str) -> bool:
-        return get_cached(self._seen_key(key)) is None
+        f = self._cooldown_file(key)
+        if not f.exists():
+            return True
+        try:
+            last_ts = float(f.read_text().strip())
+            return (time.time() - last_ts) >= self.config.cooldown_seconds
+        except Exception:
+            return True
 
     def _mark_emitted(self, key: str) -> None:
-        set_cached(self._seen_key(key), True, ttl=max(int(self.config.cooldown_seconds), 1))
+        try:
+            _COOLDOWN_DIR.mkdir(parents=True, exist_ok=True)
+            self._cooldown_file(key).write_text(str(time.time()))
+        except Exception as exc:
+            log.warning("cooldown 파일 기록 실패: %s", exc)
 
     def evaluate(self, snapshot: dict) -> list[dict]:
         drawdown = _pct_to_decimal(_safe_float(snapshot.get("drawdown"), 0.0))
@@ -148,7 +165,7 @@ class AlertManager:
                 try:
                     dashboard_sink(al)
                 except Exception as exc:
-                    log.warn("dashboard sink failed", error=exc)
+                    log.warning("dashboard sink failed", error=exc)
 
             if send_telegram_alert:
                 msg = (

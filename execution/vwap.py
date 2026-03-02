@@ -135,7 +135,7 @@ def _fetch_intraday_volume_series(
                 if vols:
                     return vols
             except Exception as exc:
-                log.warn("supabase intraday volume fetch failed", symbol=code, error=exc)
+                log.warning("supabase intraday volume fetch failed", symbol=code, error=exc)
 
     try:
         import yfinance as yf
@@ -158,7 +158,7 @@ def _fetch_intraday_volume_series(
             if vols:
                 return vols
     except Exception as exc:
-        log.warn("yfinance intraday volume fetch failed", symbol=sym, error=exc)
+        log.warning("yfinance intraday volume fetch failed", symbol=sym, error=exc)
 
     if mk == "btc":
         try:
@@ -178,7 +178,7 @@ def _fetch_intraday_volume_series(
                 if vols:
                     return vols
         except Exception as exc:
-            log.warn("pyupbit intraday volume fetch failed", error=exc)
+            log.warning("pyupbit intraday volume fetch failed", error=exc)
 
     return []
 

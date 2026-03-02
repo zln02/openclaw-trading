@@ -132,7 +132,7 @@ class HistoricalDataPortal:
                 )
             return out
         except Exception as exc:
-            log.warn("supabase series load failed", symbol=symbol, error=exc)
+            log.warning("supabase series load failed", symbol=symbol, error=exc)
             return []
 
     def _load_from_yfinance(self, symbol: str) -> List[dict]:
@@ -165,7 +165,7 @@ class HistoricalDataPortal:
                 )
             return out
         except Exception as exc:
-            log.warn("yfinance series load failed", symbol=symbol, error=exc)
+            log.warning("yfinance series load failed", symbol=symbol, error=exc)
             return []
 
     def ensure_series(self, symbol: str) -> None:
