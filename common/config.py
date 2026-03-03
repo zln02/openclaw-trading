@@ -103,3 +103,16 @@ US_RISK_DEFAULTS: dict = {
 # 신호 IC 최소 임계값 (이 이하면 신호 비활성 권고)
 SIGNAL_IC_MIN: float = 0.02
 SIGNAL_IC_IR_MIN: float = 0.3
+
+# ── Alpha Researcher 파라미터 공간 (None이면 alpha_researcher.py 내 기본값 사용) ──
+ALPHA_PARAM_SPACE: dict | None = {
+    "rsi_window":        [7, 14, 21],
+    "momentum_lookback": [5, 10, 20],
+    "bb_window":         [15, 20, 30],
+    "atr_multiplier":    [1.5, 2.0, 2.5],
+}
+
+# ── Param Optimizer 자율 조정 임계값 ──────────────────────────────────────────
+PARAM_OPT_WIN_RATE_LOW: float = 0.40    # 승률 이 이하 → 방어 모드
+PARAM_OPT_SHARPE_HIGH: float = 1.5     # 샤프 이 이상 → 공격 허용
+PARAM_OPT_IR_IMPROVE_MIN: float = 0.10 # IR 개선 최소값 (+10% 이상일 때 파라미터 교체)

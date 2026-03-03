@@ -31,6 +31,80 @@ import pyupbit
 from openai import OpenAI
 from btc_news_collector import get_news_summary
 
+
+def _load_ic_weights() -> dict:
+    """Load IC-derived weights exported by quant/signal_evaluator.py.
+
+    Returns empty dict on any failure.
+    """
+    try:
+        p = Path(__file__).resolve().parents[1] / "brain" / "signal-ic" / "weights.json"
+        if not p.exists():
+            return {}
+        payload = json.loads(p.read_text(encoding="utf-8"))
+        w = payload.get("weights") or {}
+        if isinstance(w, dict):
+            return {str(k): float(v) for k, v in w.items() if v is not None}
+        return {}
+    except Exception:
+        return {}
+
+
+def _apply_weighted_score(components: dict, *, weights: dict) -> int:
+    """Apply weights to component scores.
+
+    components: dict with keys like fg,rsi,bb,vol,trend,funding,ls,oi,bonus,regime_adj
+    weights: dict from signal_evaluator (signal-name -> weight)
+    """
+    if not weights:
+        return int(components.get("total", 0) or 0)
+
+    # Map evaluator signal names -> component keys
+    map_sig_to_comp = {
+        "fg_index": "fg",
+        "rsi_signal": "rsi",
+        "funding_rate": "funding",
+        "btc_composite": "total",
+        "composite_score": "total",
+    }
+
+    # Use weights to scale the main components; keep bonus/regime adjustments as-is.
+    base_parts = ["fg", "rsi", "bb", "vol", "trend", "funding", "ls", "oi"]
+    # Default weights fallback (legacy proportions)
+    default_w = {
+        "fg": 22,
+        "rsi": 20,
+        "bb": 12,
+        "vol": 10,
+        "trend": 12,
+        "funding": 8,
+        "ls": 6,
+        "oi": 5,
+    }
+    denom = float(sum(default_w.values())) or 1.0
+    w_comp = {k: default_w[k] / denom for k in base_parts}
+
+    # Override subset based on evaluator weights (only for mapped items)
+    for sig_name, comp_key in map_sig_to_comp.items():
+        if sig_name in weights and comp_key in w_comp:
+            w_comp[comp_key] = float(weights[sig_name])
+
+    s = sum(w_comp.values())
+    if s > 0:
+        w_comp = {k: v / s for k, v in w_comp.items()}
+
+    raw = 0.0
+    for k in base_parts:
+        raw += float(components.get(k, 0) or 0) * float(w_comp.get(k, 0.0))
+
+    # Re-scale to legacy 0-95-ish range then add bonus/regime_adj
+    legacy_max = float(sum(default_w.values()))
+    raw_scaled = raw * legacy_max
+    raw_scaled += float(components.get("bonus", 0) or 0)
+    raw_scaled += float(components.get("regime_adj", 0) or 0)
+    total = max(0, min(int(round(raw_scaled)), 100))
+    return total
+
 # ── 환경변수 ──────────────────────────────────────
 UPBIT_ACCESS  = os.environ.get("UPBIT_ACCESS_KEY", "")
 UPBIT_SECRET  = os.environ.get("UPBIT_SECRET_KEY", "")
@@ -50,9 +124,13 @@ RISK = {
     "split_rsi":        [55,   45,   35  ],
     "invest_ratio":      0.30,
     "stop_loss":        -0.03,
-    "take_profit":       0.12,
-    "partial_tp_pct":    0.08,
-    "partial_tp_ratio":  0.50,
+    "take_profit":       0.15,        # 전량 익절 (기존 0.12 → 0.15, 분할 익절 추가로 상향)
+    "partial_tp_pct":    0.08,        # 1단계 익절 발동 (8%)
+    "partial_tp_ratio":  0.50,        # 1단계 매도 비율 (50%)
+    "partial_tp_2_pct":  0.12,        # 2단계 익절 발동 (12%)
+    "partial_tp_2_ratio": 0.50,       # 2단계 매도 비율 (남은 물량의 50%)
+    "atr_multiplier":    2.0,         # ATR 손절 배수 (진입가 - ATR * 2.0)
+    "atr_period":        14,          # ATR 계산 기간
     "trailing_stop":     0.02,
     "trailing_activate": 0.015,
     "trailing_adaptive": True,
@@ -85,7 +163,7 @@ def get_market_data():
 def calculate_indicators(df) -> dict:
     from ta.trend import EMAIndicator, MACD
     from ta.momentum import RSIIndicator
-    from ta.volatility import BollingerBands
+    from ta.volatility import BollingerBands, AverageTrueRange
 
     close = df["close"]
     ema20 = EMAIndicator(close, window=20).ema_indicator().iloc[-1]
@@ -94,6 +172,7 @@ def calculate_indicators(df) -> dict:
     macd_obj = MACD(close)
     macd  = macd_obj.macd_diff().iloc[-1]
     bb    = BollingerBands(close, window=20)
+    atr   = AverageTrueRange(df["high"], df["low"], close, window=14).average_true_range().iloc[-1]
 
     return {
         "price":    df["close"].iloc[-1],
@@ -104,6 +183,7 @@ def calculate_indicators(df) -> dict:
         "bb_upper": round(bb.bollinger_hband().iloc[-1], 0),
         "bb_lower": round(bb.bollinger_lband().iloc[-1], 0),
         "volume":   round(df["volume"].iloc[-1], 4),
+        "atr":      round(atr, 0),
     }
 
 # ── 거래량 분석 ───────────────────────────────────
@@ -380,10 +460,10 @@ def calc_btc_composite(fg_value, rsi_d, bb_pct, vol_ratio_d, trend, ret_7d=0,
     regime_adj = _regime_bonus_map.get(str(regime).upper(), 0)
 
     raw = fg_sc + rsi_sc + bb_sc + vol_sc + tr_sc + funding_sc + ls_sc + oi_sc + bonus + regime_adj
-    total = max(0, min(raw, 100))
+    legacy_total = max(0, min(raw, 100))
 
-    return {
-        "total": total,
+    components = {
+        "total": legacy_total,
         "fg": fg_sc, "rsi": rsi_sc, "bb": bb_sc,
         "vol": vol_sc, "trend": tr_sc,
         "funding": funding_sc, "ls": ls_sc, "oi": oi_sc,
@@ -392,6 +472,13 @@ def calc_btc_composite(fg_value, rsi_d, bb_pct, vol_ratio_d, trend, ret_7d=0,
         "regime": regime,
         "raw": raw,
     }
+
+    if RISK.get("dynamic_weights"):
+        weights = _load_ic_weights()
+        if weights:
+            components["total"] = _apply_weighted_score(components, weights=weights)
+
+    return components
 
 
 # ── 포지션 관리 ───────────────────────────────────
@@ -423,6 +510,60 @@ def open_position(entry_price, quantity, entry_krw) -> bool:
     except Exception as e:
         log.error(f"포지션 오픈 실패: {e}")
         return False
+
+
+def open_position_with_context(
+    entry_price,
+    quantity,
+    entry_krw,
+    *,
+    fg_value=None,
+    rsi_d=None,
+    bb_pct=None,
+    vol_ratio_d=None,
+    trend=None,
+    funding_rate=None,
+    ls_ratio=None,
+    oi_ratio=None,
+    kimchi=None,
+    composite_score=None,
+    market_regime=None,
+    atr_stop_price=None,
+) -> bool:
+    """Open position and persist signal context for later IC evaluation.
+
+    This keeps backward compatibility with existing Supabase schemas:
+    if the additional columns do not exist, it falls back to the minimal insert.
+    """
+    base_row = {
+        "entry_price": entry_price,
+        "entry_time": datetime.now().isoformat(),
+        "quantity": quantity,
+        "entry_krw": entry_krw,
+        "status": "OPEN",
+        "highest_price": entry_price,
+    }
+    ctx_row = {
+        **base_row,
+        "fg_value": fg_value,
+        "rsi_d": rsi_d,
+        "bb_pct": bb_pct,
+        "vol_ratio_d": vol_ratio_d,
+        "trend": trend,
+        "funding_rate": funding_rate,
+        "ls_ratio": ls_ratio,
+        "oi_ratio": oi_ratio,
+        "kimchi": kimchi,
+        "composite_score": composite_score,
+        "market_regime": market_regime,
+        "atr_stop_price": atr_stop_price,
+    }
+
+    try:
+        supabase.table("btc_position").insert(ctx_row).execute()
+        return True
+    except Exception:
+        return open_position(entry_price, quantity, entry_krw)
 
 def close_all_positions(exit_price):
     try:
@@ -537,7 +678,23 @@ def get_split_stage(composite_total: float) -> int:
     return 1
 
 # ── 주문 실행 ─────────────────────────────────────
-def execute_trade(signal, indicators, fg=None, volume=None, comp=None) -> dict:
+def execute_trade(
+    signal,
+    indicators,
+    fg=None,
+    volume=None,
+    comp=None,
+    *,
+    funding=None,
+    oi=None,
+    ls_ratio=None,
+    kimchi=None,
+    market_regime=None,
+    rsi_d=None,
+    bb_pct=None,
+    vol_ratio_d=None,
+    trend=None,
+) -> dict:
 
     # ── 코드 레벨 안전 필터 (복합 스코어 기반) ──
     if signal["action"] == "BUY":
@@ -600,52 +757,86 @@ def execute_trade(signal, indicators, fg=None, volume=None, comp=None) -> dict:
                 )
                 return {"result": "TRAILING_STOP"}
 
-        # 손절
+        # ATR 동적 손절 (진입 시 계산된 ATR 기반 손절가)
+        atr_stop_price = float(pos.get("atr_stop_price") or 0)
+        if atr_stop_price and price < atr_stop_price:
+            if not DRY_RUN:
+                upbit.sell_market_order("KRW-BTC", btc_balance * 0.9995)
+                close_all_positions(price)
+            send_telegram(
+                f"🛑 <b>ATR 동적 손절</b>\n"
+                f"진입가: {entry_price:,}원\n"
+                f"ATR 손절가: {atr_stop_price:,.0f}원 → 현재가: {price:,}원\n"
+                f"손실(비용 포함): {net_change*100:.2f}%"
+            )
+            return {"result": "ATR_STOP_LOSS"}
+
+        # 고정 % 손절 (fallback)
         if net_change <= RISK["stop_loss"]:
             if not DRY_RUN:
                 upbit.sell_market_order("KRW-BTC", btc_balance * 0.9995)
                 close_all_positions(price)
             send_telegram(
                 f"🛑 <b>손절 실행</b>\n"
-                f"진입가: {pos['entry_price']:,}원\n"
+                f"진입가: {entry_price:,}원\n"
                 f"현재가: {price:,}원\n"
                 f"손실(비용 포함): {net_change*100:.2f}%"
             )
             return {"result": "STOP_LOSS"}
 
-        # 부분 익절: 수익 8% 이상 시 50% 매도, 나머지는 트레일링으로 보호
-        partial_tp = RISK.get("partial_tp_pct", 0.08)
-        partial_ratio = RISK.get("partial_tp_ratio", 0.50)
-        if net_change >= partial_tp and btc_balance > 0.0001:
-            partial_already = pos.get("partial_sold", False)
-            if not partial_already:
-                sell_qty = btc_balance * partial_ratio * 0.9995
-                if not DRY_RUN:
-                    upbit.sell_market_order("KRW-BTC", sell_qty)
-                    try:
-                        supabase.table("btc_position").update(
-                            {"partial_sold": True}
-                        ).eq("id", pos["id"]).execute()
-                    except Exception:
-                        pass
-                send_telegram(
-                    f"🟡 <b>부분 익절 ({int(partial_ratio*100)}%)</b>\n"
-                    f"진입가: {pos['entry_price']:,}원\n"
-                    f"현재가: {price:,}원\n"
-                    f"수익: +{net_change*100:.2f}% | 매도량: {sell_qty:.6f} BTC\n"
-                    f"잔여분은 트레일링 스탑으로 보호"
-                )
-                return {"result": "PARTIAL_TP"}
+        # ── 다단계 분할 익절 ──
+        partial_1_done = pos.get("partial_1_sold") or pos.get("partial_sold", False)
+        partial_2_done = pos.get("partial_2_sold", False)
 
-        # 최대 익절 (전량)
+        # 1단계: 8% → 보유량의 50% 매도
+        if net_change >= RISK.get("partial_tp_pct", 0.08) and not partial_1_done and btc_balance > 0.0001:
+            ratio = RISK.get("partial_tp_ratio", 0.50)
+            sell_qty = btc_balance * ratio * 0.9995
+            if not DRY_RUN:
+                upbit.sell_market_order("KRW-BTC", sell_qty)
+                try:
+                    supabase.table("btc_position").update(
+                        {"partial_1_sold": True, "partial_sold": True}
+                    ).eq("id", pos["id"]).execute()
+                except Exception:
+                    pass
+            send_telegram(
+                f"🟡 <b>분할 익절 1단계 ({int(ratio*100)}%)</b>\n"
+                f"진입가: {entry_price:,}원 | 현재가: {price:,}원\n"
+                f"수익: +{net_change*100:.2f}% | 매도량: {sell_qty:.6f} BTC\n"
+                f"잔여분 트레일링 스탑 + 2단계 익절 대기"
+            )
+            return {"result": "PARTIAL_TP_1"}
+
+        # 2단계: 12% → 남은 물량의 50% 추가 매도
+        if (net_change >= RISK.get("partial_tp_2_pct", 0.12)
+                and partial_1_done and not partial_2_done and btc_balance > 0.0001):
+            ratio2 = RISK.get("partial_tp_2_ratio", 0.50)
+            sell_qty = btc_balance * ratio2 * 0.9995
+            if not DRY_RUN:
+                upbit.sell_market_order("KRW-BTC", sell_qty)
+                try:
+                    supabase.table("btc_position").update(
+                        {"partial_2_sold": True}
+                    ).eq("id", pos["id"]).execute()
+                except Exception:
+                    pass
+            send_telegram(
+                f"🟢 <b>분할 익절 2단계 ({int(ratio2*100)}%)</b>\n"
+                f"진입가: {entry_price:,}원 | 현재가: {price:,}원\n"
+                f"수익: +{net_change*100:.2f}% | 매도량: {sell_qty:.6f} BTC\n"
+                f"잔여분 트레일링 스탑으로 최종 보호"
+            )
+            return {"result": "PARTIAL_TP_2"}
+
+        # 최대 익절 전량 (15%)
         if net_change >= RISK["take_profit"]:
             if not DRY_RUN:
                 upbit.sell_market_order("KRW-BTC", btc_balance * 0.9995)
                 close_all_positions(price)
             send_telegram(
-                f"✅ <b>익절 실행</b>\n"
-                f"진입가: {pos['entry_price']:,}원\n"
-                f"현재가: {price:,}원\n"
+                f"✅ <b>전량 익절</b>\n"
+                f"진입가: {entry_price:,}원 | 현재가: {price:,}원\n"
                 f"수익(비용 포함): +{net_change*100:.2f}%"
             )
             return {"result": "TAKE_PROFIT"}
@@ -662,7 +853,26 @@ def execute_trade(signal, indicators, fg=None, volume=None, comp=None) -> dict:
         if not DRY_RUN:
             result = upbit.buy_market_order("KRW-BTC", invest_krw)
             qty    = float(result.get("executed_volume", 0)) or (invest_krw / price)
-            ok = open_position(price, qty, invest_krw)
+            # ATR 기반 손절가 계산 (진입 시점 ATR * 배수만큼 하락 시 손절)
+            atr_val = indicators.get("atr", 0)
+            atr_stop = round(price - atr_val * RISK["atr_multiplier"]) if atr_val else None
+            ok = open_position_with_context(
+                price,
+                qty,
+                invest_krw,
+                fg_value=(fg or {}).get("value") if fg else None,
+                rsi_d=rsi_d,
+                bb_pct=bb_pct,
+                vol_ratio_d=vol_ratio_d,
+                trend=trend,
+                funding_rate=(funding or {}).get("rate") if funding else None,
+                ls_ratio=(ls_ratio or {}).get("ls_ratio") if ls_ratio else None,
+                oi_ratio=(oi or {}).get("ratio") if oi else None,
+                kimchi=kimchi,
+                composite_score=(comp or {}).get("total") if isinstance(comp, dict) else None,
+                market_regime=market_regime,
+                atr_stop_price=atr_stop,
+            )
             if not ok:
                 log.error("포지션 기록 실패 → 즉시 되팔기")
                 try:
@@ -675,13 +885,18 @@ def execute_trade(signal, indicators, fg=None, volume=None, comp=None) -> dict:
             log.info(f"[DRY_RUN] {stage}차 매수 — {invest_krw:,.0f}원")
 
         qty_est = qty if not DRY_RUN else invest_krw / price
-        sl_price = int(price * (1 + RISK["stop_loss"]))
-        tp_price = int(price * (1 + RISK["take_profit"]))
+        atr_val_est = indicators.get("atr", 0)
+        atr_stop_est = round(price - atr_val_est * RISK["atr_multiplier"]) if atr_val_est else None
+        sl_price = atr_stop_est or int(price * (1 + RISK["stop_loss"]))
+        tp1_price = int(price * (1 + RISK.get("partial_tp_pct", 0.08)))
+        tp2_price = int(price * (1 + RISK.get("partial_tp_2_pct", 0.12)))
+        tp_price  = int(price * (1 + RISK["take_profit"]))
         comp_total = comp["total"] if comp else 0
         btc_val = int(price * qty_est)
         krw_remain = max(0, int(krw_balance - invest_krw))
         total_asset = krw_remain + btc_val
         btc_weight = round(btc_val / max(total_asset, 1) * 100)
+        atr_line = f"ATR손절: ₩{atr_stop_est:,} (ATR×{RISK['atr_multiplier']})\n" if atr_stop_est else ""
         send_telegram(
             f"📈 <b>BTC 매수 체결</b>\n"
             f"━━━━━━━━━━━━━━\n"
@@ -689,8 +904,8 @@ def execute_trade(signal, indicators, fg=None, volume=None, comp=None) -> dict:
             f"복합스코어: {comp_total}/100\n"
             f"진입근거: {signal['reason']}\n"
             f"━━━━━━━━━━━━━━\n"
-            f"손절가: ₩{sl_price:,} ({RISK['stop_loss']*100:.0f}%)\n"
-            f"익절가: ₩{tp_price:,} (+{RISK['take_profit']*100:.0f}%)\n"
+            f"{atr_line}"
+            f"익절1: ₩{tp1_price:,} (+8%) / 익절2: ₩{tp2_price:,} (+12%) / 전량: ₩{tp_price:,} (+15%)\n"
             f"━━━━━━━━━━━━━━\n"
             f"총자산: ₩{total_asset:,}\n"
             f"BTC 비중: {btc_weight}%",
@@ -729,9 +944,9 @@ def execute_trade(signal, indicators, fg=None, volume=None, comp=None) -> dict:
     return {"result": "HOLD"}
 
 # ── Supabase 로그 ─────────────────────────────────
-def save_log(indicators, signal, result):
+def save_log(indicators, signal, result, *, fg=None, volume=None, comp=None, funding=None, oi=None, ls_ratio=None, kimchi=None, market_regime=None):
     try:
-        supabase.table("btc_trades").insert({
+        row = {
             "timestamp":          datetime.now().isoformat(),
             "action":             signal.get("action", "HOLD"),
             "price":              indicators["price"],
@@ -741,7 +956,28 @@ def save_log(indicators, signal, result):
             "reason":             signal.get("reason", ""),
             "indicator_snapshot": json.dumps(indicators),
             "order_raw":          json.dumps(result),
-        }).execute()
+            # --- Optional signal context (safe if schema supports it) ---
+            "fg_value":           (fg or {}).get("value") if fg else None,
+            "bb_pct":             (comp or {}).get("bb_pct") if isinstance(comp, dict) else None,
+            "vol_ratio_5m":       (volume or {}).get("ratio") if volume else None,
+            "trend":              (comp or {}).get("trend") if isinstance(comp, dict) else None,
+            "funding_rate":       (funding or {}).get("rate") if funding else None,
+            "oi_ratio":           (oi or {}).get("ratio") if oi else None,
+            "ls_ratio":           (ls_ratio or {}).get("ls_ratio") if ls_ratio else None,
+            "kimchi":             kimchi,
+            "market_regime":      market_regime,
+            "composite_score":    (comp or {}).get("total") if isinstance(comp, dict) else None,
+        }
+
+        try:
+            supabase.table("btc_trades").insert(row).execute()
+        except Exception:
+            # Fallback to minimal schema
+            minimal = {k: row[k] for k in [
+                "timestamp", "action", "price", "rsi", "macd",
+                "confidence", "reason", "indicator_snapshot", "order_raw",
+            ]}
+            supabase.table("btc_trades").insert(minimal).execute()
         log.debug("Supabase 저장 완료")
     except Exception as e:
         log.error(f"Supabase 저장 실패: {e}")
@@ -811,6 +1047,38 @@ def run_trading_cycle():
         funding=funding, oi=oi, ls_ratio=ls_ratio, kimchi=kimchi,
         regime=market_regime,
     )
+
+    # Backfill context columns for existing OPEN positions (schema may have been added later)
+    try:
+        if supabase and pos and pos.get("id"):
+            patch = {}
+            if pos.get("composite_score") is None:
+                patch["composite_score"] = (comp or {}).get("total") if isinstance(comp, dict) else None
+            if pos.get("fg_value") is None:
+                patch["fg_value"] = fg_value
+            if pos.get("funding_rate") is None:
+                patch["funding_rate"] = (funding or {}).get("rate") if funding else None
+            if pos.get("rsi_d") is None:
+                patch["rsi_d"] = rsi_d
+            if pos.get("bb_pct") is None:
+                patch["bb_pct"] = momentum.get("bb_pct")
+            if pos.get("vol_ratio_d") is None:
+                patch["vol_ratio_d"] = momentum.get("vol_ratio_d")
+            if pos.get("trend") is None:
+                patch["trend"] = htf.get("trend")
+            if pos.get("ls_ratio") is None:
+                patch["ls_ratio"] = (ls_ratio or {}).get("ls_ratio") if ls_ratio else None
+            if pos.get("oi_ratio") is None:
+                patch["oi_ratio"] = (oi or {}).get("ratio") if oi else None
+            if pos.get("kimchi") is None:
+                patch["kimchi"] = kimchi
+            if pos.get("market_regime") is None:
+                patch["market_regime"] = market_regime
+
+            if patch:
+                supabase.table("btc_position").update(patch).eq("id", pos["id"]).execute()
+    except Exception:
+        pass
 
     # 일일 리포트용 상태 캐시 저장
     try:
@@ -925,11 +1193,37 @@ def run_trading_cycle():
         signal["confidence"] = max(signal.get("confidence", 0), 72)
         signal["reason"] += f" [김치 저평가 {kimchi:+.2f}%]"
 
-    result = execute_trade(signal, indicators, fg, volume, comp)
-
+    result = execute_trade(
+        signal,
+        indicators,
+        fg,
+        volume,
+        comp,
+        funding=funding,
+        oi=oi,
+        ls_ratio=ls_ratio,
+        kimchi=kimchi,
+        market_regime=market_regime,
+        rsi_d=rsi_d,
+        bb_pct=momentum.get("bb_pct"),
+        vol_ratio_d=momentum.get("vol_ratio_d"),
+        trend=htf.get("trend"),
+    )
+    save_log(
+        indicators,
+        signal,
+        result,
+        fg=fg,
+        volume=volume,
+        comp={**(comp or {}), "bb_pct": momentum.get("bb_pct"), "trend": htf.get("trend")},
+        funding=funding,
+        oi=oi,
+        ls_ratio=ls_ratio,
+        kimchi=kimchi,
+        market_regime=market_regime,
+    )
     log.trade(f"신호: {signal['action']} (신뢰도: {signal['confidence']}%) → {result['result']}")
 
-    save_log(indicators, signal, result)
     return result
 
 def build_hourly_summary() -> str:

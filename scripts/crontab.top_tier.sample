@@ -46,3 +46,16 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 # 헬스체크
 */5 * * * * /home/wlsdud5035/.openclaw/workspace/scripts/check_health.sh >> /home/wlsdud5035/.openclaw/logs/health_check.log 2>&1
+
+# --- Level 4/5 Research Loop (매주 자동) ---
+# 토요일 22:00 — Alpha Researcher (파라미터 그리드서치 + walk-forward IC)
+0 22 * * 6 /home/wlsdud5035/.openclaw/workspace/scripts/run_alpha_researcher.sh >> /home/wlsdud5035/.openclaw/logs/alpha_researcher.log 2>&1
+
+# 일요일 23:00 — Signal Evaluator (IC/IR 계산 + weights.json 업데이트)
+0 23 * * 0 /home/wlsdud5035/.openclaw/workspace/scripts/run_signal_evaluator.sh >> /home/wlsdud5035/.openclaw/logs/signal_evaluator.log 2>&1
+
+# 일요일 23:30 — Param Optimizer (attribution + 자율 파라미터 조정 + 텔레그램 알림)
+30 23 * * 0 /home/wlsdud5035/.openclaw/workspace/scripts/run_param_optimizer.sh >> /home/wlsdud5035/.openclaw/logs/param_optimizer.log 2>&1
+
+# KR ML 재학습 체크 (매일 08:30 — 50회 체결 이상 시 자동 retrain)
+30 8 * * 1-5 /home/wlsdud5035/.openclaw/workspace/.venv/bin/python /home/wlsdud5035/.openclaw/workspace/stocks/ml_model.py retrain 50 >> /home/wlsdud5035/.openclaw/logs/ml_retrain.log 2>&1

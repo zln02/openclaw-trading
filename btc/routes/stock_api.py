@@ -660,33 +660,91 @@ async def get_stocks_logs(source: str = Query("all")):
 
 @router.get("/api/kr/composite")
 async def get_kr_composite():
-    """KR 종합 점수"""
+    """KR 종합 점수 — 최근 7일 trade_executions 기반"""
     try:
-        # 기본 점수 구조
         composite = {
-            "total": 45,
-            "kospi": 50,
-            "kosdaq": 40,
-            "volume": 45,
+            "total": 0,
+            "kospi": 0,
+            "kosdaq": 0,
+            "volume": 0,
             "trend": "NEUTRAL",
-            "sentiment": 48
+            "sentiment": 0,
+            "n_trades": 0,
+            "win_rate": None,
+            "avg_pnl": None,
         }
-        
-        # 실제 데이터가 있다면 업데이트
-        if supabase:
-            try:
-                # 최신 시장 데이터 조회
-                res = supabase.table("top50_stocks").select("*").order("created_at", desc=True).limit(50).execute()
-                if res.data:
-                    avg_score = sum(item.get("score", 50) for item in res.data) / len(res.data)
-                    composite["total"] = int(avg_score)
-            except Exception:
-                pass
-        
+
+        if not supabase:
+            return composite
+
+        # 최근 7일 SELL(체결) 거래 기반 성과 계산
+        cutoff = (datetime.now() - timedelta(days=7)).isoformat()
+        try:
+            res = (
+                supabase.table("trade_executions")
+                .select("price,entry_price")
+                .eq("trade_type", "SELL")
+                .eq("result", "CLOSED")
+                .gte("created_at", cutoff)
+                .execute()
+            )
+            rows = res.data or []
+        except Exception:
+            rows = []
+
+        pnls = []
+        for r in rows:
+            entry = float(r.get("entry_price") or 0)
+            sell = float(r.get("price") or 0)
+            if entry > 0 and sell > 0:
+                pnls.append((sell - entry) / entry * 100)
+
+        n = len(pnls)
+        if n > 0:
+            wins = sum(1 for p in pnls if p > 0)
+            win_rate = round(wins / n * 100, 1)
+            avg_pnl = round(sum(pnls) / n, 2)
+            total = min(100, max(0, int(50 + (win_rate - 50) * 0.8)))
+            trend = "UP" if avg_pnl > 0.5 else "DOWN" if avg_pnl < -0.5 else "NEUTRAL"
+            composite.update({
+                "total": total,
+                "n_trades": n,
+                "win_rate": win_rate,
+                "avg_pnl": avg_pnl,
+                "trend": trend,
+                "sentiment": int(win_rate),
+            })
+
+        # daily_ohlcv 에서 KOSPI/KOSDAQ proxy (005930=삼성, 000660=SK하이닉스)
+        try:
+            ohlcv = (
+                supabase.table("daily_ohlcv")
+                .select("stock_code,date,close_price")
+                .in_("stock_code", ["005930", "000660"])
+                .order("date", desc=True)
+                .limit(10)
+                .execute()
+            ).data or []
+            by_code: dict = {}
+            for row in ohlcv:
+                sc = row["stock_code"]
+                if sc not in by_code:
+                    by_code[sc] = []
+                by_code[sc].append(float(row["close_price"] or 0))
+            for sc, closes in by_code.items():
+                if len(closes) >= 2 and closes[1] > 0:
+                    ret = (closes[0] - closes[1]) / closes[1] * 100
+                    if sc == "005930":
+                        composite["kospi"] = round(ret, 2)
+                    else:
+                        composite["kosdaq"] = round(ret, 2)
+        except Exception:
+            pass
+
         return composite
     except Exception as e:
         log.error(f"KR composite error: {e}")
-        return {"total": 45, "kospi": 50, "kosdaq": 40, "volume": 45, "trend": "NEUTRAL", "sentiment": 48}
+        return {"total": 0, "kospi": 0, "kosdaq": 0, "volume": 0, "trend": "NEUTRAL", "sentiment": 0}
 
 
 @router.get("/api/kr/portfolio")
@@ -695,52 +753,116 @@ async def get_kr_portfolio():
     try:
         if not supabase:
             return {"open_positions": [], "closed_positions": [], "summary": {}}
-        
-        # KR 거래 내역 조회
-        res = (
+
+        # 보유 중인 포지션: trade_type=BUY, result=OPEN
+        open_res = (
             supabase.table("trade_executions")
-            .select("*")
-            .eq("market", "kr")
-            .order("timestamp", desc=True)
-            .limit(100)
+            .select("trade_id,stock_code,stock_name,quantity,price,entry_price,created_at,reason,strategy")
+            .eq("trade_type", "BUY")
+            .eq("result", "OPEN")
+            .order("created_at", desc=True)
+            .limit(50)
             .execute()
         )
-        
-        if not res.data:
-            return {"open_positions": [], "closed_positions": [], "summary": {}}
-        
-        # 포지션 데이터 변환
-        positions = []
-        for trade in res.data:
-            positions.append({
-                "id": trade.get("id"),
-                "symbol": trade.get("symbol", ""),
-                "action": trade.get("action", ""),
-                "price": trade.get("price", 0),
-                "quantity": trade.get("quantity", 0),
-                "timestamp": trade.get("timestamp", ""),
-                "pnl": trade.get("pnl", 0),
-                "pnl_pct": trade.get("pnl_pct", 0)
+        # 최근 30건 체결 내역: trade_type=SELL, result=CLOSED
+        closed_res = (
+            supabase.table("trade_executions")
+            .select("trade_id,stock_code,stock_name,quantity,price,entry_price,created_at,reason")
+            .eq("trade_type", "SELL")
+            .eq("result", "CLOSED")
+            .order("created_at", desc=True)
+            .limit(30)
+            .execute()
+        )
+
+        open_rows = open_res.data or []
+        closed_rows = closed_res.data or []
+
+        # 최신 가격 (daily_ohlcv) 조회해서 미실현 PnL 계산
+        codes = list({r["stock_code"] for r in open_rows if r.get("stock_code")})
+        latest_prices: dict = {}
+        if codes:
+            try:
+                price_res = (
+                    supabase.table("daily_ohlcv")
+                    .select("stock_code,close_price,date")
+                    .in_("stock_code", codes)
+                    .order("date", desc=True)
+                    .limit(len(codes) * 3)
+                    .execute()
+                )
+                for row in (price_res.data or []):
+                    sc = row["stock_code"]
+                    if sc not in latest_prices:
+                        latest_prices[sc] = float(row["close_price"] or 0)
+            except Exception:
+                pass
+
+        open_positions = []
+        total_invested = 0.0
+        total_eval = 0.0
+        unrealized_pnl = 0.0
+        for r in open_rows:
+            entry = float(r.get("price") or 0)
+            qty = float(r.get("quantity") or 0)
+            cur = latest_prices.get(r["stock_code"], entry)
+            pnl_pct = ((cur - entry) / entry * 100) if entry > 0 else 0.0
+            invested = entry * qty
+            total_invested += invested
+            total_eval += cur * qty
+            unrealized_pnl += (cur - entry) * qty
+            open_positions.append({
+                "id": r.get("trade_id"),
+                "stock_code": r.get("stock_code", ""),
+                "stock_name": r.get("stock_name", ""),
+                "quantity": qty,
+                "price": entry,
+                "current_price": cur,
+                "pnl_pct": round(pnl_pct, 2),
+                "pnl_krw": round((cur - entry) * qty, 0),
+                "created_at": r.get("created_at", ""),
+                "ml_score": r.get("ml_score"),
+                "composite_score": r.get("composite_score"),
+                "reason": r.get("reason", ""),
+                "strategy": r.get("strategy", ""),
             })
-        
-        open_positions = [p for p in positions if p.get("action") == "BUY"]
-        closed_positions = [p for p in positions if p.get("action") == "SELL"]
-        
-        total_invested = sum(p.get("price", 0) * p.get("quantity", 0) for p in open_positions)
+
+        closed_positions = []
+        realized_pnl = 0.0
+        for r in closed_rows:
+            entry = float(r.get("entry_price") or 0)
+            sell = float(r.get("price") or 0)
+            qty = float(r.get("quantity") or 0)
+            pnl_pct = ((sell - entry) / entry * 100) if entry > 0 else 0.0
+            pnl_krw = (sell - entry) * qty
+            realized_pnl += pnl_krw
+            closed_positions.append({
+                "id": r.get("trade_id"),
+                "stock_code": r.get("stock_code", ""),
+                "stock_name": r.get("stock_name", ""),
+                "quantity": qty,
+                "price": sell,
+                "entry_price": entry,
+                "pnl_pct": round(pnl_pct, 2),
+                "pnl_krw": round(pnl_krw, 0),
+                "created_at": r.get("created_at", ""),
+                "reason": r.get("reason", ""),
+            })
+
         summary = {
             "krw_balance": None,
             "open_count": len(open_positions),
             "closed_count": len(closed_positions),
-            "total_invested": total_invested,
-            "total_eval": total_invested,
-            "unrealized_pnl": 0,
-            "realized_pnl": sum(p.get("pnl", 0) for p in closed_positions),
+            "total_invested": round(total_invested, 0),
+            "total_eval": round(total_eval, 0),
+            "unrealized_pnl": round(unrealized_pnl, 0),
+            "realized_pnl": round(realized_pnl, 0),
         }
-        
+
         return {
             "open_positions": open_positions,
             "closed_positions": closed_positions,
-            "summary": summary
+            "summary": summary,
         }
     except Exception as e:
         log.error(f"KR portfolio error: {e}")
@@ -773,20 +895,62 @@ async def get_kr_system():
 
 @router.get("/api/kr/top")
 async def get_kr_top():
-    """KR TOP 종목"""
+    """KR TOP 종목 — daily_ohlcv 기반 모멘텀 스코어"""
     try:
         if not supabase:
             return []
-        
-        res = (
+
+        # top50_stocks 목록 (stock_code, stock_name)
+        stock_res = (
             supabase.table("top50_stocks")
-            .select("*")
-            .order("score", desc=True)
-            .limit(30)
+            .select("stock_code,stock_name,industry,market_cap")
+            .limit(50)
             .execute()
         )
-        
-        return res.data or []
+        stocks = {r["stock_code"]: r for r in (stock_res.data or [])}
+        if not stocks:
+            return []
+
+        # 최근 25일 OHLCV (ret_5d, ret_20d 계산용)
+        ohlcv_res = (
+            supabase.table("daily_ohlcv")
+            .select("stock_code,date,close_price,volume")
+            .in_("stock_code", list(stocks.keys()))
+            .order("date", desc=True)
+            .limit(len(stocks) * 25)
+            .execute()
+        )
+        ohlcv_rows = ohlcv_res.data or []
+
+        # 종목별로 날짜순 정렬 (desc → 최신이 앞)
+        by_code: dict = defaultdict(list)
+        for row in ohlcv_rows:
+            by_code[row["stock_code"]].append(float(row["close_price"] or 0))
+
+        result = []
+        for code, info in stocks.items():
+            closes = by_code.get(code, [])
+            if len(closes) < 2:
+                continue
+            cur = closes[0]
+            ret_5d = round((cur - closes[min(5, len(closes)-1)]) / closes[min(5, len(closes)-1)] * 100, 2) if len(closes) > 5 and closes[5] > 0 else 0.0
+            ret_20d = round((cur - closes[min(20, len(closes)-1)]) / closes[min(20, len(closes)-1)] * 100, 2) if len(closes) > 20 and closes[20] > 0 else 0.0
+            # 모멘텀 스코어: ret_5d × 0.6 + ret_20d × 0.4 (범위 −10~+10 → 0~100)
+            raw_score = ret_5d * 0.6 + ret_20d * 0.4
+            score = min(100, max(0, int(50 + raw_score * 3)))
+            result.append({
+                "stock_code": code,
+                "stock_name": info.get("stock_name", code),
+                "industry": info.get("industry", ""),
+                "market_cap": info.get("market_cap"),
+                "score": score,
+                "ret_5d": ret_5d,
+                "ret_20d": ret_20d,
+                "current_price": round(cur, 0),
+            })
+
+        result.sort(key=lambda x: x["score"], reverse=True)
+        return result[:20]
     except Exception as e:
         log.error(f"KR top error: {e}")
         return []
@@ -795,25 +959,39 @@ async def get_kr_top():
 @router.get("/api/kr/trades")
 async def get_kr_trades(
     limit: int = Query(default=50, le=500),
-    action: str = Query(default=None, regex="^(BUY|SELL|HOLD)$"),
-    hours: int = Query(default=None, ge=1, le=168)
+    action: str = Query(default=None, pattern="^(BUY|SELL)$"),
+    hours: int = Query(default=None, ge=1, le=168),
 ):
     """KR 거래 내역 (필터링 지원)"""
     try:
         if not supabase:
             return []
-        
-        query = supabase.table("trade_executions").select("*").eq("market", "kr")
-        
+
+        query = supabase.table("trade_executions").select(
+            "trade_id,trade_type,stock_code,stock_name,quantity,price,entry_price,"
+            "created_at,result,reason,strategy"
+        )
+
         if action:
-            query = query.eq("action", action)
-        
+            query = query.eq("trade_type", action)
+
         if hours:
             cutoff = (datetime.now() - timedelta(hours=hours)).isoformat()
-            query = query.gte("timestamp", cutoff)
-        
-        res = query.order("timestamp", desc=True).limit(limit).execute()
-        return res.data or []
+            query = query.gte("created_at", cutoff)
+
+        res = query.order("created_at", desc=True).limit(limit).execute()
+        rows = res.data or []
+
+        # pnl_pct 계산 (SELL 레코드만)
+        result = []
+        for r in rows:
+            entry = float(r.get("entry_price") or 0)
+            sell = float(r.get("price") or 0)
+            pnl_pct = None
+            if r.get("trade_type") == "SELL" and entry > 0 and sell > 0:
+                pnl_pct = round((sell - entry) / entry * 100, 2)
+            result.append({**r, "pnl_pct": pnl_pct})
+        return result
     except Exception as e:
         log.error(f"KR trades error: {e}")
         return []
@@ -821,50 +999,8 @@ async def get_kr_trades(
 
 @router.get("/api/kr/positions")
 async def get_kr_positions():
-    try:
-        if not supabase:
-            return {"open_positions": [], "closed_positions": [], "summary": {}}
-        
-        # Get KR stock positions
-        today = datetime.now().date().isoformat()
-        res = (
-            supabase.table("trade_executions")
-            .select("*")
-            .eq("market", "kr")
-            .order("timestamp", desc=True)
-            .limit(100)
-            .execute()
-        )
-        
-        if not res.data:
-            return {"open_positions": [], "closed_positions": [], "summary": {}}
-            
-        # Transform data similar to BTC portfolio
-        positions = []
-        for trade in res.data:
-            positions.append({
-                "id": trade.get("id"),
-                "symbol": trade.get("symbol"),
-                "action": trade.get("action"),
-                "price": trade.get("price"),
-                "quantity": trade.get("quantity"),
-                "timestamp": trade.get("timestamp"),
-                "pnl": trade.get("pnl"),
-                "pnl_pct": trade.get("pnl_pct")
-            })
-        
-        return {
-            "open_positions": [p for p in positions if p.get("action") in ["BUY"]],
-            "closed_positions": [p for p in positions if p.get("action") in ["SELL"]],
-            "summary": {
-                "total_trades": len(positions),
-                "open_count": len([p for p in positions if p.get("action") in ["BUY"]]),
-                "closed_count": len([p for p in positions if p.get("action") in ["SELL"]])
-            }
-        }
-    except Exception as e:
-        log.error(f"KR positions error: {e}")
-        return {"open_positions": [], "closed_positions": [], "summary": {}}
+    """/api/kr/portfolio 와 동일한 데이터 (하위 호환)"""
+    return await get_kr_portfolio()
 
 
 @router.get("/api/stocks/trades")

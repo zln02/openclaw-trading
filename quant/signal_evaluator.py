@@ -135,18 +135,29 @@ class SignalEvaluator:
             return [], []
 
         try:
-            rows = (
+            # btc_position uses entry_price/entry_time, while trade tables use price/created_at.
+            if table == "btc_position":
+                select_cols = f"{sig_col},{pnl_col},entry_price,quantity,entry_time"
+                time_col = "entry_time"
+            else:
+                select_cols = f"{sig_col},{pnl_col},price,quantity,created_at"
+                time_col = "created_at"
+
+            q = (
                 self.supabase.table(table)
-                .select(f"{sig_col},{pnl_col},price,quantity")
-                .gte("created_at", start_iso)
+                .select(select_cols)
+                .gte(time_col, start_iso)
                 .not_.is_(sig_col, "null")
-                .not_.is_(pnl_col, "null")
-                .execute()
-                .data
-                or []
             )
+            # For btc_position, pnl might be stored in pnl_pct instead of pnl.
+            # Do not hard-require pnl_col to be non-null at query time; filter in Python.
+            if table != "btc_position":
+                q = q.not_.is_(pnl_col, "null")
+
+            rows = (q.execute().data or [])
         except Exception as exc:
-            log.warning("signal data load failed", signal=signal_name, error=exc)
+            # Avoid structured logger JSON serialization errors for APIError objects.
+            log.warning("signal data load failed", signal=signal_name, error=str(exc))
             return [], []
 
         signal_vals: List[float] = []
@@ -155,11 +166,18 @@ class SignalEvaluator:
         for r in rows:
             s = _safe_float(r.get(sig_col), None)
             p = _safe_float(r.get(pnl_col), None)
+            if table == "btc_position" and p is None:
+                # Fallback: some schemas store pnl only as pnl_pct
+                p = _safe_float(r.get("pnl_pct"), None)
             if s is None or p is None:
                 continue
             if not pnl_is_pct:
                 # Normalize absolute PnL by cost basis if possible
-                cost = _safe_float(r.get("price"), 0.0) * _safe_float(r.get("quantity"), 1.0)
+                if table == "btc_position":
+                    unit_price = _safe_float(r.get("entry_price"), 0.0)
+                else:
+                    unit_price = _safe_float(r.get("price"), 0.0)
+                cost = unit_price * _safe_float(r.get("quantity"), 1.0)
                 p = (p / cost * 100.0) if cost != 0 else p
             signal_vals.append(s)
             pnl_vals.append(p)
@@ -264,6 +282,76 @@ class SignalEvaluator:
         log.info("IC report saved", path=str(path))
         return path
 
+    def export_weights(
+        self,
+        report: Dict[str, Any],
+        *,
+        cap_min: float = 0.02,
+        cap_max: float = 0.45,
+    ) -> Path:
+        """Export IC/IR-derived signal weights to brain/signal-ic/weights.json.
+
+        Design goals:
+        - Use only *positive* predictive signals by default (ic <= 0 -> 0 weight).
+        - Down-weight unstable signals (low IR).
+        - Normalize to sum=1, with min/max caps, then renormalize.
+        - If insufficient active signals, fall back to equal weights among positives.
+        """
+        EVAL_DIR.mkdir(parents=True, exist_ok=True)
+
+        rows = report.get("signals") or []
+        scored = []  # (name, raw_score)
+        for r in rows:
+            name = str(r.get("signal", "")).strip()
+            ic = _safe_float(r.get("ic"), 0.0)
+            ir = _safe_float(r.get("ir"), 0.0)
+            n = int(_safe_float(r.get("n"), 0))
+            if not name or n < 5:
+                continue
+            raw = max(0.0, ic) * max(0.0, ir)
+            scored.append((name, raw))
+
+        # Fallback: if everything is zero, try positive-IC only
+        if not any(v > 0 for _, v in scored):
+            scored = []
+            for r in rows:
+                name = str(r.get("signal", "")).strip()
+                ic = _safe_float(r.get("ic"), 0.0)
+                n = int(_safe_float(r.get("n"), 0))
+                if not name or n < 5:
+                    continue
+                raw = max(0.0, ic)
+                scored.append((name, raw))
+
+        total = sum(v for _, v in scored if v > 0)
+        if total <= 0:
+            weights = {}
+        else:
+            weights = {k: v / total for k, v in scored if v > 0}
+
+        # Apply caps then renormalize
+        if weights:
+            capped = {}
+            for k, w in weights.items():
+                capped[k] = max(cap_min, min(cap_max, float(w)))
+            s = sum(capped.values())
+            if s > 0:
+                weights = {k: round(v / s, 6) for k, v in capped.items()}
+
+        payload = {
+            "updated": datetime.now(timezone.utc).isoformat(),
+            "lookback_days": report.get("lookback_days"),
+            "window_days": report.get("window_days"),
+            "method": "max(0,ic)*max(0,ir) -> normalize -> cap -> renormalize",
+            "caps": {"min": cap_min, "max": cap_max},
+            "weights": weights,
+        }
+
+        path = EVAL_DIR / "weights.json"
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        log.info("IC weights exported", path=str(path), count=len(weights))
+        return path
+
     def save_to_supabase(self, report: Dict[str, Any]) -> None:
         """Upsert per-signal IC results into signal_ic_history table (if exists)."""
         if not self.supabase:
@@ -317,11 +405,13 @@ class SignalEvaluator:
     def run(self, notify: bool = True, save_db: bool = True) -> Dict[str, Any]:
         report = self.run_full_evaluation()
         path = self.save_report(report)
+        weights_path = self.export_weights(report)
         if save_db:
             self.save_to_supabase(report)
         if notify:
             self.send_report(report)
         report["saved_path"] = str(path)
+        report["weights_path"] = str(weights_path)
         return report
 
 

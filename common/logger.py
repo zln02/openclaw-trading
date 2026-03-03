@@ -112,6 +112,9 @@ class AgentLogger:
     def warn(self, msg: str, **kw):
         self._log.warning(self._fmt(msg, "WARNING", **kw), extra=kw)
 
+    # Python logging 표준 메서드명 호환
+    warning = warn
+
     def error(self, msg: str, **kw):
         self._log.error(self._fmt(msg, "ERROR", **kw), extra=kw)
 

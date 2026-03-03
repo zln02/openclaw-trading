@@ -11,6 +11,14 @@ def get_supabase():
     if _client is not None:
         return _client
 
+    # Ensure env is loaded in any entrypoint (cron/CLI/tests)
+    try:
+        from common.env_loader import load_env
+
+        load_env()
+    except Exception:
+        pass
+
     url = os.environ.get("SUPABASE_URL", "")
     key = os.environ.get("SUPABASE_SECRET_KEY", "")
     if not url or not key:

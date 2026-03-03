@@ -28,22 +28,43 @@ class Priority(str, Enum):
 
 
 def append_info_buffer(msg: str) -> None:
-    """INFO 등급 메시지를 일일 버퍼에 추가 (즉시 발송하지 않음)."""
+    """INFO 등급 메시지를 버퍼에 추가 (즉시 발송하지 않음).
+
+    구조 (역호환 유지):
+        {
+          "date": "YYYY-MM-DD",
+          "msgs": [...],              # 일일 리포트용 전체 메시지
+          "hours": { "HH": [...] }    # 시각별 버킷 (매시 브리핑용)
+        }
+    """
     try:
         today = time.strftime("%Y-%m-%d")
+        hour = time.strftime("%H")
         data: dict = {}
         if _INFO_BUFFER_FILE.exists():
             try:
                 data = json.loads(_INFO_BUFFER_FILE.read_text(encoding="utf-8"))
             except Exception:
                 data = {}
+
         if data.get("date") != today:
-            data = {"date": today, "msgs": []}
-        data["msgs"].append(msg)
+            # 날짜가 바뀌면 새로 시작 (이전 데이터는 덮어씀)
+            data = {"date": today, "msgs": [], "hours": {}}
+
+        # 일일 리포트용 전체 목록
+        msgs = data.setdefault("msgs", [])
+        msgs.append(msg)
+
+        # 시각별 버킷 (매시 정각 요약용)
+        hours = data.setdefault("hours", {})
+        bucket = hours.setdefault(hour, [])
+        bucket.append(msg)
+
         _INFO_BUFFER_FILE.write_text(
             json.dumps(data, ensure_ascii=False), encoding="utf-8"
         )
     except Exception:
+        # 버퍼 기록 실패는 트레이딩 로직에 영향을 주지 않도록 조용히 무시
         pass
 
 

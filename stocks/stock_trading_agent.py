@@ -687,13 +687,19 @@ def rule_based_signal(
     cs = 0
     buy_reasons = []
 
-    # 1) 모멘텀 (30점)
+    # 레짐 가중치 적용 (사이클에서 로드된 경우 반영)
+    _regime_adj = globals().get('_regime_adj_cache', {})
+    _mom_mult = _regime_adj.get('momentum_mult', 1.0)
+    _val_mult = _regime_adj.get('value_mult', 1.0)
+    _qual_mult = _regime_adj.get('quality_mult', 1.0)
+
+    # 1) 모멘텀 (30점 × 레짐 배수)
     if m_grade == 'A':
-        cs += 30; buy_reasons.append(f'모멘텀A({m_score:.0f})')
+        _pts = round(30 * _mom_mult); cs += _pts; buy_reasons.append(f'모멘텀A({m_score:.0f})')
     elif m_grade == 'B':
-        cs += 22; buy_reasons.append(f'모멘텀B({m_score:.0f})')
+        _pts = round(22 * _mom_mult); cs += _pts; buy_reasons.append(f'모멘텀B({m_score:.0f})')
     elif m_grade == 'C':
-        cs += 12; buy_reasons.append(f'모멘텀C({m_score:.0f})')
+        _pts = round(12 * _mom_mult); cs += _pts; buy_reasons.append(f'모멘텀C({m_score:.0f})')
 
     # 2) RSI (18점)
     if rsi <= 30:
@@ -727,13 +733,13 @@ def rule_based_signal(
     elif supply_signal == 'BUY':
         cs += 4; buy_reasons.append('수급 우호')
 
-    # 7) DART 재무 품질 (15점 — 신규 v3)
+    # 7) DART 재무 품질 (15점 — 레짐 quality 배수)
     if dart_grade == 'A':
-        cs += 15; buy_reasons.append(f'재무A({dart_val})')
+        _pts = round(15 * _qual_mult); cs += _pts; buy_reasons.append(f'재무A({dart_val})')
     elif dart_grade == 'B':
-        cs += 10; buy_reasons.append(f'재무B({dart_val})')
+        _pts = round(10 * _qual_mult); cs += _pts; buy_reasons.append(f'재무B({dart_val})')
     elif dart_grade == 'C':
-        cs += 5; buy_reasons.append(f'재무C({dart_val})')
+        _pts = round(5 * _qual_mult); cs += _pts; buy_reasons.append(f'재무C({dart_val})')
     elif dart_grade == 'D':
         cs -= 3
 
@@ -875,49 +881,69 @@ def get_trading_signal(
 ) -> dict:
     """
     매매 신호 결정 (우선순위):
-    1. ML 모델 (XGBoost) — 확률 기반
-    2. AI (GPT) — ML 모델 없을 때 또는 애매할 때
+    1. ML 모델 (XGBoost) — 고확률 직접 BUY
+    2. AI (GPT) or 룰 기반 → ML 블렌딩 (0.6/0.4)
     3. 룰 기반 — AI도 실패 시
+    반환 dict에 'ml_score', 'ml_confidence' 항상 포함
     """
-    # 1차: ML 모델
+    ml_confidence: float = 0.0
+    ml_source: str = 'ML_NA'
+
+    # ML 신호 항상 수집
     try:
         from ml_model import get_ml_signal, MODEL_PATH  # 같은 디렉토리
         if MODEL_PATH.exists():
             ml = get_ml_signal(stock['code'])
-            if ml.get('action') == 'BUY' and ml.get('confidence', 0) >= 78:
+            ml_confidence = float(ml.get('confidence', 0))
+            ml_source = ml.get('source', 'ML_XGBOOST')
+            # 고확률 ML → 즉시 BUY
+            if ml.get('action') == 'BUY' and ml_confidence >= 78:
                 log(
-                    f"  ML 신호: {ml['action']} ({ml['confidence']:.1f}%) "
-                    f"[{ml.get('source', 'ML_XGBOOST')}]",
+                    f"  ML 고확률 BUY: {ml_confidence:.1f}% [{ml_source}]",
                     'INFO',
                 )
                 return {
                     'action': 'BUY',
-                    'confidence': ml['confidence'],
-                    'reason': f"ML 모델 매수확률 {ml['confidence']:.1f}%",
+                    'confidence': ml_confidence,
+                    'reason': f"ML 모델 매수확률 {ml_confidence:.1f}%",
                     'source': 'ML_XGBOOST',
+                    'ml_score': ml_confidence,
+                    'ml_confidence': ml_confidence,
                 }
-            elif ml.get('confidence', 0) >= 65:
-                log(
-                    f"  ML 애매: {ml.get('confidence', 0):.1f}% → AI 확인",
-                    'INFO',
-                )
+            if ml_confidence >= 65:
+                log(f"  ML 보조신호: {ml_confidence:.1f}% → 룰/AI 블렌딩", 'INFO')
     except Exception as e:
         log(f'  ML 모델 오류: {e}', 'WARN')
 
     # 2차: AI (GPT)
+    base_signal: Optional[dict] = None
     try:
         ai_result = analyze_with_ai(
             stock, indicators, strategy, news, weekly, kospi, has_position, supply
         )
         if ai_result and ai_result.get('action') in ('BUY', 'SELL', 'HOLD'):
-            return ai_result
+            base_signal = ai_result
     except Exception as e:
         log(f'AI 분석 실패: {e}', 'WARN')
 
-    # 3차: 룰 기반
-    momentum = calc_momentum_score(stock['code'])
-    dart = _get_dart_score(stock['code'])
-    return rule_based_signal(indicators, kospi, weekly, has_position, supply, momentum, dart)
+    # 3차: 룰 기반 fallback
+    if base_signal is None:
+        momentum = calc_momentum_score(stock['code'])
+        dart = _get_dart_score(stock['code'])
+        base_signal = rule_based_signal(indicators, kospi, weekly, has_position, supply, momentum, dart)
+
+    # ML 블렌딩: BUY 신호일 때만 confidence 조정 (momentum 0.6 / ml 0.4)
+    if base_signal.get('action') == 'BUY' and ml_confidence > 0:
+        base_conf = float(base_signal.get('confidence', 0))
+        blended = round(base_conf * 0.6 + ml_confidence * 0.4, 1)
+        base_signal['confidence'] = blended
+        base_signal['reason'] = (
+            base_signal.get('reason', '') + f" [ML블렌딩:{ml_confidence:.0f}%→{blended:.0f}%]"
+        )
+
+    base_signal['ml_score'] = round(ml_confidence, 2)
+    base_signal['ml_confidence'] = round(ml_confidence, 2)
+    return base_signal
 
 
 # ─────────────────────────────────────────────
@@ -1144,20 +1170,50 @@ def execute_buy(
         # ↑ 주문 실패 시 여기서 return → DB 저장 안 됨 (v1 버그 수정)
 
     # ── DB 저장 (주문 성공 후에만) ──
+    insert_data = {
+        'trade_type': 'BUY',
+        'stock_code': code,
+        'stock_name': name,
+        'quantity': quantity,
+        'price': price,
+        'strategy': signal.get('source', 'AI') + '+RSI+MACD',
+        'reason': signal.get('reason', ''),
+        'result': 'OPEN',
+        'split_stage': split_stage,
+        'ml_score': signal.get('ml_score', 0.0),
+        'ml_confidence': signal.get('ml_confidence', 0.0),
+        'composite_score': signal.get('confidence', 0.0),
+        'rsi': indicators.get('rsi', 0.0),
+    }
+
+    # 팩터 스냅샷 수집 (Phase Level 4: 팩터 로깅)
     try:
-        supabase.table('trade_executions').insert({
-            'trade_type': 'BUY',
-            'stock_code': code,
-            'stock_name': name,  # 종목명 추가
-            'quantity': quantity,
-            'price': price,
-            'strategy': signal.get('source', 'AI') + '+RSI+MACD',
-            'reason': signal.get('reason', ''),
-            'result': 'OPEN',
-            'split_stage': split_stage,
-        }).execute()
+        import sys as _sys
+        _WORKSPACE_PATH = str(Path(__file__).resolve().parents[1])
+        if _WORKSPACE_PATH not in _sys.path:
+            _sys.path.insert(0, _WORKSPACE_PATH)
+        from quant.factors.registry import calc_all, FactorContext
+        _fctx = FactorContext()
+        _today_iso = datetime.now().date().isoformat()
+        _all_factors = calc_all(_today_iso, symbol=code, market='kr', context=_fctx)
+        _top5 = dict(
+            sorted(_all_factors.items(), key=lambda x: abs(x[1]), reverse=True)[:5]
+        )
+        insert_data['factor_snapshot'] = json.dumps(_top5, ensure_ascii=False)
+        log(f'{name} 팩터 스냅샷 수집: {list(_top5.keys())}')
+    except Exception as _fe:
+        log(f'{name} 팩터 스냅샷 건너뜀: {_fe}', 'WARN')
+
+    try:
+        supabase.table('trade_executions').insert(insert_data).execute()
     except Exception as e:
-        log(f'{name} DB 저장 실패: {e}', 'ERROR')
+        # factor_snapshot 컬럼 없을 경우 제외 후 재시도
+        if 'factor_snapshot' in insert_data:
+            del insert_data['factor_snapshot']
+        try:
+            supabase.table('trade_executions').insert(insert_data).execute()
+        except Exception as e2:
+            log(f'{name} DB 저장 실패: {e2}', 'ERROR')
 
     # ── 알림 ──
     avg_entry = calc_avg_entry_price(get_position_for_stock(code))
@@ -1456,10 +1512,48 @@ def check_stop_loss_take_profit():
 # ─────────────────────────────────────────────
 # 메인 사이클
 # ─────────────────────────────────────────────
+def _get_regime_factor_adj() -> dict:
+    """레짐별 KR 팩터 가중치 조정값 반환 (Phase 3-B).
+
+    RISK_OFF: value/quality ↑, momentum ↓
+    RISK_ON:  momentum ↑, value ↓
+    Returns dict with 'momentum_mult', 'value_mult', 'quality_mult'
+    """
+    defaults = {"momentum_mult": 1.0, "value_mult": 1.0, "quality_mult": 1.0, "regime": "UNKNOWN"}
+    try:
+        import sys as _sys
+        _WORKSPACE_ROOT = str(Path(__file__).resolve().parents[1])
+        if _WORKSPACE_ROOT not in _sys.path:
+            _sys.path.insert(0, _WORKSPACE_ROOT)
+        from agents.regime_classifier import RegimeClassifier
+        result = RegimeClassifier().classify()
+        regime = result.get("regime", "TRANSITION")
+        adj = {
+            "RISK_ON":     {"momentum_mult": 1.30, "value_mult": 0.80, "quality_mult": 1.00},
+            "TRANSITION":  {"momentum_mult": 1.00, "value_mult": 1.00, "quality_mult": 1.00},
+            "RISK_OFF":    {"momentum_mult": 0.70, "value_mult": 1.30, "quality_mult": 1.30},
+            "CRISIS":      {"momentum_mult": 0.40, "value_mult": 1.50, "quality_mult": 1.50},
+        }.get(regime, defaults)
+        adj["regime"] = regime
+        log(
+            f"KR 레짐 적응형 가중치: {regime} "
+            f"(mom×{adj['momentum_mult']} val×{adj['value_mult']})"
+        )
+        return adj
+    except Exception as e:
+        log(f'레짐 조회 실패 (기본값 사용): {e}', 'WARN')
+        return defaults
+
+
+# 레짐 가중치 캐시 (사이클 내 재사용)
+_regime_adj_cache: dict = {}
+
+
 def run_trading_cycle():
-    global _cache, _dart_cache
+    global _cache, _dart_cache, _regime_adj_cache
     _cache = {}
     _dart_cache = {}
+    _regime_adj_cache = _get_regime_factor_adj()  # 레짐별 팩터 가중치 사이클 초기 로드
 
     # STOP 플래그 체크 (텔레그램 /stop 명령으로 생성)
     stop_flag = Path(__file__).parent / 'STOP_TRADING'

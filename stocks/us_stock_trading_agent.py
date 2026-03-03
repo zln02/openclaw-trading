@@ -90,6 +90,37 @@ RULES = {
 US_TRADE_TABLE = "us_trade_executions"
 STOP_FLAG = Path(__file__).parent / "US_STOP_TRADING"
 
+# 레짐 가중치 사이클 캐시
+_us_regime_adj_cache: Dict = {}
+
+
+def _get_us_regime_adj() -> Dict:
+    """레짐별 US 팩터 가중치 조정값 반환 (Phase 3-B)."""
+    global _us_regime_adj_cache
+    if _us_regime_adj_cache:
+        return _us_regime_adj_cache
+    defaults = {"momentum_mult": 1.0, "value_mult": 1.0, "quality_mult": 1.0, "regime": "UNKNOWN"}
+    try:
+        from agents.regime_classifier import RegimeClassifier
+        result = RegimeClassifier().classify()
+        regime = result.get("regime", "TRANSITION")
+        _us_regime_adj_cache = {
+            "RISK_ON":     {"momentum_mult": 1.25, "value_mult": 0.85, "quality_mult": 1.00},
+            "TRANSITION":  {"momentum_mult": 1.00, "value_mult": 1.00, "quality_mult": 1.00},
+            "RISK_OFF":    {"momentum_mult": 0.75, "value_mult": 1.25, "quality_mult": 1.25},
+            "CRISIS":      {"momentum_mult": 0.50, "value_mult": 1.40, "quality_mult": 1.40},
+        }.get(regime, defaults)
+        _us_regime_adj_cache["regime"] = regime
+        log(
+            f"US 레짐 적응형 가중치: {regime} "
+            f"(mom×{_us_regime_adj_cache['momentum_mult']} val×{_us_regime_adj_cache['value_mult']})"
+        )
+    except Exception as e:
+        log(f"US 레짐 조회 실패 (기본값): {e}", "WARN")
+        _us_regime_adj_cache = defaults
+    return _us_regime_adj_cache
+
+
 # ─────────────────────────────────────────────
 # 유틸리티
 # ─────────────────────────────────────────────
@@ -321,15 +352,20 @@ def should_buy(symbol: str, score: float, indicators: dict) -> dict:
     cs = 0
     reasons = []
 
-    # 1) 모멘텀 등급 (35점) — 비중 줄임 (팩터 추가)
+    # 레짐 적응형 팩터 가중치 (Phase 3-B)
+    _regime_adj = _get_us_regime_adj()
+    _mom_mult = _regime_adj.get("momentum_mult", 1.0)
+    _val_mult = _regime_adj.get("value_mult", 1.0)
+
+    # 1) 모멘텀 등급 (35점 × 레짐 배수)
     if score >= 75:
-        cs += 35; reasons.append(f"모멘텀A({score:.0f})")
+        cs += round(35 * _mom_mult); reasons.append(f"모멘텀A({score:.0f})")
     elif score >= 65:
-        cs += 25; reasons.append(f"모멘텀B({score:.0f})")
+        cs += round(25 * _mom_mult); reasons.append(f"모멘텀B({score:.0f})")
     elif score >= 55:
-        cs += 18; reasons.append(f"모멘텀C({score:.0f})")
+        cs += round(18 * _mom_mult); reasons.append(f"모멘텀C({score:.0f})")
     elif score >= 50:
-        cs += 12; reasons.append(f"모멘텀D({score:.0f})")
+        cs += round(12 * _mom_mult); reasons.append(f"모멘텀D({score:.0f})")
 
     # 2) RSI 구간 (15점)
     if rsi <= 35:
@@ -387,7 +423,7 @@ def should_buy(symbol: str, score: float, indicators: dict) -> dict:
         elif regime["regime"] == "CORRECTION":
             cs -= 2
 
-    # 8) v2: 멀티팩터 보너스 (밸류+퀄리티 — 15점)
+    # 8) v2: 멀티팩터 보너스 (밸류+퀄리티 — 15점 × 레짐 val 배수)
     if RISK.get("multifactor"):
         try:
             from common.market_data import calc_us_multifactor
@@ -395,11 +431,11 @@ def should_buy(symbol: str, score: float, indicators: dict) -> dict:
             mf_grade = mf.get("grade", "N/A")
             mf_score = mf.get("score", 0)
             if mf_grade == "A":
-                cs += 15; reasons.append(f"팩터A({mf_score})")
+                cs += round(15 * _val_mult); reasons.append(f"팩터A({mf_score})")
             elif mf_grade == "B":
-                cs += 10; reasons.append(f"팩터B({mf_score})")
+                cs += round(10 * _val_mult); reasons.append(f"팩터B({mf_score})")
             elif mf_grade == "C":
-                cs += 4
+                cs += round(4 * _val_mult)
             elif mf_grade == "D":
                 cs -= 5; reasons.append(f"팩터D({mf_score})")
         except Exception:
@@ -543,7 +579,38 @@ def execute_buy(symbol: str, score: float, indicators: dict) -> dict:
     qty = round(qty, 4)
 
     log(f"🟢 {symbol} 매수: ${price:.2f} × {qty}주 ≈ ${invest_usd:.0f}", "TRADE")
+
+    # 팩터 스냅샷 수집 (Phase Level 4: 팩터 로깅)
+    _factor_snapshot: str | None = None
+    try:
+        import sys as _sys
+        _WORKSPACE_ROOT = str(Path(__file__).resolve().parents[1])
+        if _WORKSPACE_ROOT not in _sys.path:
+            _sys.path.insert(0, _WORKSPACE_ROOT)
+        from quant.factors.registry import calc_all, FactorContext
+        import json as _json
+        from datetime import datetime as _dt
+        _fctx = FactorContext()
+        _today_iso = _dt.now().date().isoformat()
+        _all_factors = calc_all(_today_iso, symbol=symbol, market='us', context=_fctx)
+        _top5 = dict(
+            sorted(_all_factors.items(), key=lambda x: abs(x[1]), reverse=True)[:5]
+        )
+        _factor_snapshot = _json.dumps(_top5, ensure_ascii=False)
+        log(f"  {symbol} 팩터 스냅샷: {list(_top5.keys())}")
+    except Exception as _fe:
+        log(f"  {symbol} 팩터 스냅샷 건너뜀: {_fe}", "WARN")
+
     save_trade("BUY", symbol, qty, price, reason=f"모멘텀 {score:.0f}", score=score)
+
+    # factor_snapshot 컬럼에 별도 저장 (graceful)
+    if _factor_snapshot and supabase:
+        try:
+            supabase.table(US_TRADE_TABLE).update(
+                {"factor_snapshot": _factor_snapshot}
+            ).eq("symbol", symbol).eq("result", "OPEN").eq("trade_type", "BUY").execute()
+        except Exception as _ue:
+            log(f"  {symbol} 팩터 snapshot upsert 실패 (graceful): {_ue}", "WARN")
 
     send_telegram(
         f"🇺🇸🟢 <b>{symbol} 매수</b>\n"
@@ -627,6 +694,10 @@ def check_stop_loss_take_profit():
 # 메인 사이클
 # ─────────────────────────────────────────────
 def run_trading_cycle():
+    global _us_regime_adj_cache
+    _us_regime_adj_cache = {}          # 사이클 시작 시 레짐 캐시 초기화 → _get_us_regime_adj() 재호출
+    _get_us_regime_adj()               # 사이클 초기에 레짐 로드
+
     log("=" * 50)
     log("🇺🇸 US 자동매매 사이클 시작")
 

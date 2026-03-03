@@ -1,11 +1,17 @@
-"""Performance attribution utilities (Phase 17)."""
+"""Performance attribution utilities (Phase 17 → Level 5 확장).
+
+신규 (Level 5):
+- WeeklyAttributionRunner: Supabase trade_executions + factor_snapshot 기반
+  팩터별 PnL 기여도 계산 → 주간 텔레그램 보고서 → 저품질 팩터 다운웨이팅
+"""
 from __future__ import annotations
 
 import argparse
 import json
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
-from typing import Any, Mapping, Optional
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Mapping, Optional
 
 
 def _utc_now_iso() -> str:
@@ -164,10 +170,251 @@ class PerformanceAttribution:
         }
 
 
+class WeeklyAttributionRunner:
+    """Supabase 기반 주간 팩터 PnL 귀속 분석 (Level 5 핵심).
+
+    trade_executions의 factor_snapshot + pnl_pct를 읽어
+    팩터별 수익 기여를 계산하고 weights.json을 자동 업데이트한다.
+    """
+
+    def __init__(self, supabase_client=None):
+        try:
+            from common.supabase_client import get_supabase
+            self.supabase = supabase_client or get_supabase()
+        except Exception:
+            self.supabase = None
+
+        try:
+            from common.config import BRAIN_PATH
+            self._weights_path = BRAIN_PATH / "signal-ic" / "weights.json"
+        except Exception:
+            self._weights_path = Path("/home/wlsdud5035/.openclaw/workspace/brain/signal-ic/weights.json")
+
+    # ── Data loading ──────────────────────────────────────────────────────
+
+    def _load_closed_trades(self, lookback_days: int = 7) -> List[Dict[str, Any]]:
+        """지난 N일간 체결된 trades (factor_snapshot 있는 것만)."""
+        if not self.supabase:
+            return []
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(days=lookback_days)
+        ).date().isoformat()
+        try:
+            rows = (
+                self.supabase.table("trade_executions")
+                .select("stock_code,factor_snapshot,price,quantity,entry_price")
+                .eq("result", "CLOSED")
+                .eq("trade_type", "SELL")
+                .gte("created_at", cutoff)
+                .execute()
+                .data or []
+            )
+        except Exception as exc:
+            try:
+                from common.logger import get_logger
+                get_logger("attribution").warning("trade 로드 실패", error=exc)
+            except Exception:
+                pass
+            return []
+
+        result = []
+        for r in rows:
+            snap_raw = r.get("factor_snapshot")
+            if not snap_raw:
+                continue
+            try:
+                snap = json.loads(snap_raw) if isinstance(snap_raw, str) else snap_raw
+            except Exception:
+                continue
+            if not isinstance(snap, dict):
+                continue
+            # PnL 계산: price/entry_price에서 직접 계산
+            entry = _safe_float(r.get("entry_price"), 0.0)
+            sell = _safe_float(r.get("price"), 0.0)
+            if entry > 0 and sell > 0:
+                pnl = (sell - entry) / entry * 100.0
+            else:
+                continue
+            result.append({"pnl_pct": pnl, "factors": snap})
+        return result
+
+    # ── Attribution calculation ───────────────────────────────────────────
+
+    def _calc_factor_attribution(
+        self, trades: List[Dict[str, Any]]
+    ) -> Dict[str, Dict[str, float]]:
+        """팩터별 PnL 기여도 집계.
+
+        Factor Contribution per trade = position_return × normalized_factor_weight
+        Returns: {factor_name: {total_contrib, n_trades, avg_contrib, avg_pnl}}
+        """
+        factor_stats: Dict[str, List[float]] = {}
+
+        for trade in trades:
+            pnl = trade["pnl_pct"]
+            factors = trade["factors"]
+            if not factors:
+                continue
+
+            # 팩터 절대값 합으로 정규화 → 각 팩터의 가중치 비율
+            total_abs = sum(abs(v) for v in factors.values())
+            if total_abs <= 0:
+                continue
+
+            for fname, fval in factors.items():
+                weight = abs(_safe_float(fval, 0.0)) / total_abs
+                contrib = pnl * weight
+                if fname not in factor_stats:
+                    factor_stats[fname] = []
+                factor_stats[fname].append(contrib)
+
+        result: Dict[str, Dict[str, float]] = {}
+        for fname, contribs in factor_stats.items():
+            n = len(contribs)
+            total = sum(contribs)
+            result[fname] = {
+                "total_contrib": round(total, 4),
+                "n_trades": n,
+                "avg_contrib": round(total / n, 4) if n > 0 else 0.0,
+            }
+
+        return result
+
+    # ── Weights update ────────────────────────────────────────────────────
+
+    def _downweight_low_contributors(
+        self,
+        factor_attrs: Dict[str, Dict[str, float]],
+        threshold_avg: float = -0.5,
+        decay: float = 0.5,
+    ) -> bool:
+        """avg_contrib < threshold인 팩터를 weights.json에서 다운웨이팅."""
+        if not self._weights_path.exists():
+            return False
+        try:
+            payload = json.loads(self._weights_path.read_text(encoding="utf-8"))
+        except Exception:
+            return False
+
+        weights: Dict[str, float] = payload.get("weights", {})
+        if not weights:
+            return False
+
+        changed = False
+        for fname, stats in factor_attrs.items():
+            if fname in weights and stats["avg_contrib"] < threshold_avg:
+                old_w = weights[fname]
+                weights[fname] = round(max(0.0, old_w * decay), 6)
+                changed = True
+
+        if not changed:
+            return False
+
+        # 재정규화
+        total = sum(v for v in weights.values() if v > 0)
+        if total > 0:
+            payload["weights"] = {k: round(v / total, 6) for k, v in weights.items() if v > 0}
+
+        payload["attribution_updated"] = datetime.now(timezone.utc).isoformat()
+        self._weights_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        return True
+
+    # ── Telegram report ───────────────────────────────────────────────────
+
+    def _send_report(
+        self,
+        factor_attrs: Dict[str, Dict[str, float]],
+        n_trades: int,
+        total_pnl_avg: float,
+        weights_updated: bool,
+    ) -> None:
+        try:
+            from common.telegram import Priority, send_telegram
+        except Exception:
+            return
+
+        sorted_factors = sorted(
+            factor_attrs.items(), key=lambda x: x[1]["total_contrib"], reverse=True
+        )
+
+        lines = [
+            "📊 <b>주간 팩터 귀속 분석 (Attribution)</b>",
+            f"대상 trades: {n_trades}건 | 평균 PnL: {total_pnl_avg:+.2f}%",
+            "",
+            "<b>팩터별 수익 기여도 (상위 5):</b>",
+        ]
+        for fname, stats in sorted_factors[:5]:
+            icon = "✅" if stats["avg_contrib"] >= 0 else "⚠️"
+            lines.append(
+                f"  {icon} {fname}: 합계={stats['total_contrib']:+.2f}% "
+                f"평균={stats['avg_contrib']:+.2f}% ({stats['n_trades']}건)"
+            )
+
+        if weights_updated:
+            lines.append("\n🔄 저기여 팩터 다운웨이팅 완료 → weights.json 업데이트")
+
+        try:
+            send_telegram("\n".join(lines), priority=Priority.INFO)
+        except Exception:
+            pass
+
+    # ── Main ─────────────────────────────────────────────────────────────
+
+    def run(self, lookback_days: int = 7, dry_run: bool = False) -> Dict[str, Any]:
+        try:
+            from common.logger import get_logger
+            log = get_logger("attribution_runner")
+        except Exception:
+            import logging
+            log = logging.getLogger("attribution_runner")
+
+        log.info("attribution 분석 시작", lookback_days=lookback_days)
+
+        trades = self._load_closed_trades(lookback_days=lookback_days)
+        if not trades:
+            log.warning("factor_snapshot 포함 trades 없음 — 데이터 축적 필요")
+            return {"status": "NO_DATA", "n_trades": 0}
+
+        factor_attrs = self._calc_factor_attribution(trades)
+        n_trades = len(trades)
+        total_pnl_avg = round(
+            sum(t["pnl_pct"] for t in trades) / n_trades, 4
+        ) if n_trades > 0 else 0.0
+
+        weights_updated = False
+        if not dry_run:
+            weights_updated = self._downweight_low_contributors(factor_attrs)
+
+        self._send_report(factor_attrs, n_trades, total_pnl_avg, weights_updated)
+
+        return {
+            "status": "OK",
+            "n_trades": n_trades,
+            "total_pnl_avg": total_pnl_avg,
+            "factor_attribution": factor_attrs,
+            "weights_updated": weights_updated,
+            "timestamp": _utc_now_iso(),
+        }
+
+
 def _cli() -> int:
     parser = argparse.ArgumentParser(description="Performance attribution")
-    parser.add_argument("--input-file", required=True, help="json with portfolio/benchmark data")
+    parser.add_argument("--input-file", default=None, help="json with portfolio/benchmark data")
+    parser.add_argument("--weekly", action="store_true", help="주간 attribution 실행 (Supabase)")
+    parser.add_argument("--lookback", type=int, default=7, help="lookback days (--weekly 전용)")
+    parser.add_argument("--dry-run", action="store_true", help="저장/알림 없이 출력만")
     args = parser.parse_args()
+
+    if args.weekly:
+        runner = WeeklyAttributionRunner()
+        out = runner.run(lookback_days=args.lookback, dry_run=args.dry_run)
+        print(json.dumps(out, ensure_ascii=False, indent=2))
+        return 0
+
+    if not args.input_file:
+        parser.error("--input-file 또는 --weekly 필요")
 
     with open(args.input_file, "r", encoding="utf-8") as f:
         payload = json.load(f)
