@@ -4,7 +4,7 @@ import { LineChart, Line, XAxis, YAxis, Tooltip, ReferenceLine, ResponsiveContai
 import usePolling from "../hooks/usePolling";
 import StatCard from "../components/StatCard";
 import ScoreGauge from "../components/ScoreGauge";
-import TradeTable from "../components/TradeTable";
+
 import TvWidget from "../components/TvWidget";
 
 const TV_BTC_CONFIG = {
@@ -35,28 +35,6 @@ import {
 const fmt = (n) => n != null ? Number(n).toLocaleString() : "—";
 const pct = (n) => n != null ? `${Number(n) >= 0 ? "+" : ""}${Number(n).toFixed(2)}%` : "—";
 
-const TRADE_COLS = [
-  { key: "timestamp", label: "시간", render: (v) => v?.slice(5, 16) },
-  { key: "action", label: "구분", render: (v) => {
-    const u = String(v || "").toUpperCase();
-    if (u === "BUY")  return <span className="badge-green">매수</span>;
-    if (u === "SELL") return <span className="badge-red">매도</span>;
-    return <span className="badge-yellow">{v}</span>;
-  }},
-  { key: "price", label: "가격", render: (v) => <span className="font-mono">₩{fmt(v)}</span> },
-  { key: "pnl_pct", label: "수익률", render: (v) => (
-    <span className={v > 0 ? "profit-text" : v < 0 ? "loss-text" : "text-text-secondary"}>
-      {v != null ? pct(v) : "—"}
-    </span>
-  )},
-  { key: "rsi", label: "RSI" },
-  { key: "confidence", label: "신뢰도", render: (v) => (
-    <span className="text-text-secondary">{v != null ? `${v}%` : "—"}</span>
-  )},
-  { key: "reason", label: "사유", render: (v) => (
-    <span className="text-text-secondary text-xs max-w-[200px] truncate block">{v}</span>
-  )},
-];
 
 const fetchBtcRtPrice = () => getBtcRealtimePrice("KRW-BTC", "btc");
 const fetchBtcOrderbook = () => getBtcRealtimeOrderbook("upbit", "KRW-BTC");
@@ -76,7 +54,8 @@ export default function BtcPage() {
 
   const score = comp?.composite;
   const summary = port?.summary || {};
-  const position = (port?.open_positions || [])[0] || null;
+  const openPositions = port?.open_positions || [];
+  const firstPos = openPositions[0] || null;
   const priceNow = rtPrice?.price;
   const newsRows = Array.isArray(news?.items) ? news.items : [];
 
@@ -115,16 +94,16 @@ export default function BtcPage() {
 
   // 에이전트 다음 액션
   const nextAction = useMemo(() => {
-    if (position) {
-      const sl = position.stop_loss ?? (position.entry_price * 0.97);
-      const tp = position.take_profit ?? (position.entry_price * 1.12);
+    if (firstPos) {
+      const sl = firstPos.stop_loss ?? (firstPos.entry_price * 0.97);
+      const tp = firstPos.take_profit ?? (firstPos.entry_price * 1.12);
       return { type: "holding", sl, tp };
     }
     const s = score?.total ?? 0;
     const threshold = comp?.buy_threshold ?? 45;
     if (s >= threshold) return { type: "signal", score: s, threshold };
     return { type: "waiting", score: s, threshold };
-  }, [position, score, comp]);
+  }, [firstPos, score, comp]);
 
   return (
     <div className="space-y-6">
@@ -348,105 +327,171 @@ export default function BtcPage() {
         </div>
       </div>
 
-      {/* Position & News */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Position Card */}
-        <div className="card">
-          <div className="card-header">
-            <h3 className="text-sm font-medium text-text-primary flex items-center gap-2">
-              <Wallet className="w-4 h-4" /> 포지션 정보
-            </h3>
-          </div>
-          {/* [B] 에이전트 다음 액션 */}
+      {/* ── Open Positions Table ── */}
+      <div className="card">
+        <div className="card-header flex items-center justify-between">
+          <h3 className="text-sm font-medium text-text-primary flex items-center gap-2">
+            <Wallet className="w-4 h-4" /> 오픈 포지션
+            {openPositions.length > 0 && (
+              <span className="ml-1 text-xs bg-blue-500/20 text-blue-400 px-2 py-0.5 rounded-full border border-blue-500/30">
+                {openPositions.length}개
+              </span>
+            )}
+          </h3>
           {nextAction && (() => {
             const isHolding = nextAction.type === "holding";
-            const isSignal = nextAction.type === "signal";
-            const bg = isHolding ? "bg-blue-500/10 border-blue-500/30" : isSignal ? "bg-profit/10 border-profit/30" : "bg-card/50 border-border/50";
-            const label = isHolding ? "보유 중" : isSignal ? "매수 신호" : "대기 중";
+            const isSignal  = nextAction.type === "signal";
             const labelColor = isHolding ? "text-blue-400" : isSignal ? "text-profit" : "text-text-secondary";
+            const label = isHolding ? "보유 중" : isSignal ? "매수 신호" : "대기 중";
             return (
-              <div className={`mb-4 p-3 rounded-lg border ${bg} flex items-center justify-between text-sm`}>
-                <div className="flex items-center gap-2">
-                  <Activity className={`w-4 h-4 ${labelColor}`} />
-                  <span className={`font-medium ${labelColor}`}>{label}</span>
-                </div>
+              <div className={`flex items-center gap-1.5 text-xs font-medium ${labelColor}`}>
+                <Activity className="w-3 h-3" />
+                {label}
                 {isHolding && (
-                  <div className="text-xs text-text-secondary font-mono space-x-3">
-                    <span>SL ₩{fmt(nextAction.sl)}</span>
-                    <span>TP ₩{fmt(nextAction.tp)}</span>
-                  </div>
+                  <span className="text-text-muted font-mono font-normal ml-1">
+                    SL ₩{fmt(Math.round(nextAction.sl))} / TP ₩{fmt(Math.round(nextAction.tp))}
+                  </span>
                 )}
                 {!isHolding && (
-                  <div className="text-xs text-text-secondary font-mono">
+                  <span className="text-text-muted font-normal ml-1">
                     스코어 {nextAction.score} / 기준 {nextAction.threshold}
-                  </div>
+                  </span>
                 )}
               </div>
             );
           })()}
-          {position ? (
-            <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-4 text-sm">
-                <div>
-                  <div className="text-text-secondary mb-1">진입가</div>
-                  <div className="font-mono font-medium">₩{fmt(position.entry_price)}</div>
-                </div>
-                <div>
-                  <div className="text-text-secondary mb-1">수량</div>
-                  <div className="font-mono font-medium">{position.quantity} BTC</div>
-                </div>
-                <div>
-                  <div className="text-text-secondary mb-1">투입금</div>
-                  <div className="font-mono font-medium">₩{fmt(position.entry_krw)}</div>
-                </div>
-                {position?.pnl_pct != null && (
-                  <div>
-                    <div className="text-text-secondary mb-1">수익률</div>
-                    <div className={`font-mono font-medium ${
-                      position.pnl_pct >= 0 ? "profit-text" : "loss-text"
-                    }`}>
-                      {pct(position.pnl_pct)}
-                    </div>
-                  </div>
-                )}
+        </div>
+        {openPositions.length > 0 ? (
+          <>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-border">
+                    {["진입시간", "진입가", "수량 (BTC)", "투입금", "현재가", "수익률"].map((h) => (
+                      <th
+                        key={h}
+                        className={`py-3 px-3 text-xs text-text-secondary font-medium uppercase tracking-wide ${
+                          h === "진입시간" ? "text-left" : "text-right"
+                        }`}
+                      >
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {openPositions.map((pos) => (
+                    <tr key={pos.id} className="border-b border-border/50 hover:bg-card/30 transition-colors">
+                      <td className="py-3 px-3 text-xs text-text-secondary">{pos.entry_time?.slice(5, 16) || "—"}</td>
+                      <td className="text-right py-3 px-3 font-mono">₩{fmt(pos.entry_price)}</td>
+                      <td className="text-right py-3 px-3 font-mono">{pos.quantity}</td>
+                      <td className="text-right py-3 px-3 font-mono">₩{fmt(pos.entry_krw)}</td>
+                      <td className="text-right py-3 px-3 font-mono">₩{fmt(pos.current_price_krw)}</td>
+                      <td className={`text-right py-3 px-3 font-mono font-semibold ${
+                        (pos.pnl_pct ?? 0) >= 0 ? "profit-text" : "loss-text"
+                      }`}>
+                        {pct(pos.pnl_pct)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="mt-3 pt-3 border-t border-border flex flex-wrap gap-6 text-xs text-text-secondary">
+              <div>
+                총 투입금 <span className="font-mono text-text-primary ml-1">₩{fmt(summary.total_invested)}</span>
               </div>
-              <div className="pt-3 border-t border-border text-xs text-text-secondary">
-                <div className="flex justify-between">
-                  <span>총평가</span>
-                  <span className="font-mono">₩{fmt(summary.total_eval)}</span>
-                </div>
-                <div className="flex justify-between mt-1">
-                  <span>미실현 손익</span>
-                  <span className={`font-mono ${
-                    summary.unrealized_pnl >= 0 ? "profit-text" : "loss-text"
-                  }`}>
-                    ₩{fmt(summary.unrealized_pnl)}
-                  </span>
-                </div>
+              <div>
+                총 평가 <span className="font-mono text-text-primary ml-1">₩{fmt(summary.total_eval)}</span>
+              </div>
+              <div>
+                미실현 손익{" "}
+                <span className={`font-mono ml-1 ${(summary.unrealized_pnl ?? 0) >= 0 ? "profit-text" : "loss-text"}`}>
+                  ₩{fmt(summary.unrealized_pnl)}
+                  {summary.unrealized_pnl_pct != null && (
+                    <span className="ml-1 opacity-75">({pct(summary.unrealized_pnl_pct)})</span>
+                  )}
+                </span>
+              </div>
+              <div>
+                실현 손익 <span className={`font-mono ml-1 ${(summary.realized_pnl ?? 0) >= 0 ? "profit-text" : "loss-text"}`}>
+                  ₩{fmt(summary.realized_pnl)}
+                </span>
               </div>
             </div>
-          ) : (
-            <div className="text-center py-8 text-text-secondary">포지션 없음 (대기 중)</div>
-          )}
+          </>
+        ) : (
+          <div className="text-center py-8 text-text-secondary">포지션 없음 (대기 중)</div>
+        )}
+      </div>
+
+      {/* ── 거래 로그 | 뉴스 ── */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Trade Log */}
+        <div className="card">
+          <div className="card-header">
+            <h3 className="text-sm font-medium text-text-primary flex items-center gap-2">
+              <Activity className="w-4 h-4" /> 거래 로그
+            </h3>
+          </div>
+          <div className="space-y-0 max-h-52 overflow-y-auto">
+            {(trades || []).length > 0 ? (
+              trades.slice(0, 20).map((t, i) => {
+                const isBuy  = String(t.action || "").toUpperCase() === "BUY";
+                const isSell = String(t.action || "").toUpperCase() === "SELL";
+                return (
+                  <div
+                    key={i}
+                    className="flex items-center gap-2 text-xs py-1.5 border-b border-border/30 last:border-0"
+                  >
+                    <span className="text-text-muted shrink-0 w-[70px]">{(t.timestamp || "").slice(5, 16)}</span>
+                    <span className={`shrink-0 font-semibold w-7 ${isBuy ? "profit-text" : isSell ? "loss-text" : "text-text-secondary"}`}>
+                      {isBuy ? "매수" : isSell ? "매도" : "—"}
+                    </span>
+                    <span className="font-mono text-text-primary shrink-0">₩{fmt(t.price)}</span>
+                    <span className="text-text-muted truncate flex-1 pl-1">{t.reason || "—"}</span>
+                    {t.pnl_pct != null && (
+                      <span className={`font-mono shrink-0 ${t.pnl_pct > 0 ? "profit-text" : t.pnl_pct < 0 ? "loss-text" : "text-text-secondary"}`}>
+                        {pct(t.pnl_pct)}
+                      </span>
+                    )}
+                  </div>
+                );
+              })
+            ) : (
+              <div className="text-center py-6 text-text-secondary text-sm">거래 로그 없음</div>
+            )}
+          </div>
         </div>
 
-        {/* News Card */}
+        {/* News with links */}
         <div className="card">
           <div className="card-header">
             <h3 className="text-sm font-medium text-text-primary flex items-center gap-2">
               <Newspaper className="w-4 h-4" /> 뉴스 감성
             </h3>
           </div>
-          <div className="space-y-2 max-h-64 overflow-y-auto">
+          <div className="space-y-2 max-h-52 overflow-y-auto">
             {newsRows.length > 0 ? (
               newsRows.slice(0, 8).map((row, i) => (
                 <div key={i} className="flex items-start gap-2 text-xs">
-                  <span className="text-text-muted mt-0.5">•</span>
-                  <span className="text-text-secondary leading-relaxed">{row.headline || row.title}</span>
+                  <span className="text-text-muted mt-0.5 shrink-0">•</span>
+                  {row.url ? (
+                    <a
+                      href={row.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-blue-400 hover:text-blue-300 leading-relaxed transition-colors"
+                    >
+                      {row.headline || row.title}
+                    </a>
+                  ) : (
+                    <span className="text-text-secondary leading-relaxed">{row.headline || row.title}</span>
+                  )}
                 </div>
               ))
             ) : (
-              <div className="text-center py-8 text-text-secondary text-sm">뉴스 데이터 없음</div>
+              <div className="text-center py-6 text-text-secondary text-sm">뉴스 데이터 없음</div>
             )}
           </div>
         </div>
@@ -473,7 +518,12 @@ export default function BtcPage() {
             </LineChart>
           </ResponsiveContainer>
         ) : (
-          <div className="text-center py-12 text-text-secondary text-sm">거래 데이터 없음</div>
+          <div className="text-center py-12">
+            <div className="text-text-secondary text-sm">체결 이력 축적 중</div>
+            <div className="text-text-muted text-xs mt-1">
+              CLOSED 포지션 2건 이상 시 곡선 표시 — 현재 {port?.closed_positions?.length ?? 0}건
+            </div>
+          </div>
         )}
       </div>
 
@@ -549,13 +599,6 @@ export default function BtcPage() {
         </div>
       </div>
 
-      {/* Recent Trades */}
-      <div className="card">
-        <div className="card-header">
-          <h3 className="text-sm font-medium text-text-primary">최근 거래 기록</h3>
-        </div>
-        <TradeTable trades={trades || []} columns={TRADE_COLS} />
-      </div>
     </div>
   );
 }

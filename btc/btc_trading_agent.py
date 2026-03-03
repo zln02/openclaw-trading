@@ -610,13 +610,21 @@ def close_all_positions(exit_price):
         for pos in res.data:
             pnl     = (exit_price - pos["entry_price"]) * pos["quantity"]
             pnl_pct = (exit_price - pos["entry_price"]) / pos["entry_price"] * 100
-            supabase.table("btc_position").update({
-                "status":     "CLOSED",
-                "exit_price": exit_price,
-                "exit_time":  datetime.now().isoformat(),
-                "pnl":        round(pnl, 2),
-                "pnl_pct":    round(pnl_pct, 2),
-            }).eq("id", pos["id"]).execute()
+            try:
+                supabase.table("btc_position").update({
+                    "status":     "CLOSED",
+                    "exit_price": exit_price,
+                    "exit_time":  datetime.now().isoformat(),
+                    "pnl":        round(pnl, 2),
+                    "pnl_pct":    round(pnl_pct, 2),
+                }).eq("id", pos["id"]).execute()
+            except Exception:
+                # pnl/pnl_pct 컬럼 미존재 시 최소 업데이트 (btc_position_schema.sql 실행 전 graceful fallback)
+                supabase.table("btc_position").update({
+                    "status":     "CLOSED",
+                    "exit_price": exit_price,
+                    "exit_time":  datetime.now().isoformat(),
+                }).eq("id", pos["id"]).execute()
     except Exception as e:
         log.error(f"포지션 종료 실패: {e}")
 
