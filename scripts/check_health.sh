@@ -122,13 +122,14 @@ BTC_RESULT=$(check_agent_health "BTC" "$BTC_LOG" "btc_trading_agent.py" "cron")
 
 echo "BTC 상태: $BTC_RESULT"
 
+HINT="%0A%0A💬 제이한테 <b>'BTC 왜 그런지 보고 해결해'</b> 라고 하면 자동 진단할게!"
 if [ "$BTC_RESULT" = "NO_PROCESS" ]; then
-    send_tg "🚨 <b>[헬스체크] BTC 에이전트 미실행</b>%0A프로세스를 찾을 수 없습니다.%0A%0A▶ 즉시 확인 필요: btc_trading_agent.py"
+    send_tg "🚨 <b>[헬스체크] BTC 에이전트 미실행</b>%0A프로세스를 찾을 수 없습니다.$HINT"
 elif [ "$BTC_RESULT" = "NO_LOG" ]; then
-    send_tg "🚨 <b>[헬스체크] BTC</b>%0A로그 파일 없음: $BTC_LOG%0A%0A▶ 로그 경로 확인 필요"
+    send_tg "🚨 <b>[헬스체크] BTC</b>%0A로그 파일 없음: $BTC_LOG$HINT"
 elif [ "$BTC_RESULT" != "ok" ]; then
     LAST_BTC=$(stat -c %Y "$BTC_LOG" 2>/dev/null || echo 0)
-    send_tg "🚨 <b>[헬스체크] BTC 에이전트 장기 미실행</b>%0A${BTC_RESULT}분째 로그 미갱신%0A마지막 실행: $(date -d @${LAST_BTC} '+%m/%d %H:%M:%S')%0A%0A▶ 확인 후 재시작 필요"
+    send_tg "🚨 <b>[헬스체크] BTC 에이전트 장기 미실행</b>%0A${BTC_RESULT}분째 로그 미갱신%0A마지막 실행: $(date -d @${LAST_BTC} '+%m/%d %H:%M:%S')$HINT"
 fi
 
 # ── 2. KR 주식 에이전트 체크 (평일 09:00~15:30 장중에만, 크론 주기 실행 → 로그만 검사) ─
@@ -138,13 +139,14 @@ if [ "$DAY" -le 5 ] && [ "$TIME" -ge 900 ] && [ "$TIME" -le 1530 ]; then
     
     echo "KR 상태: $KR_RESULT"
     
+    KR_HINT="%0A%0A💬 제이한테 <b>'KR 왜 그런지 보고 해결해'</b> 라고 해봐!"
     if [ "$KR_RESULT" = "NO_PROCESS" ]; then
-        send_tg "🚨 <b>[헬스체크] KR 주식 에이전트 미실행</b>%0A장중인데 프로세스를 찾을 수 없습니다.%0A%0A▶ 즉시 확인 필요: stock_trading_agent.py"
+        send_tg "🚨 <b>[헬스체크] KR 주식 에이전트 미실행</b>%0A장중인데 프로세스를 찾을 수 없습니다.$KR_HINT"
     elif [ "$KR_RESULT" = "NO_LOG" ]; then
-        send_tg "🚨 <b>[헬스체크] KR 주식</b>%0A로그 파일 없음: $KR_LOG%0A%0A▶ 로그 경로 확인 필요"
+        send_tg "🚨 <b>[헬스체크] KR 주식</b>%0A로그 파일 없음: $KR_LOG$KR_HINT"
     elif [ "$KR_RESULT" != "ok" ]; then
         LAST_KR=$(stat -c %Y "$KR_LOG" 2>/dev/null || echo 0)
-        send_tg "🚨 <b>[헬스체크] KR 주식 에이전트 장기 미실행</b>%0A${KR_RESULT}분째 로그 미갱신%0A마지막 실행: $(date -d @${LAST_KR} '+%m/%d %H:%M:%S')%0A%0A▶ 확인 후 재시작 필요"
+        send_tg "🚨 <b>[헬스체크] KR 주식 에이전트 장기 미실행</b>%0A${KR_RESULT}분째 로그 미갱신%0A마지막 실행: $(date -d @${LAST_KR} '+%m/%d %H:%M:%S')$KR_HINT"
     fi
 else
     echo "KR 상태: 장중 아니므로 체크 생략"
@@ -169,13 +171,14 @@ if [ "$US_ACTIVE" -eq 1 ]; then
     
     echo "US 상태: $US_RESULT"
     
+    US_HINT="%0A%0A💬 제이한테 <b>'US 왜 그런지 보고 해결해'</b> 라고 해봐!"
     if [ "$US_RESULT" = "NO_PROCESS" ]; then
-        send_tg "🚨 <b>[헬스체크] US 주식 에이전트 미실행</b>%0A장중인데 프로세스를 찾을 수 없습니다.%0A%0A▶ 즉시 확인 필요: us_stock_trading_agent.py"
+        send_tg "🚨 <b>[헬스체크] US 주식 에이전트 미실행</b>%0A장중인데 프로세스를 찾을 수 없습니다.$US_HINT"
     elif [ "$US_RESULT" = "NO_LOG" ]; then
-        send_tg "🚨 <b>[헬스체크] US 주식</b>%0A로그 파일 없음: $US_LOG%0A%0A▶ 로그 경로 확인 필요"
+        send_tg "🚨 <b>[헬스체크] US 주식</b>%0A로그 파일 없음: $US_LOG$US_HINT"
     elif [ "$US_RESULT" != "ok" ]; then
         LAST_US=$(stat -c %Y "$US_LOG" 2>/dev/null || echo 0)
-        send_tg "🚨 <b>[헬스체크] US 주식 에이전트 장기 미실행</b>%0A${US_RESULT}분째 로그 미갱신%0A마지막 실행: $(date -d @${LAST_US} '+%m/%d %H:%M:%S')%0A%0A▶ 확인 후 재시작 필요"
+        send_tg "🚨 <b>[헬스체크] US 주식 에이전트 장기 미실행</b>%0A${US_RESULT}분째 로그 미갱신%0A마지막 실행: $(date -d @${LAST_US} '+%m/%d %H:%M:%S')$US_HINT"
     fi
 else
     echo "US 상태: 장중 아니므로 체크 생략"
@@ -184,7 +187,7 @@ fi
 # ── 4. 대시보드 HTTP 체크 ─────────────────────────────────────────────────
 HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/stocks 2>/dev/null)
 if [ "$HTTP_CODE" != "200" ]; then
-    send_tg "🚨 <b>[헬스체크] 대시보드 응답 없음</b>%0AHTTP ${HTTP_CODE}%0A재시작 필요!"
+    send_tg "🚨 <b>[헬스체크] 대시보드 응답 없음</b>%0AHTTP ${HTTP_CODE}%0A%0A💬 제이한테 <b>'대시보드 고쳐줘'</b> 라고 해봐!"
 else
     echo "대시보드 상태: 정상 (HTTP 200)"
 fi
