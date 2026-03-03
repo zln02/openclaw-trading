@@ -21,7 +21,7 @@ from common.logger import get_logger
 from common.market_data import get_market_regime
 from common.supabase_client import get_supabase
 from common.telegram import Priority, send_telegram
-from common.utils import safe_float as _safe_float
+from common.utils import parse_json_from_text as _json_parse, safe_float as _safe_float
 
 load_env()
 log = get_logger("strategy_reviewer")
@@ -42,16 +42,6 @@ def _to_date(value: str | date | datetime | None = None) -> date:
 def _slice_iso(dt: str) -> str:
     return str(dt or "")[:10]
 
-
-def _json_parse(raw: str) -> dict:
-    text = raw.strip().replace("```json", "").replace("```", "").strip()
-    if text.startswith("{") and text.endswith("}"):
-        return json.loads(text)
-    s = text.find("{")
-    e = text.rfind("}")
-    if s >= 0 and e > s:
-        return json.loads(text[s : e + 1])
-    raise ValueError("JSON object not found")
 
 
 def _normalize_factor_weights(weights: dict) -> dict:

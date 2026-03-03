@@ -28,7 +28,7 @@ from common.config import BRAIN_PATH
 from common.data import NewsStream, collect_news_once
 from common.env_loader import load_env
 from common.logger import get_logger
-from common.utils import safe_float as _safe_float
+from common.utils import parse_json_from_text as _json_parse, safe_float as _safe_float
 
 load_env()
 log = get_logger("news_analyst")
@@ -77,16 +77,6 @@ def _utc_now() -> datetime:
 def _today_key(now: Optional[datetime] = None) -> str:
     return (now or _utc_now()).date().isoformat()
 
-
-def _json_parse(raw: str) -> dict:
-    text = (raw or "").strip().replace("```json", "").replace("```", "").strip()
-    if text.startswith("{") and text.endswith("}"):
-        return json.loads(text)
-    s = text.find("{")
-    e = text.rfind("}")
-    if s >= 0 and e > s:
-        return json.loads(text[s : e + 1])
-    raise ValueError("JSON object not found")
 
 
 def _normalize_label(label: str) -> str:

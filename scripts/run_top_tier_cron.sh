@@ -12,34 +12,9 @@
 
 set -u
 
-OPENCLAW_JSON="/home/wlsdud5035/.openclaw/openclaw.json"
-OPENCLAW_ENV="/home/wlsdud5035/.openclaw/.env"
-WORKSPACE="/home/wlsdud5035/.openclaw/workspace"
-
-cd "$WORKSPACE" || exit 1
+source "$(dirname "$0")/load_env.sh"
+load_openclaw_env
 export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}$WORKSPACE"
-
-if [ -f "$OPENCLAW_ENV" ]; then
-  set -a
-  source "$OPENCLAW_ENV"
-  set +a
-fi
-
-ENV_VARS=$(.venv/bin/python3 -c "
-import json, os
-from shlex import quote
-try:
-    d = json.load(open('$OPENCLAW_JSON'))
-except Exception:
-    d = {}
-for k, v in (d.get('env') or {}).items():
-    if k != 'shellEnv' and isinstance(v, (str, int, float)) and not isinstance(v, bool):
-        print(f'{k}={quote(str(v))}')
-" 2>/dev/null)
-
-while IFS= read -r line; do
-  export "$line" 2>/dev/null
-done <<< "$ENV_VARS"
 
 MODE="${1:-all}"
 KR_SYMBOL="${KR_SYMBOL:-005930}"
