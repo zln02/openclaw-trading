@@ -151,6 +151,40 @@ RISK = {
     "dynamic_weights":   True,      # 시장 상태 기반 스코어 가중치 동적 조절
 }
 
+# ── Level 5: 파라미터 자동 로드 (param_optimizer / alpha_researcher) ──
+_l5_params: dict = {}   # agent_params.json + alpha best_params.params 통합 뷰
+try:
+    from quant.param_optimizer import load_best_params as _load_opt_params
+    _opt_params = _load_opt_params()  # brain/agent_params.json
+    if _opt_params:
+        _l5_params.update(_opt_params)
+        _risk_overrideable = {"stop_loss", "invest_ratio", "buy_composite_min", "atr_multiplier"}
+        applied = {}
+        for _k, _v in _opt_params.items():
+            if _k in _risk_overrideable and _v is not None:
+                RISK[_k] = _v
+                applied[_k] = _v
+        if applied:
+            log.info(f"[Level5] agent_params 적용: {applied}")
+except Exception as _e:
+    log.debug(f"Level5 agent_params 로드 스킵: {_e}")
+
+# alpha/best_params.json — agent_params.json에 아직 반영 안된 경우 fallback
+try:
+    _best_p = Path(__file__).resolve().parents[1] / "brain" / "alpha" / "best_params.json"
+    if _best_p.exists():
+        _bp = json.loads(_best_p.read_text(encoding="utf-8"))
+        _bp_params = _bp.get("params", {})
+        for _k, _v in _bp_params.items():
+            if _k not in _l5_params:        # agent_params에 없는 경우만 병합
+                _l5_params[_k] = _v
+        if _bp_params:
+            log.info(f"[Level5] best_params 로드: {_bp_params}")
+        if "atr_multiplier" in _bp_params and "atr_multiplier" not in (_opt_params or {}):
+            RISK["atr_multiplier"] = _bp_params["atr_multiplier"]
+except Exception as _e:
+    log.debug(f"Level5 best_params 로드 스킵: {_e}")
+
 # ── 텔레그램 ──────────────────────────────────────
 def send_telegram(msg: str, priority: "_TgPriority" = _TgPriority.URGENT) -> None:
     _tg_send(msg, priority=priority)
@@ -165,13 +199,15 @@ def calculate_indicators(df) -> dict:
     from ta.momentum import RSIIndicator
     from ta.volatility import BollingerBands, AverageTrueRange
 
-    close = df["close"]
+    close   = df["close"]
+    rsi_w   = int(_l5_params.get("rsi_window", 14))
+    bb_w    = int(_l5_params.get("bb_window", 20))
     ema20 = EMAIndicator(close, window=20).ema_indicator().iloc[-1]
     ema50 = EMAIndicator(close, window=50).ema_indicator().iloc[-1]
-    rsi   = RSIIndicator(close, window=14).rsi().iloc[-1]
+    rsi   = RSIIndicator(close, window=rsi_w).rsi().iloc[-1]
     macd_obj = MACD(close)
     macd  = macd_obj.macd_diff().iloc[-1]
-    bb    = BollingerBands(close, window=20)
+    bb    = BollingerBands(close, window=bb_w)
     atr   = AverageTrueRange(df["high"], df["low"], close, window=14).average_true_range().iloc[-1]
 
     return {
@@ -308,8 +344,10 @@ def get_daily_momentum() -> dict:
         close = df["Close"].squeeze()
         from ta.momentum import RSIIndicator
         from ta.volatility import BollingerBands
-        rsi_d = RSIIndicator(close, window=14).rsi().iloc[-1]
-        bb = BollingerBands(close, window=20)
+        rsi_w = int(_l5_params.get("rsi_window", 14))
+        bb_w  = int(_l5_params.get("bb_window", 20))
+        rsi_d = RSIIndicator(close, window=rsi_w).rsi().iloc[-1]
+        bb = BollingerBands(close, window=bb_w)
         bb_h, bb_l = bb.bollinger_hband().iloc[-1], bb.bollinger_lband().iloc[-1]
         bb_pct = (close.iloc[-1] - bb_l) / (bb_h - bb_l) * 100 if bb_h > bb_l else 50
         vol = df["Volume"].squeeze()
@@ -595,7 +633,10 @@ def check_daily_loss() -> bool:
         total_pnl = sum(float(r["pnl"] or 0) for r in res.data)
         total_krw = sum(float(r["entry_krw"] or 0) for r in res.data)
         if total_krw > 0 and (total_pnl / total_krw) <= RISK["max_daily_loss"]:
-            send_telegram("🚨 <b>일일 손실 한도 -5% 초과</b>\n봇 자동 정지 — 내일 재시작")
+            send_telegram(
+                f"🚨 <b>일일 손실 한도 {RISK['max_daily_loss']*100:.0f}% 초과</b>\n"
+                f"봇 자동 정지 — 내일 재시작"
+            )
             return True
     except Exception:
         pass
