@@ -155,7 +155,7 @@ async def get_us_system():
 @router.get("/api/us/trades")
 async def get_us_trades(
     limit: int = Query(default=50, le=500),
-    result: str = Query(default=None, regex="^(OPEN|CLOSED)$"),
+    result: str = Query(default=None, pattern="^(OPEN|CLOSED)$"),
     hours: int = Query(default=None, ge=1, le=168)
 ):
     """US 거래 내역 (필터링 지원)"""
