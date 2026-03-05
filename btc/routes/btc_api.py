@@ -18,18 +18,39 @@ supabase = get_supabase()
 router = APIRouter()
 
 # ── caches ──────────────────────────────────────────────
-_upbit_cache = {"time": 0, "krw": None, "ok": False}
+_upbit_cache = {
+    "time": 0,
+    # Legacy: historically used as "KRW available" balance
+    "krw": None,
+    # New: expose available/locked/total for clarity
+    "krw_available": None,
+    "krw_locked": None,
+    "krw_total": None,
+    "ok": False,
+}
 _news_cache = {"data": [], "ts": 0}
 _trend_cache = {"value": "SIDEWAYS", "time": 0}
+_fx_cache = {"rate": 1300.0, "time": 0}  # USD to KRW fallback
 NEWS_CACHE_TTL = 300
+FX_CACHE_TTL = 3600
 
 
 def _refresh_upbit_cache():
     global _upbit_cache
+    # Cache TTL: 60s. However, if we have a KRW value but the extended fields
+    # are still missing (e.g. after a hot reload/deploy), refresh immediately.
     if time.time() - _upbit_cache["time"] <= 60:
-        return
+        if _upbit_cache.get("krw") is not None and (
+            _upbit_cache.get("krw_locked") is None or _upbit_cache.get("krw_total") is None
+        ):
+            pass
+        else:
+            return
     _upbit_cache["time"] = time.time()
     _upbit_cache["krw"] = None
+    _upbit_cache["krw_available"] = None
+    _upbit_cache["krw_locked"] = None
+    _upbit_cache["krw_total"] = None
     _upbit_cache["ok"] = False
     try:
         upbit_key = os.environ.get("UPBIT_ACCESS_KEY", "")
@@ -37,11 +58,63 @@ def _refresh_upbit_cache():
         if upbit_key and upbit_secret:
             import pyupbit
             upbit = pyupbit.Upbit(upbit_key, upbit_secret)
-            bal = upbit.get_balance("KRW")
-            _upbit_cache["krw"] = float(bal) if bal is not None else None
+            try:
+                balances = upbit.get_balances() or []
+                krw = next((b for b in balances if b.get("currency") == "KRW"), None)
+                if krw is not None:
+                    available = float(krw.get("balance") or 0)
+                    locked = float(krw.get("locked") or 0)
+                    total = available + locked
+                    _upbit_cache["krw_available"] = available
+                    _upbit_cache["krw_locked"] = locked
+                    _upbit_cache["krw_total"] = total
+                    # Keep legacy field as "available" so existing logic stays consistent.
+                    _upbit_cache["krw"] = available
+                else:
+                    bal = upbit.get_balance("KRW")
+                    _upbit_cache["krw"] = float(bal) if bal is not None else None
+                    _upbit_cache["krw_available"] = _upbit_cache["krw"]
+                    _upbit_cache["krw_locked"] = 0.0 if _upbit_cache["krw"] is not None else None
+                    _upbit_cache["krw_total"] = _upbit_cache["krw"]
+            except Exception:
+                bal = upbit.get_balance("KRW")
+                _upbit_cache["krw"] = float(bal) if bal is not None else None
+                _upbit_cache["krw_available"] = _upbit_cache["krw"]
+                _upbit_cache["krw_locked"] = 0.0 if _upbit_cache["krw"] is not None else None
+                _upbit_cache["krw_total"] = _upbit_cache["krw"]
             _upbit_cache["ok"] = True
     except Exception as e:
         log.error(f"upbit cache: {e}")
+
+
+def _get_fx_rate():
+    """Fetch real-time USD to KRW exchange rate."""
+    global _fx_cache
+    if time.time() - _fx_cache["time"] < FX_CACHE_TTL:
+        return _fx_cache["rate"]
+    try:
+        # Try Upbit first (most reliable for KRW pairs)
+        import pyupbit
+        price = pyupbit.get_current_price("KRW-USD")
+        if price:
+            _fx_cache["rate"] = float(price)
+            _fx_cache["time"] = time.time()
+            return _fx_cache["rate"]
+    except Exception:
+        pass
+    
+    try:
+        # Fallback: Get rate from exchange API
+        r = requests.get("https://api.exchangerate-api.com/v4/latest/USD", timeout=5)
+        if r.status_code == 200:
+            rate = r.json().get("rates", {}).get("KRW", 1300.0)
+            _fx_cache["rate"] = float(rate)
+            _fx_cache["time"] = time.time()
+            return _fx_cache["rate"]
+    except Exception:
+        pass
+    
+    return _fx_cache["rate"]  # Return cached or default (1300)
 
 
 def _get_hourly_trend():
@@ -124,13 +197,15 @@ def _compute_composite_sync():
         pos = pr.data[0] if pr.data else None
 
     cur_price = float(close.iloc[-1])
+    fx_rate = _get_fx_rate()  # Real-time FX rate instead of hardcoded 1450
     pos_pnl = None
     if pos:
         entry_p = float(pos.get("entry_price", 0))
         if entry_p > 0:
-            pos_pnl = {"pnl_pct": round((cur_price * 1450 - entry_p) / entry_p * 100, 2),
+            pos_pnl = {"pnl_pct": round((cur_price * fx_rate - entry_p) / entry_p * 100, 2),
                        "entry_price": entry_p, "quantity": pos.get("quantity", 0),
-                       "entry_krw": pos.get("entry_krw", 0)}
+                       "entry_krw": pos.get("entry_krw", 0),
+                       "current_fx_rate": fx_rate}
 
     return {
         "composite": comp,
@@ -155,8 +230,25 @@ async def api_btc_portfolio():
     if not supabase:
         return {"error": "DB 미연결", "open_positions": [], "closed_positions": [], "summary": {}}
     try:
-        open_rows = supabase.table("btc_position").select("*").eq("status", "OPEN").order("entry_time", desc=True).execute().data or []
-        closed_rows = supabase.table("btc_position").select("*").eq("status", "CLOSED").order("exit_time", desc=True).limit(50).execute().data or []
+        # NOTE: status values in DB are historically inconsistent in case (OPEN/open, CLOSED/closed)
+        open_rows = (
+            supabase.table("btc_position")
+            .select("*")
+            .in_("status", ["OPEN", "open"])
+            .execute()
+            .data
+            or []
+        )
+        closed_rows = (
+            supabase.table("btc_position")
+            .select("*")
+            .in_("status", ["CLOSED", "closed"])
+            .order("exit_time", desc=True)
+            .limit(50)
+            .execute()
+            .data
+            or []
+        )
 
         cur_price_krw = 0
         try:
@@ -169,7 +261,8 @@ async def api_btc_portfolio():
                 import yfinance as _yf
                 df = _yf.download("BTC-USD", period="1d", interval="1d", progress=False)
                 if not df.empty:
-                    cur_price_krw = float(df["Close"].iloc[-1]) * 1450
+                    fx_rate = _get_fx_rate()  # Use dynamic FX rate instead of hardcoded 1450
+                    cur_price_krw = float(df["Close"].iloc[-1]) * fx_rate
             except Exception:
                 pass
 
@@ -230,6 +323,24 @@ async def api_btc_portfolio():
 
         _refresh_upbit_cache()
         krw_balance = _upbit_cache.get("krw", 0) or 0
+        krw_locked = _upbit_cache.get("krw_locked")
+        krw_total = _upbit_cache.get("krw_total")
+
+        # Summary's estimated_asset should reflect *live Upbit balances*.
+        # Keep DB-derived total_eval_open/total_invested_open for position analytics.
+        upbit_btc_balance = None
+        upbit_btc_value_krw = None
+        try:
+            upbit_key = os.environ.get("UPBIT_ACCESS_KEY", "")
+            upbit_secret = os.environ.get("UPBIT_SECRET_KEY", "")
+            if upbit_key and upbit_secret and _upbit_cache["ok"]:
+                import pyupbit
+
+                upbit = pyupbit.Upbit(upbit_key, upbit_secret)
+                upbit_btc_balance = float(upbit.get_balance("BTC") or 0)
+                upbit_btc_value_krw = float(upbit_btc_balance) * float(cur_price_krw or 0)
+        except Exception as e:
+            log.error(f"upbit balance(BTC) fetch failed: {e}")
 
         unrealized_pnl = total_eval_open - total_invested_open
         total_pnl = total_realized_pnl + unrealized_pnl
@@ -237,6 +348,8 @@ async def api_btc_portfolio():
 
         summary = {
             "krw_balance": krw_balance,
+            "krw_locked": krw_locked,
+            "krw_total": krw_total,
             "btc_price_krw": round(cur_price_krw),
             "open_count": len(open_positions),
             "closed_count": len(closed_rows),
@@ -249,7 +362,10 @@ async def api_btc_portfolio():
             "wins": wins,
             "losses": losses,
             "winrate": round(winrate, 1),
-            "estimated_asset": round(krw_balance + total_eval_open),
+            "estimated_asset": round(
+                krw_balance + (upbit_btc_value_krw if upbit_btc_value_krw is not None else total_eval_open)
+            ),
+            "upbit_btc_balance": upbit_btc_balance,
         }
 
         return {
@@ -372,6 +488,8 @@ async def get_stats():
 
         _refresh_upbit_cache()
         krw_balance = _upbit_cache["krw"]
+        krw_locked = _upbit_cache.get("krw_locked")
+        krw_total = _upbit_cache.get("krw_total")
 
         trend = _get_hourly_trend()
 
@@ -395,6 +513,8 @@ async def get_stats():
             "position": position,
             "trend": trend,
             "krw_balance": krw_balance,
+            "krw_locked": krw_locked,
+            "krw_total": krw_total,
         }
     except Exception as e:
         log.error(f"stats: {e}")
@@ -404,7 +524,7 @@ async def get_stats():
 @router.get("/api/trades")
 async def get_trades(
     limit: int = Query(default=50, le=500),
-    action: str = Query(default=None, regex="^(BUY|SELL|HOLD)$"),
+    action: str = Query(default=None, pattern="^(BUY|SELL|HOLD)$"),
     hours: int = Query(default=None, ge=1, le=168)  # 1시간~7일
 ):
     """거래 내역 조회 (필터링 지원)"""
