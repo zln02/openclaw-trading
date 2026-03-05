@@ -278,6 +278,10 @@ async def api_btc_portfolio():
             pnl_pct = (pnl_krw / entry_krw * 100) if entry_krw > 0 else 0
             total_invested_open += entry_krw
             total_eval_open += eval_krw
+            # Compute default stop_loss and take_profit if not set
+            sl = p.get("stop_loss") or (entry_price * 0.97)  # 3% stop loss
+            tp = p.get("take_profit") or (entry_price * 1.12)  # 12% take profit
+            
             open_positions.append({
                 "id": p.get("id"),
                 "entry_price": entry_price,
@@ -289,8 +293,8 @@ async def api_btc_portfolio():
                 "pnl_krw": round(pnl_krw),
                 "pnl_pct": round(pnl_pct, 2),
                 "strategy": p.get("strategy") or "",
-                "stop_loss": p.get("stop_loss"),
-                "take_profit": p.get("take_profit"),
+                "stop_loss": round(float(sl), 2) if sl else None,
+                "take_profit": round(float(tp), 2) if tp else None,
             })
 
         closed_positions = []
