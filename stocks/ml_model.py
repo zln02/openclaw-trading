@@ -473,6 +473,7 @@ def train_model():
 
     with open(MODEL_PATH, 'wb') as f:
         pickle.dump(model, f)
+    os.chmod(MODEL_PATH, 0o666)  # 어느 유저든 다음 저장 가능하도록
     print(f'\n모델 저장: {MODEL_PATH}')
     print(f'메타 저장: {META_PATH}')
 
@@ -557,6 +558,7 @@ def retrain_from_live_trades(min_samples: int = 30) -> bool:
 
     with open(MODEL_PATH, 'wb') as f:
         pickle.dump(model, f)
+    os.chmod(MODEL_PATH, 0o666)  # 어느 유저든 다음 저장 가능하도록
     print(f'실매매 반영 모델 저장: {MODEL_PATH}')
     return True
 

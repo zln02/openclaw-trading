@@ -361,48 +361,18 @@ export default function BtcPage() {
             );
           })()}
         </div>
-        {openPositions.length > 0 ? (
-          <>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-border">
-                    {["진입시간", "진입가", "수량 (BTC)", "투입금", "현재가", "수익률"].map((h) => (
-                      <th
-                        key={h}
-                        className={`py-3 px-3 text-xs text-text-secondary font-medium uppercase tracking-wide ${
-                          h === "진입시간" ? "text-left" : "text-right"
-                        }`}
-                      >
-                        {h}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {openPositions.map((pos) => (
-                    <tr key={pos.id} className="border-b border-border/50 hover:bg-card/30 transition-colors">
-                      <td className="py-3 px-3 text-xs text-text-secondary">{pos.entry_time?.slice(5, 16) || "—"}</td>
-                      <td className="text-right py-3 px-3 font-mono">₩{fmt(pos.entry_price)}</td>
-                      <td className="text-right py-3 px-3 font-mono">{pos.quantity}</td>
-                      <td className="text-right py-3 px-3 font-mono">₩{fmt(pos.entry_krw)}</td>
-                      <td className="text-right py-3 px-3 font-mono">₩{fmt(pos.current_price_krw)}</td>
-                      <td className={`text-right py-3 px-3 font-mono font-semibold ${
-                        (pos.pnl_pct ?? 0) >= 0 ? "profit-text" : "loss-text"
-                      }`}>
-                        {pct(pos.pnl_pct)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div className="mt-3 pt-3 border-t border-border flex flex-wrap gap-6 text-xs text-text-secondary">
+        {/* 잔고 요약 — 항상 표시 */}
+        <div className="px-4 py-3 border-b border-border flex flex-wrap gap-6 text-xs text-text-secondary bg-card/30">
+          <div>
+            원화 잔고 <span className="font-mono text-text-primary ml-1">₩{fmt(summary.krw_balance)}</span>
+          </div>
+          <div>
+            총 추정자산 <span className="font-mono text-amber-400 font-semibold ml-1">₩{fmt(summary.estimated_asset)}</span>
+          </div>
+          {openPositions.length > 0 && (
+            <>
               <div>
                 총 투입금 <span className="font-mono text-text-primary ml-1">₩{fmt(summary.total_invested)}</span>
-              </div>
-              <div>
-                총 평가 <span className="font-mono text-text-primary ml-1">₩{fmt(summary.total_eval)}</span>
               </div>
               <div>
                 미실현 손익{" "}
@@ -413,13 +383,49 @@ export default function BtcPage() {
                   )}
                 </span>
               </div>
-              <div>
-                실현 손익 <span className={`font-mono ml-1 ${(summary.realized_pnl ?? 0) >= 0 ? "profit-text" : "loss-text"}`}>
-                  ₩{fmt(summary.realized_pnl)}
-                </span>
-              </div>
-            </div>
-          </>
+            </>
+          )}
+          <div>
+            실현 손익 <span className={`font-mono ml-1 ${(summary.realized_pnl ?? 0) >= 0 ? "profit-text" : "loss-text"}`}>
+              ₩{fmt(summary.realized_pnl)}
+            </span>
+          </div>
+        </div>
+        {openPositions.length > 0 ? (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border">
+                  {["진입시간", "진입가", "수량 (BTC)", "투입금", "현재가", "수익률"].map((h) => (
+                    <th
+                      key={h}
+                      className={`py-3 px-3 text-xs text-text-secondary font-medium uppercase tracking-wide ${
+                        h === "진입시간" ? "text-left" : "text-right"
+                      }`}
+                    >
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {openPositions.map((pos) => (
+                  <tr key={pos.id} className="border-b border-border/50 hover:bg-card/30 transition-colors">
+                    <td className="py-3 px-3 text-xs text-text-secondary">{pos.entry_time?.slice(5, 16) || "—"}</td>
+                    <td className="text-right py-3 px-3 font-mono">₩{fmt(pos.entry_price)}</td>
+                    <td className="text-right py-3 px-3 font-mono">{pos.quantity}</td>
+                    <td className="text-right py-3 px-3 font-mono">₩{fmt(pos.entry_krw)}</td>
+                    <td className="text-right py-3 px-3 font-mono">₩{fmt(pos.current_price_krw)}</td>
+                    <td className={`text-right py-3 px-3 font-mono font-semibold ${
+                      (pos.pnl_pct ?? 0) >= 0 ? "profit-text" : "loss-text"
+                    }`}>
+                      {pct(pos.pnl_pct)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         ) : (
           <div className="text-center py-8 text-text-secondary">포지션 없음 (대기 중)</div>
         )}

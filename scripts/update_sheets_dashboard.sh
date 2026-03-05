@@ -4,9 +4,8 @@
 cd /home/wlsdud5035/.openclaw/workspace
 source .venv/bin/activate
 
-# 환경변수 설정
-export GOOGLE_SHEET_ID="1HXBiwg38i2LrgOgC3mjokH0sTk7qgq7Q8o4jdWOe58s"
-export GOG_KEYRING_PASSWORD="openclaw-gog-secret"
+# 환경변수 로드 (openclaw.json env 섹션에서 관리)
+source "$(dirname "$0")/load_env.sh" 2>/dev/null && load_openclaw_env 2>/dev/null || true
 
 # 로그 기록
 echo "$(date): OpenClaw Google Sheets 대시보드 업데이트 시작" >> /var/log/openclaw_sheets.log

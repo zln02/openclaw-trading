@@ -40,6 +40,11 @@ def _load_env():
 
 _load_env()
 
+# ml_model은 같은 디렉토리(stocks/)에 있으므로 sys.path에 추가
+_STOCKS_DIR = str(Path(__file__).parent)
+if _STOCKS_DIR not in sys.path:
+    sys.path.insert(0, _STOCKS_DIR)
+
 from supabase import create_client  # noqa: E402
 from ml_model import _load_model, extract_features  # noqa: E402
 

@@ -1,5 +1,5 @@
 """BTC-related API endpoints."""
-import os, time, json, requests, subprocess, asyncio
+import os, time, json, requests, asyncio
 from datetime import datetime
 from pathlib import Path
 from fastapi import APIRouter, Query
@@ -515,12 +515,13 @@ async def get_system():
         mem = psutil.virtual_memory()
         disk = psutil.disk_usage("/")
 
-        result = subprocess.run(
-            ["bash", "-c", f"tail -200 {BTC_LOG} | grep '매매 사이클 시작'"],
-            capture_output=True, text=True
-        )
-        lines = result.stdout.strip().split("\n") if result.stdout else []
-        last_cron = lines[-1][:50] if lines else "기록 없음"
+        # tail + grep: 리스트 방식으로 파이프 없이 처리
+        try:
+            log_lines = BTC_LOG.read_text(encoding="utf-8", errors="ignore").splitlines()
+            cron_lines = [l for l in log_lines[-200:] if "매매 사이클 시작" in l]
+        except Exception:
+            cron_lines = []
+        last_cron = cron_lines[-1][:50] if cron_lines else "기록 없음"
 
         _refresh_upbit_cache()
         upbit_ok = _upbit_cache["ok"]

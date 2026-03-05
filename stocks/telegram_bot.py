@@ -285,9 +285,20 @@ def handle_command(cmd: str, chat_id: str):
         )
 
 
+def _is_authorized(chat_id: str) -> bool:
+    """발신자 검증: TG_CHAT 미설정 시 모든 명령 차단."""
+    if not TG_CHAT:
+        print(f"[보안] TELEGRAM_CHAT_ID 미설정 — 발신자({chat_id}) 차단")
+        return False
+    return str(chat_id) == str(TG_CHAT)
+
+
 def poll_updates():
     if not TG_TOKEN:
         print("TELEGRAM_BOT_TOKEN 미설정. 종료.")
+        return
+    if not TG_CHAT:
+        print("TELEGRAM_CHAT_ID 미설정. 보안상 봇을 시작하지 않습니다.")
         return
 
     last_update_id = None
@@ -310,7 +321,7 @@ def poll_updates():
 
                 if cb:
                     cid = str(cb["message"]["chat"]["id"])
-                    if TG_CHAT and cid != str(TG_CHAT):
+                    if not _is_authorized(cid):
                         continue
                     data_cmd = cb.get("data") or ""
                     handle_command(f"/{data_cmd}", cid)
@@ -319,7 +330,7 @@ def poll_updates():
                 if not msg:
                     continue
                 cid = str(msg["chat"]["id"])
-                if TG_CHAT and cid != str(TG_CHAT):
+                if not _is_authorized(cid):
                     continue
                 text = msg.get("text") or ""
                 if not text:

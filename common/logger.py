@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 from typing import Optional
@@ -82,21 +83,40 @@ class AgentLogger:
         ch.setFormatter(formatter)
         self._log.addHandler(ch)
 
-        # File handler — 텍스트 (DEBUG+, 하위 호환)
+        # File handler — stdout이 터미널일 때만 (cron 리다이렉트 시 중복 방지)
         if log_file is None:
             log_file = LOG_DIR / f"{name}.log"
-        fh = logging.FileHandler(log_file, encoding="utf-8")
-        fh.setLevel(logging.DEBUG)
-        fh.setFormatter(formatter)
-        self._log.addHandler(fh)
+        if sys.stdout.isatty():
+            try:
+                if log_file.exists() and not os.access(log_file, os.W_OK):
+                    try:
+                        log_file.unlink()
+                    except PermissionError:
+                        pass
+                fh = logging.FileHandler(log_file, encoding="utf-8")
+                fh.setLevel(logging.DEBUG)
+                fh.setFormatter(formatter)
+                self._log.addHandler(fh)
+            except PermissionError:
+                pass
 
         # JSON handler — 구조화 로그 (DEBUG+)
         json_dir = LOG_DIR / "json"
         json_dir.mkdir(parents=True, exist_ok=True)
-        jfh = logging.FileHandler(json_dir / f"{name}.jsonl", encoding="utf-8")
-        jfh.setLevel(logging.DEBUG)
-        jfh.setFormatter(JsonFormatter())
-        self._log.addHandler(jfh)
+        jsonl_path = json_dir / f"{name}.jsonl"
+        try:
+            # 권한 문제(root가 먼저 생성한 경우)를 방어: 쓰기 가능하면 그대로, 아니면 삭제 후 재생성
+            if jsonl_path.exists() and not os.access(jsonl_path, os.W_OK):
+                try:
+                    jsonl_path.unlink()
+                except PermissionError:
+                    pass  # 삭제도 안 되면 JSON 핸들러 없이 진행
+            jfh = logging.FileHandler(jsonl_path, encoding="utf-8")
+            jfh.setLevel(logging.DEBUG)
+            jfh.setFormatter(JsonFormatter())
+            self._log.addHandler(jfh)
+        except PermissionError:
+            pass  # JSON 구조화 로그 생략, 텍스트 로그는 정상 작동
 
     # ── convenience methods ──
 

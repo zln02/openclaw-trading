@@ -37,7 +37,7 @@ except Exception:
 
 SHEET_ID = os.environ.get("GOOGLE_SHEET_ID", "")
 SHEET_TAB = os.environ.get("GOOGLE_SHEET_TAB", "거래기록")
-GOG_PASSWORD = os.environ.get("GOG_KEYRING_PASSWORD", "openclaw-gog-secret")
+GOG_PASSWORD = os.environ.get("GOG_KEYRING_PASSWORD", "")
 
 # Excel 기본 컬럼 헤더 (시트와 동일한 순서)
 EXCEL_HEADERS = ["날짜", "마켓", "구분", "종목코드", "종목명", "가격", "수량", "수익률", "사유", "뉴스요약", "에이전트"]

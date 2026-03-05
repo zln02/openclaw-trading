@@ -28,6 +28,17 @@ node_modules/
 # Backups
 *.bak
 *.v1.*
+*.backup
+
+# 실수로 생성된 pip 아티팩트 / 파일명 오류
+=*
+
+# openclaw 시스템 파일 (로컬 전용)
+TOOLS.md
+.telegram_info_buffer.json
+
+# 백테스트 결과 (용량 큼)
+backtest/results/
 
 # Excluded directories
 archive/

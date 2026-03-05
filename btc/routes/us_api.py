@@ -170,9 +170,9 @@ async def get_us_trades(
         
         if hours:
             cutoff = (datetime.now() - timedelta(hours=hours)).isoformat()
-            query = query.gte("timestamp", cutoff)
-        
-        res = query.order("timestamp", desc=True).limit(limit).execute()
+            query = query.gte("created_at", cutoff)
+
+        res = query.order("created_at", desc=True).limit(limit).execute()
         return res.data or []
     except Exception as e:
         log.error(f"US trades error: {e}")

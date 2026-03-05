@@ -44,8 +44,22 @@ def _safe_path(path: str) -> Path:
 
 
 _BASH_BLOCKLIST = re.compile(
-    r"\b(rm\s+-rf|sudo|chmod\s+[0-7]{3,4}\s+/|dd\s+if=|mkfs|shutdown|reboot|"
-    r"curl\s+.*\|\s*sh|wget\s+.*\|\s*sh)\b",
+    r"(rm\s+-[a-z]*r[a-z]*f|rm\s+-[a-z]*f[a-z]*r"          # rm -rf 및 변형
+    r"|\bsudo\b|\bsu\b"                                       # 권한 상승
+    r"|\bchmod\s+[0-7]{3,4}\s+/"                             # 루트 권한 변경
+    r"|\bchown\s+root"                                        # root 소유권 변경
+    r"|\bdd\s+if="                                            # 디스크 덮어쓰기
+    r"|\bmkfs\b|\bfdisk\b|\bparted\b"                        # 파티션/포맷
+    r"|\bshutdown\b|\breboot\b|\bpoweroff\b|\bhalt\b"        # 시스템 종료
+    r"|\bcurl\s+.+\|\s*(ba)?sh|\bwget\s+.+\|\s*(ba)?sh"     # 원격 실행
+    r"|\beval\s*[\(\"]"                                       # eval 실행
+    r"|\$\([^)]*rm\b|\`[^`]*rm\b"                            # 명령치환으로 rm
+    r"|\b/bin/rm\b|\b/usr/bin/rm\b"                          # 전체 경로 rm
+    r"|\b:\s*\(\s*\)\s*\{.*:\|:&\}"                          # 포크 폭탄
+    r"|\bkill\s+-9\s+1\b|\bkillall\b"                        # 프로세스 강제 종료
+    r"|\b(python|python3|bash|sh)\s+-c\s+[\"'].*rm\b"        # 인터프리터 경유 rm
+    r"|/etc/passwd|/etc/shadow|/etc/crontab"                  # 시스템 파일 접근
+    r"|\biptables\b|\bnftables\b|\bufw\b)",                   # 방화벽 변경
     re.IGNORECASE,
 )
 

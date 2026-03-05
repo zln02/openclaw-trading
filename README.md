@@ -3,6 +3,8 @@
 BTC · KR 주식 · US 주식 자동매매 통합 플랫폼
 Level 5 — 연구-실전 루프 (알파 발굴 → 검증 → 자동 반영)
 
+> **포트폴리오 공개 프로젝트** — 실거래(BTC), 모의투자(KR), DRY-RUN(US) 환경에서 운영 중
+
 ---
 
 ## 시스템 레벨
@@ -114,11 +116,29 @@ flowchart LR
 
 ## 매매 전략
 
-### BTC — 레짐 적응형 복합 스코어
-- 복합 스코어 (F&G + RSI + 볼린저밴드 + 거래량 + 추세 + 7일 수익률) 기반 진입
-- 레짐(RISK_ON/OFF/TRANSITION/CRISIS)별 팩터 가중치 동적 조절
-- 매수: 스코어 ≥ 45 또는 극단 공포(F&G ≤ 10) 오버라이드
-- 손절 -3% / 익절 +15% / 트레일링 스탑 2% / 타임컷 7일 / 일일 최대 3회
+### BTC — 레짐 적응형 복합 스코어 (v6.2)
+
+**복합 스코어 (0~100점)**
+
+| 항목 | 배점 | 신호 소스 |
+|------|------|-----------|
+| Fear & Greed 지수 | 22점 | alternative.me |
+| 일봉 RSI | 20점 | yfinance (1h TTL 캐시) |
+| 1시간봉 추세 | 12점 | Upbit OHLCV |
+| 볼린저밴드 위치 | 12점 | yfinance |
+| 일봉 거래량 | 10점 | yfinance |
+| 펀딩비 | 8점 | 온체인 API |
+| 뉴스 감정 | ±8점 | CryptoPanic (키워드 분석) |
+| 롱/숏 비율 | 6점 | 온체인 API |
+| OI (미결제약정) | 5점 | 온체인 API |
+| 보너스 + 레짐 조정 | ±25점 | 레짐 분류기 |
+
+- 레짐(RISK_ON/OFF/TRANSITION/CRISIS)별 ±20점 조정, IC 기반 동적 가중치 적용 가능
+- **매수**: 복합스코어 ≥ 45 AND 1h 추세 ≠ DOWNTREND
+- **매수 오버라이드**: 극도공포(F&G ≤ 15), 거래량 3배 폭발, 김치프리미엄 역전
+- **매도 룰**: ① dRSI≥75+DOWNTREND ② F&G≥75+수익있음 ③ BB상단(85%)+dRSI≥65 ④ 추세전환+수익≥2% ⑤ 타임컷 7일
+- **청산**: ATR 동적 손절 / 고정 -3% / 분할익절(+8%→50%, +12%→25%, +15%→전량) / 적응형 트레일링
+- AI 보조 판단: GPT-4o-mini (룰 미발동 시, 복합스코어·온체인·일봉 지표 전달)
 
 ### KR 주식 — AI + ML 하이브리드 + 레짐 적응
 - 모멘텀 + RSI/BB/거래량 + DART 재무 스코어 (룰 기반 60%)
@@ -323,6 +343,42 @@ BRAVE_API_KEY=            # 뉴스 검색 (daily_loss_analyzer)
 -- US 스키마
 \i supabase/us_schema.sql
 ```
+
+---
+
+## AI 에이전트 팀 (Phase 14)
+
+### Claude 5-에이전트 자동매매 팀 (`agents/trading_agent_team.py`)
+- **Orchestrator** (claude-opus-4-6): 최종 BUY/SELL/HOLD 결정, adaptive thinking
+- **MarketAnalyst** (sonnet-4-6): 기술 지표 + 온체인 분석
+- **NewsAnalyst** (haiku-4-5): 실시간 뉴스 감정 분석
+- **RiskManager** (sonnet-4-6): 포지션 리스크·포트폴리오 평가
+- **Reporter** (haiku-4-5): 결정 사유 정리 + 텔레그램 발송
+
+```bash
+python -m agents.trading_agent_team --market btc
+```
+
+### AI 소프트웨어 회사 (`company/`)
+CEO(opus-4-6) → CTO / Backend / Frontend / Quant / DevOps / QA 위임 구조
+
+```bash
+python -m company --task "대시보드에 BTC 수익률 차트 추가해줘"
+python -m company --task "stock_api.py 버그 찾아줘" --role qa
+```
+
+---
+
+## 보안
+
+| 항목 | 구현 |
+|------|------|
+| 대시보드 인증 | HTTP Basic Auth (`DASHBOARD_USER` / `DASHBOARD_PASSWORD`) |
+| CORS | `GET`, `OPTIONS`만 허용 |
+| 텔레그램 봇 | `TELEGRAM_CHAT_ID` 미설정 시 봇 비활성화, 발신자 ID 검증 |
+| AI 회사 bash | 위험 명령어 블록리스트 (rm -rf, sudo, eval, 원격실행 등) |
+| 경로 제한 | WORKSPACE 외부 파일 접근 차단 |
+| API 키 관리 | 코드베이스에 하드코딩 금지 — `openclaw.json` 또는 `.env` 전용 |
 
 ---
 

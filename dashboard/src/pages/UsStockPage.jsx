@@ -90,7 +90,7 @@ export default function UsStockPage() {
   const { data: topStocks }  = usePolling(getUsTop, 60000);
 
   const summary   = portfolio?.summary || {};
-  const positions = portfolio?.open_positions || [];
+  const positions = portfolio?.positions || portfolio?.open_positions || [];
 
   return (
     <div className="space-y-6">

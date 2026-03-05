@@ -37,7 +37,7 @@ class AdvancedSheetsManager:
     def __init__(self):
         self.supabase = get_supabase()
         self.gog_path = Path(__file__).resolve().parents[1] / "gog-docker"
-        self.gog_password = os.getenv("GOG_KEYRING_PASSWORD", "openclaw-gog-secret")
+        self.gog_password = os.getenv("GOG_KEYRING_PASSWORD", "")
         
     def _safe_float(self, value) -> float:
         """안전한 float 변환 (NoneType 방지)"""
