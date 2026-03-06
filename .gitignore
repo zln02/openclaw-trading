@@ -12,10 +12,22 @@ secretary/.venv/
 
 # Environment / secrets
 .env
+.env.local
+.env.production
+.env.*.local
+skills/**/.env
 *.log
 **/kiwoom_token.json
 .last_daily_alert_sent
 secretary/.env
+
+# PEM, key, certificate files
+*.pem
+*.key
+*.p12
+*.pfx
+service-account*.json
+*credentials*.json
 
 # Runtime data (AI output, market snapshots)
 brain/
