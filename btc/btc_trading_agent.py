@@ -125,10 +125,10 @@ RISK = {
     "split_rsi":        [55,   45,   35  ],
     "invest_ratio":      0.30,
     "stop_loss":        -0.03,
-    "take_profit":       0.15,        # 전량 익절 (기존 0.12 → 0.15, 분할 익절 추가로 상향)
-    "partial_tp_pct":    0.08,        # 1단계 익절 발동 (8%)
+    "take_profit":       0.04,        # 전량 익절 (소자본 현실화: +4%)
+    "partial_tp_pct":    0.02,        # 1단계 익절 발동 (2%)
     "partial_tp_ratio":  0.50,        # 1단계 매도 비율 (50%)
-    "partial_tp_2_pct":  0.12,        # 2단계 익절 발동 (12%)
+    "partial_tp_2_pct":  0.03,        # 2단계 익절 발동 (3%)
     "partial_tp_2_ratio": 0.50,       # 2단계 매도 비율 (남은 물량의 50%)
     "atr_multiplier":    2.0,         # ATR 손절 배수 (진입가 - ATR * 2.0)
     "atr_period":        14,          # ATR 계산 기간
@@ -138,13 +138,13 @@ RISK = {
     "max_daily_loss":   -0.08,
     "max_drawdown":     -0.15,
     "min_confidence":    65,
-    "max_trades_per_day": 3,
+    "max_trades_per_day": 2,           # 3 → 2 (수수료 절감)
     "fee_buy":           0.001,
     "fee_sell":          0.001,
-    "buy_composite_min": 43,
+    "buy_composite_min": 50,           # 43 → 50 (고확신 진입만)
     "sell_composite_max": 20,
     "timecut_days":      7,
-    "cooldown_minutes":  30,
+    "cooldown_minutes":  60,           # 30 → 60분 (진입 빈도 감소)
     "volatility_filter": True,
     "funding_filter":    True,      # 펀딩비 과열 시 매수 억제
     "oi_filter":         True,      # OI 급등 시 경고
