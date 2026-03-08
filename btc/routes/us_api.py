@@ -69,7 +69,7 @@ async def get_us_portfolio():
         open_positions = open_res.data or []
         
         # US 체결 내역 조회
-        closed_res = supabase.table("us_trade_executions").select("*").eq("result", "CLOSED").order("timestamp", desc=True).limit(100).execute()
+        closed_res = supabase.table("us_trade_executions").select("*").eq("result", "CLOSED").order("created_at", desc=True).limit(100).execute()
         closed_positions = closed_res.data or []
         
         # 현재 가격 계산

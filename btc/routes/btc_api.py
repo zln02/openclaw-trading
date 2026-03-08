@@ -222,7 +222,7 @@ async def api_btc_composite():
     try:
         return await asyncio.to_thread(_compute_composite_sync)
     except Exception as e:
-        return {"error": str(e)}
+        return {"error": "Internal server error"}
 
 
 @router.get("/api/btc/portfolio")
@@ -379,7 +379,7 @@ async def api_btc_portfolio():
         }
     except Exception as e:
         log.error(f"btc portfolio: {e}")
-        return {"error": str(e), "open_positions": [], "closed_positions": [], "summary": {}}
+        return {"error": "Internal server error", "open_positions": [], "closed_positions": [], "summary": {}}
 
 
 @router.get("/api/summary")
@@ -522,7 +522,7 @@ async def get_stats():
         }
     except Exception as e:
         log.error(f"stats: {e}")
-        return {"error": str(e)}
+        return {"error": "Internal server error"}
 
 
 @router.get("/api/trades")
@@ -663,7 +663,7 @@ async def get_system():
         }
     except Exception as e:
         log.error(f"system: {e}")
-        return {"error": str(e)}
+        return {"error": "Internal server error"}
 
 
 @router.get("/api/realtime/news")
@@ -780,7 +780,7 @@ async def get_brain():
         }
     except Exception as e:
         log.error(f"brain: {e}")
-        return {"error": str(e)}
+        return {"error": "Internal server error"}
 
 
 @router.get("/api/agents/decisions")

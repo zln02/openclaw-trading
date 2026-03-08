@@ -1449,7 +1449,7 @@ def check_stop_loss_take_profit():
                     sell_qty = max(1, int(total_qty * RISK.get('partial_tp_ratio', 0.50)))
                     log(f'{name} 부분 익절: {net_pnl_pct*100:.2f}%, {sell_qty}주 매도', 'TRADE')
                     try:
-                        kiwoom.sell_stock(code, sell_qty, price)
+                        kiwoom.place_order(stock_code=code, order_type='sell', quantity=sell_qty, price=0)
                         for t in trades[:1]:
                             tid = t.get('trade_id')
                             if tid:

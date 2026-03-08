@@ -16,7 +16,6 @@ XGBoost 분류 모델:
 import os
 import json
 import sys
-import pickle
 from pathlib import Path
 
 import numpy as np
@@ -39,7 +38,7 @@ SUPABASE_URL = os.environ.get('SUPABASE_URL', '')
 SUPABASE_KEY = os.environ.get('SUPABASE_SECRET_KEY', '')
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
 
-MODEL_PATH = Path(__file__).parent / 'xgb_model.pkl'
+MODEL_PATH = Path(__file__).parent / 'xgb_model.ubj'  # XGBoost 네이티브 바이너리 (pickle 대체)
 FEATURE_NAMES = [
     'rsi_14',
     'rsi_7',
@@ -471,9 +470,8 @@ def train_model():
     META_PATH = MODEL_PATH.with_suffix('.meta.json')
     META_PATH.write_text(json.dumps(meta, ensure_ascii=False, indent=2))
 
-    with open(MODEL_PATH, 'wb') as f:
-        pickle.dump(model, f)
-    os.chmod(MODEL_PATH, 0o666)  # 어느 유저든 다음 저장 가능하도록
+    model.save_model(str(MODEL_PATH))  # XGBoost 네이티브 저장 (pickle 불사용)
+    os.chmod(MODEL_PATH, 0o644)
     print(f'\n모델 저장: {MODEL_PATH}')
     print(f'메타 저장: {META_PATH}')
 
@@ -556,9 +554,8 @@ def retrain_from_live_trades(min_samples: int = 30) -> bool:
         verbose=False,
     )
 
-    with open(MODEL_PATH, 'wb') as f:
-        pickle.dump(model, f)
-    os.chmod(MODEL_PATH, 0o666)  # 어느 유저든 다음 저장 가능하도록
+    model.save_model(str(MODEL_PATH))  # XGBoost 네이티브 저장 (pickle 불사용)
+    os.chmod(MODEL_PATH, 0o644)
     print(f'실매매 반영 모델 저장: {MODEL_PATH}')
     return True
 
@@ -568,9 +565,24 @@ def retrain_from_live_trades(min_samples: int = 30) -> bool:
 # ─────────────────────────────────────────────
 def _load_model():
     if not MODEL_PATH.exists():
+        # 구버전 .pkl 파일 하위호환: 존재하면 XGBoost 네이티브 포맷으로 마이그레이션
+        old_path = MODEL_PATH.with_suffix('.pkl')
+        if old_path.exists():
+            try:
+                import joblib
+                model = joblib.load(str(old_path))
+                model.save_model(str(MODEL_PATH))
+                os.chmod(MODEL_PATH, 0o644)
+                old_path.unlink()
+                print(f'[ml_model] 구버전 .pkl → .ubj 마이그레이션 완료')
+                return model
+            except Exception as e:
+                print(f'[ml_model] 마이그레이션 실패: {e}')
         return None
-    with open(MODEL_PATH, 'rb') as f:
-        return pickle.load(f)
+    from xgboost import XGBClassifier
+    model = XGBClassifier()
+    model.load_model(str(MODEL_PATH))
+    return model
 
 
 def predict_stock(stock_code: str) -> dict:

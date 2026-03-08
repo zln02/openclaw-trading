@@ -52,14 +52,24 @@ _BASH_BLOCKLIST = re.compile(
     r"|\bmkfs\b|\bfdisk\b|\bparted\b"                        # 파티션/포맷
     r"|\bshutdown\b|\breboot\b|\bpoweroff\b|\bhalt\b"        # 시스템 종료
     r"|\bcurl\s+.+\|\s*(ba)?sh|\bwget\s+.+\|\s*(ba)?sh"     # 원격 실행
-    r"|\beval\s*[\(\"]"                                       # eval 실행
+    r"|\beval\b"                                              # eval 실행 (강화)
     r"|\$\([^)]*rm\b|\`[^`]*rm\b"                            # 명령치환으로 rm
     r"|\b/bin/rm\b|\b/usr/bin/rm\b"                          # 전체 경로 rm
     r"|\b:\s*\(\s*\)\s*\{.*:\|:&\}"                          # 포크 폭탄
     r"|\bkill\s+-9\s+1\b|\bkillall\b"                        # 프로세스 강제 종료
     r"|\b(python|python3|bash|sh)\s+-c\s+[\"'].*rm\b"        # 인터프리터 경유 rm
-    r"|/etc/passwd|/etc/shadow|/etc/crontab"                  # 시스템 파일 접근
-    r"|\biptables\b|\bnftables\b|\bufw\b)",                   # 방화벽 변경
+    r"|/etc/passwd|/etc/shadow|/etc/crontab|/etc/sudoers"    # 시스템 파일 접근
+    r"|\biptables\b|\bnftables\b|\bufw\b"                    # 방화벽 변경
+    # ── 우회 기법 차단 ────────────────────────────────────────────────────
+    r"|base64\s+-d\s*\|"                                      # base64 디코드→파이프
+    r"|\$\{IFS\}"                                             # IFS 치환 공격
+    r"|\$'\\x[0-9a-f]{2}"                                    # 헥스 인코딩
+    r"|\bexec\s+[0-9]*>"                                      # fd 리다이렉트
+    r"|\bsource\b|\b\.\s+/"                                   # 외부 스크립트 로드
+    r"|\bnc\s+.*-e\b|\bncat\b.*-e\b"                         # 리버스쉘
+    r"|\bcrontab\s+-"                                          # crontab 수정
+    r"|\bat\s+now\b|\bbatch\b"                               # 지연 실행
+    r"|>\s*/etc/|>\s*/bin/|>\s*/usr/",                        # 시스템 디렉토리 쓰기
     re.IGNORECASE,
 )
 
@@ -247,10 +257,16 @@ def run_bash(command: str, cwd: str = ".") -> str:
         if _BASH_BLOCKLIST.search(command):
             return f"[보안 차단] 위험 명령어가 포함되어 있습니다: {command[:100]}"
         work_dir = _safe_path(cwd)
-        venv_python = str(_WS / ".venv/bin/python3")
-        env = {**os.environ, "PYTHONPATH": str(_WS)}
+        # shell=True 대신 bash 명시 호출로 injection surface 최소화
+        # --norc/--noprofile: 사용자 프로파일 로드 차단
+        env = {
+            **os.environ,
+            "PYTHONPATH": str(_WS),
+            "BASH_ENV": "/dev/null",   # non-interactive bash env 파일 로드 차단
+        }
         result = subprocess.run(
-            command, shell=True, capture_output=True, text=True,
+            ["bash", "--norc", "--noprofile", "-c", command],
+            capture_output=True, text=True,
             timeout=60, cwd=str(work_dir), env=env
         )
         out = result.stdout.strip()

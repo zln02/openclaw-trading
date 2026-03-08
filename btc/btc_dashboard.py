@@ -12,8 +12,10 @@ All API routes are split into:
 import os
 import secrets
 import sys
+import time
+from collections import defaultdict
 from pathlib import Path
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, FileResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
@@ -29,18 +31,48 @@ load_env()
 app = FastAPI(title="OpenClaw Trading Dashboard")
 
 # ── Basic Auth ──────────────────────────────────────────────────────────────
-_security = HTTPBasic()
+_security = HTTPBasic(auto_error=False)
 _DASH_USER = os.environ.get("DASHBOARD_USER", "openclaw")
 _DASH_PASS = os.environ.get("DASHBOARD_PASSWORD", "")
 
+# 인증 실패 rate limiting: IP당 5분 내 5회 실패 시 잠금
+_AUTH_FAIL: dict = defaultdict(list)
+_AUTH_LOCKOUT_SEC = 300   # 5분
+_AUTH_MAX_FAILS = 5
 
-def _require_auth(credentials: HTTPBasicCredentials = Depends(_security)):
-    """환경변수에 DASHBOARD_PASSWORD가 설정된 경우에만 인증 적용."""
+
+def _require_auth(request: Request, credentials: HTTPBasicCredentials = Depends(_security)):
+    """HTTP Basic Auth — DASHBOARD_PASSWORD 미설정 시 서버 시작 경고 후 거부."""
+    client_ip = request.client.host if request.client else "unknown"
+
+    # 비밀번호 미설정이면 모든 요청 거부 (개발 편의 우선순위보다 보안 우선)
     if not _DASH_PASS:
-        return  # 비번 미설정 시 인증 생략 (개발 편의)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="DASHBOARD_PASSWORD 환경변수를 설정하세요.",
+        )
+
+    # Rate limiting: 잠긴 IP 차단
+    now = time.time()
+    recent = [t for t in _AUTH_FAIL[client_ip] if now - t < _AUTH_LOCKOUT_SEC]
+    _AUTH_FAIL[client_ip] = recent
+    if len(recent) >= _AUTH_MAX_FAILS:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many failed attempts. Try again later.",
+        )
+
+    if credentials is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Unauthorized",
+            headers={"WWW-Authenticate": "Basic realm='OpenClaw Dashboard'"},
+        )
+
     ok_user = secrets.compare_digest(credentials.username.encode(), _DASH_USER.encode())
     ok_pass = secrets.compare_digest(credentials.password.encode(), _DASH_PASS.encode())
     if not (ok_user and ok_pass):
+        _AUTH_FAIL[client_ip].append(now)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Unauthorized",
@@ -85,11 +117,21 @@ if _DIST.is_dir():
         """SPA fallback — serve index.html for non-API routes only."""
         if full_path.startswith("api/"):
             return Response(status_code=404, content="API endpoint not found")
-        static_extensions = ["js", "css", "png", "jpg", "jpeg", "gif", "svg", "ico", "woff", "woff2"]
+
+        # Path traversal 방지: 경로 정규화 후 _DIST 내부인지 검증
+        try:
+            resolved = (_DIST / full_path).resolve()
+            resolved.relative_to(_DIST.resolve())  # _DIST 외부면 ValueError
+        except (ValueError, Exception):
+            return Response(status_code=400, content="Invalid path")
+
+        # 정적 파일 확장자는 StaticFiles가 처리해야 하므로 여기선 404
+        static_extensions = {"js", "css", "png", "jpg", "jpeg", "gif", "svg", "ico", "woff", "woff2", "map"}
         if "." in full_path:
-            ext = full_path.split(".")[-1].lower()
+            ext = full_path.rsplit(".", 1)[-1].lower()
             if ext in static_extensions:
                 return Response(status_code=404, content="Static file not found")
+
         index = _DIST / "index.html"
         if index.exists():
             return FileResponse(str(index))

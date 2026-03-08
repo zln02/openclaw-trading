@@ -449,7 +449,7 @@ async def get_stock_indicators(code: str):
         }
     except Exception as e:
         log.error(f"stock indicators: {e}")
-        return {"error": str(e)}
+        return {"error": "Internal server error"}
 
 
 @router.get("/api/stocks/portfolio")
@@ -581,7 +581,7 @@ async def get_stocks_portfolio():
         }
     except Exception as e:
         log.error(f"portfolio: {e}")
-        return {"error": str(e), "positions": [], "deposit": 0, "total_evaluation": 0, "estimated_asset": 0}
+        return {"error": "Internal server error", "positions": [], "deposit": 0, "total_evaluation": 0, "estimated_asset": 0}
 
 
 @router.get("/api/stocks/daily-pnl")
@@ -626,7 +626,8 @@ async def get_stocks_strategy():
         data = json.loads(STRATEGY_JSON.read_text(encoding="utf-8"))
         return {"strategy": data}
     except Exception as e:
-        return {"error": str(e), "strategy": None}
+        log.error(f"strategy: {e}")
+        return {"error": "Internal server error", "strategy": None}
 
 
 @router.get("/api/stocks/logs")

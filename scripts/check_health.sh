@@ -185,7 +185,7 @@ else
 fi
 
 # ── 4. 대시보드 HTTP 체크 ─────────────────────────────────────────────────
-HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/stocks 2>/dev/null)
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/health 2>/dev/null)
 if [ "$HTTP_CODE" != "200" ]; then
     send_tg "🚨 <b>[헬스체크] 대시보드 응답 없음</b>%0AHTTP ${HTTP_CODE}%0A%0A💬 제이한테 <b>'대시보드 고쳐줘'</b> 라고 해봐!"
 else
