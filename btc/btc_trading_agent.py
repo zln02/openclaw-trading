@@ -957,31 +957,37 @@ def execute_trade(
             # ATR 기반 손절가 계산 (진입 시점 ATR * 배수만큼 하락 시 손절)
             atr_val = indicators.get("atr", 0)
             atr_stop = round(price - atr_val * RISK["atr_multiplier"]) if atr_val else None
-            ok = open_position_with_context(
-                price,
-                qty,
-                invest_krw,
-                fg_value=(fg or {}).get("value") if fg else None,
-                rsi_d=rsi_d,
-                bb_pct=bb_pct,
-                vol_ratio_d=vol_ratio_d,
-                trend=trend,
-                funding_rate=(funding or {}).get("rate") if funding else None,
-                ls_ratio=(ls_ratio or {}).get("ls_ratio") if ls_ratio else None,
-                oi_ratio=(oi or {}).get("ratio") if oi else None,
-                kimchi=kimchi,
-                composite_score=(comp or {}).get("total") if isinstance(comp, dict) else None,
-                market_regime=market_regime,
-                atr_stop_price=atr_stop,
-            )
+            # DB 저장 3회 재시도 (레이스 컨디션 방지)
+            ok = False
+            for _attempt in range(3):
+                ok = open_position_with_context(
+                    price,
+                    qty,
+                    invest_krw,
+                    fg_value=(fg or {}).get("value") if fg else None,
+                    rsi_d=rsi_d,
+                    bb_pct=bb_pct,
+                    vol_ratio_d=vol_ratio_d,
+                    trend=trend,
+                    funding_rate=(funding or {}).get("rate") if funding else None,
+                    ls_ratio=(ls_ratio or {}).get("ls_ratio") if ls_ratio else None,
+                    oi_ratio=(oi or {}).get("ratio") if oi else None,
+                    kimchi=kimchi,
+                    composite_score=(comp or {}).get("total") if isinstance(comp, dict) else None,
+                    market_regime=market_regime,
+                    atr_stop_price=atr_stop,
+                )
+                if ok:
+                    break
+                log.warning(f"포지션 DB 저장 재시도 {_attempt + 1}/3")
+                import time as _time; _time.sleep(2)
             if not ok:
-                log.error("포지션 기록 실패 → 즉시 되팔기")
-                try:
-                    upbit.sell_market_order("KRW-BTC", qty * 0.9995)
-                except Exception as e2:
-                    log.error(f"되팔기도 실패: {e2}")
-                send_telegram("🚨 BTC 매수 후 포지션 기록 실패 → 자동 되팔기 시도")
-                return {"result": "POSITION_ROLLBACK"}
+                log.error(f"포지션 DB 저장 3회 실패. qty={qty:.8f} BTC — 수동 확인 필요")
+                send_telegram(
+                    f"⚠️ BTC 매수 성공했으나 DB 저장 실패 (3회 재시도).\n"
+                    f"수량: {qty:.8f} BTC\n수동 확인 후 처리하세요.",
+                )
+                return {"result": "POSITION_DB_FAIL"}
         else:
             log.info(f"[DRY_RUN] {stage}차 매수 — {invest_krw:,.0f}원")
 
@@ -1107,6 +1113,33 @@ def run_trading_cycle():
             buy_limit_reached = True
     except Exception as e:
         log.warning(f"오늘 BTC 매수 건수 조회 실패: {e}")
+
+    # 쿨다운 체크 (마지막 매수 후 cooldown_minutes 미경과 시 매수 스킵)
+    if not buy_limit_reached:
+        try:
+            cooldown_min = RISK.get("cooldown_minutes", 60)
+            _cd_res = supabase.table("btc_position") \
+                .select("entry_time") \
+                .order("entry_time", desc=True) \
+                .limit(1).execute()
+            if _cd_res.data:
+                _last_entry_str = _cd_res.data[0].get("entry_time", "")
+                if _last_entry_str:
+                    _last_entry = datetime.fromisoformat(
+                        _last_entry_str.replace("Z", "+00:00")
+                    )
+                    _elapsed_min = (
+                        datetime.now(timezone.utc) - _last_entry
+                    ).total_seconds() / 60
+                    if _elapsed_min < cooldown_min:
+                        pos_check2 = get_open_position()
+                        if not pos_check2:
+                            log.info(
+                                f"쿨다운 중 ({_elapsed_min:.0f}분 / {cooldown_min}분) — 매수 스킵"
+                            )
+                            buy_limit_reached = True  # 매수 차단 (매도 분석은 계속)
+        except Exception as _cd_e:
+            log.debug(f"쿨다운 체크 실패 (무시): {_cd_e}")
 
     log.info("매매 사이클 시작")
 

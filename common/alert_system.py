@@ -305,7 +305,7 @@ class AlertSystem:
         try:
             # Supabase 연결 체크
             if self.supabase:
-                self.supabase.table("btc_trades").select("count").limit(1).execute()
+                self.supabase.table("btc_trades").select("id", count="exact").limit(1).execute()
                 status["supabase"] = True
             
             # Telegram 연결 체크 (getMe: 즉시 응답, getUpdates는 long-polling이라 타임아웃 발생)

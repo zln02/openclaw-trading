@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import sys
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Optional
 
@@ -93,7 +94,12 @@ class AgentLogger:
                         log_file.unlink()
                     except PermissionError:
                         pass
-                fh = logging.FileHandler(log_file, encoding="utf-8")
+                fh = RotatingFileHandler(
+                    log_file,
+                    maxBytes=10 * 1024 * 1024,  # 10MB
+                    backupCount=5,
+                    encoding="utf-8",
+                )
                 fh.setLevel(logging.DEBUG)
                 fh.setFormatter(formatter)
                 self._log.addHandler(fh)

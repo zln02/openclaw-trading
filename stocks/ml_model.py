@@ -245,12 +245,14 @@ def load_training_data(target_days=3, target_return=0.02):
         highs = [float(r.get('high_price', r['close_price'])) for r in rows]
         lows = [float(r.get('low_price', r['close_price'])) for r in rows]
 
-        for i in range(60, len(rows) - target_days):
+        for i in range(60, len(rows)):
+            if i + target_days >= len(closes):
+                break  # 미래 데이터 부족 시 중단 (데이터 누출 방지)
             features = extract_features(closes, volumes, highs, lows, i)
             if features is None:
                 continue
 
-            future_return = (closes[i + target_days] - closes[i]) / closes[i]
+            future_return = (closes[i + target_days] - closes[i]) / max(closes[i], 1)
             label = 1 if future_return >= target_return else 0
 
             all_X.append(features)

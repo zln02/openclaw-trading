@@ -1,5 +1,7 @@
 """Shared utility functions for the OpenClaw trading system."""
 import json
+import os
+import tempfile
 from datetime import date, datetime
 from typing import Any, Optional
 
@@ -29,6 +31,33 @@ def parse_json_from_text(raw: str) -> dict:
 def to_iso_day(value: Any) -> str:
     """str/date/datetime → 'YYYY-MM-DD' 문자열 변환."""
     return str(value or "")[:10]
+
+
+def atomic_write_json(path: str, data: dict, *, ensure_ascii: bool = False) -> None:
+    """원자적 JSON 파일 쓰기 (temp → rename).
+
+    경쟁 조건 없이 안전하게 JSON 파일을 갱신한다.
+    실패 시 기존 파일이 손상되지 않음.
+
+    Args:
+        path: 대상 파일 경로 (str 또는 Path)
+        data: 저장할 dict
+        ensure_ascii: JSON 인코딩 옵션
+    """
+    path = str(path)
+    dir_name = os.path.dirname(path) or "."
+    os.makedirs(dir_name, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(dir=dir_name, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=ensure_ascii, indent=2)
+        os.replace(tmp_path, path)  # 원자적 교체 (POSIX 보장)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 def parse_day(value: Optional[Any] = None) -> date:

@@ -53,6 +53,43 @@ NEWS_ANALYSIS_DIR = BRAIN_PATH / "news-analysis"
 STATE_DIR = NEWS_ANALYSIS_DIR / "_state"
 
 
+def _parse_json_array(text: str) -> list:
+    """LLM 응답에서 JSON 배열을 안전하게 추출.
+
+    마크다운 코드블록, 이스케이프된 브래킷 등을 처리한다.
+    실패 시 빈 리스트 반환.
+    """
+    import re
+
+    if not text:
+        return []
+
+    # 마크다운 코드블록 내 JSON 우선 추출
+    m = re.search(r"```(?:json)?\s*(\[.*?\])\s*```", text, re.DOTALL)
+    if m:
+        try:
+            return json.loads(m.group(1))
+        except json.JSONDecodeError:
+            pass
+
+    # 직접 [ ] 중첩 파싱 (가장 바깥쪽 배열)
+    cleaned = text.strip()
+    try:
+        start = cleaned.index("[")
+        depth = 0
+        for i, ch in enumerate(cleaned[start:], start):
+            if ch == "[":
+                depth += 1
+            elif ch == "]":
+                depth -= 1
+            if depth == 0:
+                return json.loads(cleaned[start : i + 1])
+    except (ValueError, json.JSONDecodeError):
+        pass
+
+    return []
+
+
 def _read_json_file(path: Path, default):
     try:
         if path.exists():
@@ -357,13 +394,10 @@ time: {item.get('timestamp','')}
             if not raw:
                 return [None] * len(items)
 
-            # Extract JSON array from response
-            text = raw.replace("```json", "").replace("```", "").strip()
-            s = text.find("[")
-            e = text.rfind("]")
-            if s < 0 or e <= s:
+            # Extract JSON array from response (안전한 파싱)
+            parsed_list = _parse_json_array(raw)
+            if not parsed_list:
                 raise ValueError("JSON array not found in batch response")
-            parsed_list = json.loads(text[s : e + 1])
 
             # Update budget state once for the whole batch
             st = self.get_budget_state()
@@ -403,6 +437,10 @@ time: {item.get('timestamp','')}
 
         except Exception as exc:
             log.warning("batch llm news analysis failed", error=exc)
+            # 배치 실패 시 개별 처리로 폴백 (2개 이상일 때만)
+            if len(items) > 1:
+                log.info("배치 파싱 실패 → 개별 처리로 전환")
+                return [self._llm_analyze(item, symbol) for item in items]
             return [None] * len(items)
 
     def _score_one(self, row: dict) -> float:
