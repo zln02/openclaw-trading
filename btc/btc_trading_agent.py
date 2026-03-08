@@ -141,7 +141,7 @@ RISK = {
     "max_trades_per_day": 3,
     "fee_buy":           0.001,
     "fee_sell":          0.001,
-    "buy_composite_min": 45,
+    "buy_composite_min": 43,
     "sell_composite_max": 20,
     "timecut_days":      7,
     "cooldown_minutes":  30,
@@ -1236,13 +1236,21 @@ def run_trading_cycle():
         }
         log.trade(f"복합스코어 매수 발동: {comp['total']}점 >= {buy_min}")
 
-    # 2) 극단 공포 오버라이드: F&G<=15면 일봉 RSI<=55까지 매수 허용
-    elif fg_value <= 15 and rsi_d <= 55 and not pos and htf["trend"] != "DOWNTREND":
-        signal = {
-            "action": "BUY", "confidence": 78,
-            "reason": f"극도공포 오버라이드 F&G={fg_value}, dRSI={rsi_d} [룰기반]"
-        }
-        log.trade(f"극도공포 오버라이드: F&G={fg_value}, dRSI={rsi_d}")
+    # 2) 극단 공포 오버라이드: F&G<=15 + UPTREND, 또는 F&G<=12 극단공포 시 DOWNTREND도 허용(소량, confidence↓)
+    elif fg_value <= 15 and rsi_d <= 55 and not pos:
+        if htf["trend"] != "DOWNTREND":
+            signal = {
+                "action": "BUY", "confidence": 78,
+                "reason": f"극도공포 오버라이드 F&G={fg_value}, dRSI={rsi_d} [룰기반]"
+            }
+            log.trade(f"극도공포 오버라이드: F&G={fg_value}, dRSI={rsi_d}")
+        elif fg_value <= 12:
+            # F&G 12 이하 극단 공포 — DOWNTREND에도 역발상 소량 매수 허용 (confidence 낮게)
+            signal = {
+                "action": "BUY", "confidence": 66,
+                "reason": f"극단공포 역발상(DOWNTREND) F&G={fg_value}, dRSI={rsi_d} [룰기반]"
+            }
+            log.trade(f"극단공포 역발상 오버라이드(DOWNTREND): F&G={fg_value}, dRSI={rsi_d}")
 
     # 3) 기술적 과매수 매도: 일봉 RSI>=75 + 하락 추세
     elif rsi_d >= 75 and htf["trend"] == "DOWNTREND" and pos:
