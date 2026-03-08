@@ -308,14 +308,13 @@ class AlertSystem:
                 self.supabase.table("btc_trades").select("count").limit(1).execute()
                 status["supabase"] = True
             
-            # Telegram 연결 체크 (메시지 전송 없이 getUpdates로 토큰/연결만 검증)
+            # Telegram 연결 체크 (getMe: 즉시 응답, getUpdates는 long-polling이라 타임아웃 발생)
             import requests as _req
             token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
             if token:
                 r = _req.get(
-                    f"https://api.telegram.org/bot{token}/getUpdates",
-                    params={"limit": 1},
-                    timeout=5,
+                    f"https://api.telegram.org/bot{token}/getMe",
+                    timeout=10,
                 )
                 status["telegram"] = r.ok
             
