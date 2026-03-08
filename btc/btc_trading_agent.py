@@ -684,6 +684,7 @@ def analyze_with_ai(
     funding: dict | None = None,
     ls_ratio: dict | None = None,
     regime: str = "TRANSITION",
+    memory_context: str = "",
 ) -> dict:
 
     trend_map = {
@@ -746,6 +747,9 @@ RSI: {rsi_d:.1f} | BB%: {mom.get('bb_pct', 50):.1f}% | 7일수익: {mom.get('ret
 
 - HOLD: 위 미충족 또는 불확실
 - 신뢰도 65% 미만 → HOLD
+
+[최근 거래 기억 — 반드시 참고하여 같은 실수 반복 금지]
+{memory_context if memory_context else "기억 없음"}
 
 [최근 뉴스]
 {news_summary}
@@ -1311,10 +1315,19 @@ def run_trading_cycle():
 
     # 8) 룰기반 미발동 → AI 분석
     if not signal:
+        # 최근 거래 기억 주입 (같은 실수 반복 방지)
+        _mem_ctx = ""
+        try:
+            from memory.trade_memory import TradeMemory
+            _mem_ctx = TradeMemory(supabase).get_recent_context("btc", limit=10)
+        except Exception as _me:
+            log.debug("trade_memory 로드 실패 (무시): %s", _me)
+
         signal = analyze_with_ai(
             indicators, news.get("summary", ""), fg, htf, volume,
             comp=comp, rsi_d=rsi_d, momentum=momentum,
             funding=funding, ls_ratio=ls_ratio, regime=market_regime,
+            memory_context=_mem_ctx,
         )
 
     # ── 보조 보정 ──
