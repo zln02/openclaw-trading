@@ -6,10 +6,11 @@ export default function GlassCard({
   delay = 0,
   style,
   as: Component = "section",
+  accent = false,
 }) {
   return (
     <div className="card-reveal" style={{ animationDelay: `${delay}s` }}>
-      <Component className={`glass-card ${className}`.trim()} style={style}>
+      <Component className={`glass-card ${accent ? "glass-card--accent" : ""} ${className}`.trim()} style={style}>
         {children}
       </Component>
     </div>
@@ -22,4 +23,5 @@ GlassCard.propTypes = {
   delay: PropTypes.number,
   style: PropTypes.object,
   as: PropTypes.string,
+  accent: PropTypes.bool,
 };

@@ -68,6 +68,8 @@ export const getUsTrades = () => fetchJSON("/api/us/trades");
 export const getUsMarket = () => fetchJSON("/api/us/market");
 export const getUsFx = () => fetchJSONSafe("/api/us/fx");
 export const getUsSystem = () => fetchJSONSafe("/api/us/system");
+export const getUsChart = (symbol, period = "3mo") =>
+  fetchJSONSafe(`/api/us/chart/${encodeURIComponent(symbol)}?period=${encodeURIComponent(period)}`);
 export const getUsRealtimeNews = (symbol = "AAPL", limit = 10) =>
   fetchJSONSafe(`/api/us/realtime/news?symbol=${encodeURIComponent(symbol)}&limit=${limit}`);
 export const getUsRealtimePrice = (symbol) => fetchJSONSafe(`/api/us/realtime/price/${encodeURIComponent(symbol)}`);

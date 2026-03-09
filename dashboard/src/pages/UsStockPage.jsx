@@ -1,11 +1,13 @@
+import { useState } from "react";
 import { DollarSign, Globe2, Landmark, Sigma, TrendingUp } from "lucide-react";
-import { getUsFx, getUsMarket, getUsPositions, getUsTrades } from "../api";
+import { getUsChart, getUsFx, getUsMarket, getUsPositions, getUsTrades } from "../api";
 import usePolling from "../hooks/usePolling";
 import { compactTime, pct, usd } from "../lib/format";
 import DeferredRender from "../components/ui/DeferredRender";
 import GlassCard from "../components/ui/GlassCard";
 import LoadingSkeleton from "../components/ui/LoadingSkeleton";
 import { EmptyState } from "../components/ui/PageState";
+import LightweightPriceChart from "../components/ui/LightweightPriceChart";
 import SvgRadarChart from "../components/ui/SvgRadarChart";
 
 const factorData = [
@@ -30,6 +32,38 @@ export default function UsStockPage() {
 
   const ranking = market?.top || market?.momentum || [];
   const openPositions = positions?.positions || positions?.open_positions || [];
+  const watchRows = ranking.slice(0, 8).map((row) => ({
+    symbol: row.symbol,
+    score: Number(row.score || 0),
+    delta: Number(row.ret_20d || 0),
+    tag: Number(row.volume_ratio || 0).toFixed(1) + "x",
+  }));
+  const [selectedSymbol, setSelectedSymbol] = useState(null);
+  const activeSymbol = selectedSymbol || watchRows[0]?.symbol || "US MOMENTUM";
+  const activeRank = ranking.find((row) => row.symbol === activeSymbol) || ranking[0];
+  const activePosition = openPositions.find((row) => (row.symbol || row.stock_code) === activeSymbol) || openPositions[0];
+  const { data: chartData, loading: chartLoading } = usePolling(
+    () => getUsChart(activeSymbol, "3mo"),
+    60000,
+    [activeSymbol],
+  );
+  const activeCurve = [
+    { label: "D-5", value: Math.max(Number(activeRank?.score || 55) - 16, 10) },
+    { label: "D-4", value: Math.max(Number(activeRank?.score || 55) - 9, 15) },
+    { label: "D-3", value: Math.max(Number(activeRank?.score || 55) - 4, 18) },
+    { label: "D-2", value: Math.max(Number(activeRank?.score || 55) + 1, 20) },
+    { label: "D-1", value: Math.max(Number(activeRank?.score || 55) + 5, 25) },
+    { label: "Now", value: Number(activeRank?.score || 55) },
+  ];
+  const chartSeries = (chartData?.candles || []).map((row) => ({
+    time: row.time,
+    open: Number(row.open || 0),
+    high: Number(row.high || 0),
+    low: Number(row.low || 0),
+    close: Number(row.close || 0),
+    volume: Number(row.volume || 0),
+    value: Number(row.close || 0),
+  }));
 
   return (
     <div className="stack">
@@ -40,24 +74,79 @@ export default function UsStockPage() {
         </div>
       </div>
 
-      <div className="page-grid">
-        <div className="col-8">
-          <div className="grid-4">
+      <div className="tv-terminal">
+        <aside className="tv-left-rail">
+          <GlassCard className="card-pad">
+            <div className="panel-title">
+              <h2>Watchlist</h2>
+            </div>
+            <div className="rail-list">
+              {watchRows.map((row) => (
+                <button
+                  key={row.symbol}
+                  type="button"
+                  className={`watchlist-row ${activeSymbol === row.symbol ? "is-active" : ""}`.trim()}
+                  onClick={() => setSelectedSymbol(row.symbol)}
+                  style={{ color: "inherit", textAlign: "left" }}
+                >
+                  <strong>{row.symbol}</strong>
+                  <span className="mono">{row.score.toFixed(0)}</span>
+                  <span className={row.delta >= 0 ? "profit mono" : "loss mono"}>{pct(row.delta)}</span>
+                  <span className="subtle">{row.tag}</span>
+                </button>
+              ))}
+              {watchRows.length === 0 ? <EmptyState message="No US symbols." /> : null}
+            </div>
+          </GlassCard>
+
+          <GlassCard className="card-pad">
+            <div className="panel-title">
+              <h2>Market Pulse</h2>
+            </div>
+            <div className="tabular-list">
+              {marketCards.map((card) => (
+                <div key={card.label} className="kv-row">
+                  <span className="subtle">{card.label}</span>
+                  <span className={card.delta >= 0 ? "profit mono" : "loss mono"}>{pct(card.delta)}</span>
+                </div>
+              ))}
+              <div className="kv-row">
+                <span className="subtle">USD/KRW</span>
+                <span className="mono">{Number(fx?.rate || fx?.usdkrw || 0).toLocaleString()}</span>
+              </div>
+            </div>
+          </GlassCard>
+        </aside>
+
+        <div className="tv-main tv-stack">
+          <DeferredRender height={320}>
+            <GlassCard className="card-pad">
+              <div className="panel-title">
+                <h2>Momentum Curve</h2>
+                <TrendingUp size={18} color="var(--text-secondary)" />
+              </div>
+              {chartLoading || marketLoading ? (
+                <LoadingSkeleton height={300} />
+              ) : (
+                <LightweightPriceChart title={`${activeSymbol} Price`} data={chartSeries.length > 0 ? chartSeries : activeCurve} />
+              )}
+            </GlassCard>
+          </DeferredRender>
+
+          <div className="market-strip">
             {marketCards.map((card) => (
-              <GlassCard key={card.label} className="card-pad">
+              <GlassCard key={card.label} className="market-tile">
                 <div className="subtle" style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.08em" }}>
                   {card.label}
                 </div>
-                <div style={{ fontSize: 28, fontWeight: 800, marginTop: 12 }}>{Number(card.value || 0).toLocaleString()}</div>
+                <div className="mono" style={{ fontSize: 28, fontWeight: 800, marginTop: 12 }}>{Number(card.value || 0).toLocaleString()}</div>
                 <div className={card.delta >= 0 ? "profit" : "loss"} style={{ marginTop: 10, fontWeight: 700 }}>
                   {pct(card.delta)}
                 </div>
               </GlassCard>
             ))}
           </div>
-        </div>
 
-        <div className="col-4">
           <GlassCard className="card-pad">
             <div className="panel-title">
               <h2>USD/KRW FX</h2>
@@ -68,10 +157,18 @@ export default function UsStockPage() {
               {pct(fx?.change_pct || 0)}
             </div>
           </GlassCard>
-        </div>
 
-        <div className="col-7">
           <GlassCard className="card-pad">
+            <div className="symbol-header">
+              <div>
+                <div className="symbol-code">{activeSymbol}</div>
+                <div className="symbol-meta">
+                  <span className="toolbar-chip">US Universe</span>
+                  <span className="toolbar-chip">Dry Run</span>
+                  <span className="toolbar-chip mono">{activeRank?.volume_ratio ? `${Number(activeRank.volume_ratio).toFixed(1)}x vol` : `${ranking.length} Symbols`}</span>
+                </div>
+              </div>
+            </div>
             <div className="panel-title">
               <h2>Momentum Ranking</h2>
               <TrendingUp size={18} color="var(--text-secondary)" />
@@ -93,7 +190,7 @@ export default function UsStockPage() {
                   </thead>
                   <tbody>
                     {(ranking || []).slice(0, 10).map((row, index) => (
-                      <tr key={row.symbol || index}>
+                      <tr key={row.symbol || index} className={row.symbol === activeSymbol ? "is-active" : ""}>
                         <td>{row.symbol}</td>
                         <td className={Number(row.ret_5d || 0) >= 0 ? "profit" : "loss"}>{pct(row.ret_5d || 0)}</td>
                         <td className={Number(row.ret_20d || 0) >= 0 ? "profit" : "loss"}>{pct(row.ret_20d || 0)}</td>
@@ -107,47 +204,8 @@ export default function UsStockPage() {
               </div>
             )}
           </GlassCard>
-        </div>
 
-        <div className="col-5">
-          <GlassCard className="card-pad">
-            <div className="panel-title">
-              <h2>DRY-RUN Portfolio</h2>
-              <Landmark size={18} color="var(--text-secondary)" />
-            </div>
-            {positionsLoading ? (
-              <LoadingSkeleton height={320} />
-            ) : openPositions.length === 0 ? (
-              <EmptyState message="No DRY-RUN positions." />
-            ) : (
-              <div className="stack" style={{ gap: 12 }}>
-                {openPositions.slice(0, 8).map((row, index) => (
-                  <div
-                    key={row.symbol || row.id || index}
-                    style={{
-                      padding: 14,
-                      borderRadius: 16,
-                      background: "rgba(255,255,255,0.03)",
-                      border: "1px solid rgba(255,255,255,0.05)",
-                    }}
-                  >
-                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
-                      <strong>{row.symbol || row.stock_code}</strong>
-                      <span className={Number(row.pnl_pct || 0) >= 0 ? "profit" : "loss"}>{pct(row.pnl_pct || 0)}</span>
-                    </div>
-                    <div className="subtle">
-                      Qty {row.quantity || 0} · Entry {usd(row.entry_price || row.price)} · Value{" "}
-                      {usd(row.market_value || row.current_value)}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </GlassCard>
-        </div>
-
-        <div className="col-12">
-          <div className="grid-2">
+          <div className="split-2">
             <DeferredRender height={320}>
               <GlassCard className="card-pad">
                 <div className="panel-title">
@@ -165,15 +223,7 @@ export default function UsStockPage() {
               </div>
               <div className="stack" style={{ gap: 12 }}>
                 {(trades || []).slice(0, 8).map((trade, index) => (
-                  <div
-                    key={trade.id || index}
-                    style={{
-                      padding: 14,
-                      borderRadius: 16,
-                      background: "rgba(255,255,255,0.03)",
-                      border: "1px solid rgba(255,255,255,0.05)",
-                    }}
-                  >
+                  <div key={trade.id || index} className="timeline-row">
                     <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
                       <strong>{trade.symbol || "US"}</strong>
                       <span>{compactTime(trade.timestamp || trade.created_at)}</span>
@@ -188,6 +238,47 @@ export default function UsStockPage() {
             </GlassCard>
           </div>
         </div>
+
+        <aside className="tv-side">
+          <GlassCard className="card-pad">
+            <div className="panel-title">
+              <h2>DRY-RUN Portfolio</h2>
+              <Landmark size={18} color="var(--text-secondary)" />
+            </div>
+            {positionsLoading ? (
+              <LoadingSkeleton height={320} />
+            ) : openPositions.length === 0 ? (
+              <EmptyState message="No DRY-RUN positions." />
+            ) : (
+              <div className="stack" style={{ gap: 12 }}>
+                {openPositions.slice(0, 8).map((row, index) => (
+                  <div key={row.symbol || row.id || index} className="timeline-row" style={{ borderColor: (row.symbol || row.stock_code) === activeSymbol ? "rgba(59,130,246,0.35)" : undefined }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
+                      <strong>{row.symbol || row.stock_code}</strong>
+                      <span className={Number(row.pnl_pct || 0) >= 0 ? "profit" : "loss"}>{pct(row.pnl_pct || 0)}</span>
+                    </div>
+                    <div className="subtle">
+                      Qty {row.quantity || 0} · Entry {usd(row.entry_price || row.price)} · Value{" "}
+                      {usd(row.market_value || row.current_value)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </GlassCard>
+
+          <GlassCard className="card-pad">
+            <div className="panel-title">
+              <h2>Selection Summary</h2>
+            </div>
+            <div className="tabular-list">
+              <div className="kv-row"><span className="subtle">Selected</span><span className="mono">{activeSymbol}</span></div>
+              <div className="kv-row"><span className="subtle">Score</span><span className="mono">{Number(activeRank?.score || 0).toFixed(0)}</span></div>
+              <div className="kv-row"><span className="subtle">20d</span><span className={Number(activeRank?.ret_20d || 0) >= 0 ? "profit mono" : "loss mono"}>{pct(activeRank?.ret_20d || 0)}</span></div>
+              <div className="kv-row"><span className="subtle">Position PnL</span><span className={Number(activePosition?.pnl_pct || 0) >= 0 ? "profit mono" : "loss mono"}>{pct(activePosition?.pnl_pct || 0)}</span></div>
+            </div>
+          </GlassCard>
+        </aside>
       </div>
     </div>
   );

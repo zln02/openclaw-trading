@@ -18,13 +18,13 @@ export default function StatCard({
     tone === "profit" ? "var(--profit)" : tone === "loss" ? "var(--loss)" : "var(--accent-purple)";
 
   return (
-    <GlassCard className="card-pad">
+    <GlassCard className={`card-pad ${tone === "profit" ? "glass-card--profit" : tone === "loss" ? "glass-card--loss" : ""}`.trim()}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 12, marginBottom: 18 }}>
         <div>
           <div className="subtle" style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.08em" }}>
             {label}
           </div>
-          <div style={{ fontSize: 28, fontWeight: 800, letterSpacing: "-0.04em", marginTop: 8 }}>
+          <div className="mono number-glow" style={{ fontSize: 28, fontWeight: 800, letterSpacing: "-0.04em", marginTop: 8 }}>
             <AnimatedNumber
               value={Number(value) || 0}
               prefix={prefix}

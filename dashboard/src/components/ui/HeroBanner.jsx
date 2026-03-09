@@ -12,7 +12,7 @@ const ITEMS = [
 
 export default function HeroBanner({ metrics }) {
   return (
-    <GlassCard className="card-pad" style={{ marginBottom: 24 }}>
+    <GlassCard className="card-pad top-banner glass-card--accent compact-banner status-strip" style={{ marginBottom: 14 }}>
       <div
         style={{
           position: "absolute",
@@ -22,27 +22,20 @@ export default function HeroBanner({ metrics }) {
           pointerEvents: "none",
         }}
       />
-      <div className="grid-4" style={{ position: "relative" }}>
+      <div className="banner-grid">
         {ITEMS.map((item) => {
           const current = metrics[item.key] || { value: 0, delta: 0, prefix: "", suffix: "" };
           const tone = current.delta >= 0 ? "profit" : "loss";
           return (
             <div
               key={item.key}
-              style={{
-                padding: 18,
-                borderRadius: 20,
-                background: "rgba(255,255,255,0.03)",
-                border: "1px solid rgba(255,255,255,0.06)",
-              }}
+              className={`banner-item ${item.key === "total" ? "global-card" : ""}`.trim()}
             >
-              <div style={{ display: "flex", alignItems: "center", gap: 10, color: "var(--text-secondary)", marginBottom: 18 }}>
+              <div className="metric-label">
                 {item.icon}
-                <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase" }}>
-                  {item.label}
-                </span>
+                <span>{item.label}</span>
               </div>
-              <div style={{ fontSize: 30, fontWeight: 800, letterSpacing: "-0.04em" }}>
+              <div className="number-glow mono" style={{ fontSize: 18, fontWeight: 800, letterSpacing: "-0.04em" }}>
                 <AnimatedNumber
                   value={Number(current.value) || 0}
                   prefix={current.prefix || ""}
@@ -51,16 +44,7 @@ export default function HeroBanner({ metrics }) {
                   className={tone === "profit" ? "profit glow-profit" : "loss glow-loss"}
                 />
               </div>
-              <div
-                style={{
-                  marginTop: 12,
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 8,
-                  color: tone === "profit" ? "var(--profit)" : "var(--loss)",
-                  fontWeight: 700,
-                }}
-              >
+              <div className="metric-delta" style={{ color: tone === "profit" ? "var(--profit)" : "var(--loss)" }}>
                 {current.delta >= 0 ? "+" : ""}
                 {Number(current.delta || 0).toFixed(2)}%
               </div>

@@ -8,8 +8,8 @@ export default function CircularGauge({ value = 0, label, subtitle, size = 220 }
   const stroke = clamped >= 70 ? "#22c55e" : clamped >= 45 ? "#8b5cf6" : "#ef4444";
 
   return (
-    <div style={{ display: "grid", placeItems: "center", gap: 12 }}>
-      <svg width={size} height={size} style={{ transform: "rotate(-90deg)" }}>
+    <div className="gauge-shell">
+      <svg className="gauge-svg" width={size} height={size} style={{ transform: "rotate(-90deg)" }}>
         <defs>
           <linearGradient id={`gauge-${label}`} x1="0%" x2="100%" y1="0%" y2="100%">
             <stop offset="0%" stopColor="#8b5cf6" />
@@ -20,6 +20,7 @@ export default function CircularGauge({ value = 0, label, subtitle, size = 220 }
           cx={size / 2}
           cy={size / 2}
           r={radius}
+          className="gauge-track"
           stroke="rgba(255,255,255,0.08)"
           strokeWidth="14"
           fill="none"
@@ -28,6 +29,7 @@ export default function CircularGauge({ value = 0, label, subtitle, size = 220 }
           cx={size / 2}
           cy={size / 2}
           r={radius}
+          className="gauge-arc"
           stroke={stroke === "#22c55e" ? stroke : `url(#gauge-${label})`}
           strokeWidth="14"
           strokeLinecap="round"
@@ -40,7 +42,7 @@ export default function CircularGauge({ value = 0, label, subtitle, size = 220 }
         <div className="subtle" style={{ textTransform: "uppercase", letterSpacing: "0.08em", fontSize: 12 }}>
           {label}
         </div>
-        <div style={{ fontSize: 48, fontWeight: 800, letterSpacing: "-0.05em" }}>{clamped}</div>
+        <div className="gauge-value mono" style={{ color: stroke }}>{clamped}</div>
         {subtitle ? <div className="subtle">{subtitle}</div> : null}
       </div>
     </div>

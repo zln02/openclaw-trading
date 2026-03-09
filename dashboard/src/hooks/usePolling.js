@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 
-export default function usePolling(fetcher, intervalMs = 30000) {
+export default function usePolling(fetcher, intervalMs = 30000, deps = []) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
   const [updatedAt, setUpdatedAt] = useState(null);
   const fetcherRef = useRef(fetcher);
   const hasDataRef = useRef(false);
+  const depsKey = JSON.stringify(deps);
 
   useEffect(() => {
     fetcherRef.current = fetcher;
@@ -52,7 +53,7 @@ export default function usePolling(fetcher, intervalMs = 30000) {
       active = false;
       clearInterval(id);
     };
-  }, [intervalMs]);
+  }, [intervalMs, depsKey]);
 
   return { data, error, loading, updatedAt };
 }

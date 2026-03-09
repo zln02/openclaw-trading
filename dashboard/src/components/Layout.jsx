@@ -70,18 +70,13 @@ export default function Layout() {
 
   return (
     <div className="app-shell">
+      <div className="bg-orb bg-orb-1" />
+      <div className="bg-orb bg-orb-2" />
+      <div className="bg-orb bg-orb-3" />
+      <div className="dot-grid" />
+      <div className="scanlines" />
       <div className="app-content">
-        <header
-          style={{
-            position: "sticky",
-            top: 0,
-            zIndex: 20,
-            padding: "18px 0 14px",
-            backdropFilter: "blur(20px)",
-            background: "rgba(10,10,15,0.78)",
-            borderBottom: "1px solid rgba(255,255,255,0.06)",
-          }}
-        >
+        <header className="navbar-shell">
           <div className="container" style={{ display: "flex", alignItems: "center", gap: 18, justifyContent: "space-between" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
               <div
@@ -107,32 +102,11 @@ export default function Layout() {
               </div>
             </div>
 
-            <nav
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                padding: 6,
-                borderRadius: 999,
-                background: "rgba(255,255,255,0.03)",
-                border: "1px solid rgba(255,255,255,0.07)",
-              }}
-            >
+            <nav className="nav-shell">
               {NAV.map(({ to, label, icon: Icon }) => (
                 <NavLink key={to} to={to} end={to === "/"}>
                   {({ isActive }) => (
-                    <div
-                      style={{
-                        position: "relative",
-                        padding: "10px 16px",
-                        borderRadius: 999,
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 10,
-                        color: isActive ? "var(--text-primary)" : "var(--text-secondary)",
-                        background: isActive ? "rgba(255,255,255,0.06)" : "transparent",
-                      }}
-                    >
+                    <div className={`nav-tab ${isActive ? "is-active" : ""}`.trim()}>
                       <Icon size={16} />
                       <span style={{ fontWeight: 700 }}>{label}</span>
                       {isActive ? (
@@ -157,7 +131,8 @@ export default function Layout() {
 
             <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
               <StatusBadge status={regime} />
-              <div className="pill">
+              <div className="pill live-pill">
+                <span className="live-dot" />
                 <Sparkles size={14} />
                 Last update {formatTime(updatedAt)}
               </div>

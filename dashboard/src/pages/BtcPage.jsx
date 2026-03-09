@@ -1,15 +1,11 @@
 import {
-  Activity,
-  BadgePercent,
   Bitcoin,
   CandlestickChart,
-  Clock3,
   Newspaper,
   Radar,
   ShieldCheck,
-  TrendingUp,
 } from "lucide-react";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import {
   getBtcCandles,
   getBtcComposite,
@@ -39,6 +35,17 @@ function sectionBarData(comp) {
   ];
 }
 
+function sentimentAccent(sentiment) {
+  const key = String(sentiment || "neutral").toLowerCase();
+  if (key.includes("bull")) {
+    return "#22c55e";
+  }
+  if (key.includes("bear")) {
+    return "#ef4444";
+  }
+  return "#6b7280";
+}
+
 export default function BtcPage() {
   const { data: composite, error: compositeError, loading: compositeLoading } = usePolling(getBtcComposite, 30000);
   const { data: portfolio, loading: portfolioLoading } = usePolling(getBtcPortfolio, 30000);
@@ -52,6 +59,11 @@ export default function BtcPage() {
     return rows.map((row, index) => ({
       label: row?.time?.slice?.(11, 16) || row?.timestamp?.slice?.(11, 16) || `${index + 1}`,
       value: Number(row?.close ?? row?.trade_price ?? 0),
+      open: Number(row?.open ?? row?.opening_price ?? row?.trade_price ?? 0),
+      high: Number(row?.high ?? row?.high_price ?? row?.trade_price ?? 0),
+      low: Number(row?.low ?? row?.low_price ?? row?.trade_price ?? 0),
+      close: Number(row?.close ?? row?.trade_price ?? 0),
+      volume: Number(row?.volume ?? row?.candle_acc_trade_volume ?? 0),
     }));
   }, [candles]);
 
@@ -65,6 +77,13 @@ export default function BtcPage() {
     { label: "Long/Short", value: filters?.long_short_ratio ?? 0, suffix: "x", tone: "neutral" },
     { label: "Open Interest", value: filters?.open_interest ?? 0, suffix: "", tone: "neutral" },
   ];
+  const marketWatch = [
+    { symbol: "BTC", last: candleSeries.at(-1)?.close ?? candleSeries.at(-1)?.value ?? 0, delta: currentPosition?.pnl_pct ?? 0, tag: "Live" },
+    { symbol: "F&G", last: sentimentValue, delta: composite?.fg_change ?? 0, tag: composite?.fg_label || "Sentiment" },
+    { symbol: "Funding", last: filters?.funding_rate ?? 0, delta: 0, tag: "%" },
+    { symbol: "OI", last: filters?.open_interest ?? 0, delta: 0, tag: "Open Int" },
+  ];
+  const [selectedWatch, setSelectedWatch] = useState("BTC");
 
   return (
     <div className="stack">
@@ -81,17 +100,156 @@ export default function BtcPage() {
 
       {compositeError ? <ErrorState message={`BTC API connection failed: ${compositeError}`} /> : null}
 
-      <div className="page-grid">
-        <div className="col-7">
-          {candlesLoading ? (
-            <LoadingSkeleton height={420} />
-          ) : (
-            <LightweightPriceChart title="BTC Candlestick Proxy" data={candleSeries} />
-          )}
+      <div className="tv-terminal">
+        <aside className="tv-left-rail">
+          <GlassCard className="card-pad">
+            <div className="panel-title">
+              <h2>Watchlist</h2>
+            </div>
+            <div className="rail-list">
+              {marketWatch.map((item) => (
+                <button
+                  key={item.symbol}
+                  type="button"
+                  className={`watchlist-row ${selectedWatch === item.symbol ? "is-active" : ""}`.trim()}
+                  onClick={() => setSelectedWatch(item.symbol)}
+                  style={{ color: "inherit", textAlign: "left" }}
+                >
+                  <strong>{item.symbol}</strong>
+                  <span className="mono">
+                    {item.symbol === "BTC" ? krw(item.last) : typeof item.last === "number" ? Number(item.last).toLocaleString() : item.last}
+                  </span>
+                  <span className={Number(item.delta || 0) >= 0 ? "profit mono" : "loss mono"}>
+                    {pct(item.delta || 0)}
+                  </span>
+                  <span className="subtle">{item.tag}</span>
+                </button>
+              ))}
+            </div>
+          </GlassCard>
+
+          <GlassCard className="card-pad">
+            <div className="panel-title">
+              <h2>Signal Board</h2>
+            </div>
+            <div className="score-list">
+              {scoreBars.map((bar) => (
+                <div key={bar.name}>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6, fontSize: 13 }}>
+                    <span className="subtle">{bar.name}</span>
+                    <span className="mono">{bar.value}</span>
+                  </div>
+                  <div className="signal-bar">
+                    <div
+                      className="signal-bar-fill"
+                      style={{
+                        width: `${Math.min(Math.max(bar.value, 0), 100)}%`,
+                        opacity: bar.value < 35 ? 0.35 : 1,
+                      }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </GlassCard>
+        </aside>
+
+        <div className="tv-main tv-stack">
+          <GlassCard className="card-pad" accent>
+            <div className="symbol-header">
+              <div>
+                <div className="symbol-code">{selectedWatch === "BTC" ? "BTCKRW" : selectedWatch}</div>
+                <div className="symbol-meta">
+                  <span className="toolbar-chip mono">Upbit</span>
+                  <span className="toolbar-chip">Spot</span>
+                  <span className="toolbar-chip">5m</span>
+                  <span className="toolbar-chip">Live Feed</span>
+                </div>
+              </div>
+              <div style={{ textAlign: "right" }}>
+                <div className="symbol-price">
+                  {krw(Number(portfolio?.summary?.btc_price || portfolio?.summary?.current_price || candleSeries.at(-1)?.value || 0))}
+                </div>
+                <div className={Number(currentPosition?.pnl_pct || 0) >= 0 ? "profit" : "loss"} style={{ marginTop: 6, fontWeight: 700 }}>
+                  {pct(currentPosition?.pnl_pct || 0)}
+                </div>
+              </div>
+            </div>
+            {candlesLoading ? <LoadingSkeleton height={420} /> : <LightweightPriceChart title="Price Panel" data={candleSeries} />}
+          </GlassCard>
+
+          <div className="split-2">
+            <GlassCard className="card-pad">
+              <div className="panel-title">
+                <h2>Recent Trades</h2>
+              </div>
+              <div className="table-shell">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Time</th>
+                      <th>Action</th>
+                      <th>Price</th>
+                      <th>PnL</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(tradeRows || []).slice(0, 8).map((trade, index) => (
+                      <tr key={trade.id || index}>
+                        <td>{compactTime(trade.created_at || trade.timestamp)}</td>
+                        <td>
+                          <span
+                            className={`trade-badge ${
+                              String(trade.action || trade.trade_type || "").toUpperCase() === "BUY"
+                                ? "badge-buy"
+                                : String(trade.action || trade.trade_type || "").toUpperCase() === "SELL"
+                                  ? "badge-sell"
+                                  : "badge-hold"
+                            }`.trim()}
+                          >
+                            {trade.action || trade.trade_type || "HOLD"}
+                          </span>
+                        </td>
+                        <td>{krw(trade.price || trade.entry_price)}</td>
+                        <td className={Number(trade.pnl_pct || 0) >= 0 ? "profit glow-profit mono" : "loss glow-loss mono"}>
+                          {pct(trade.pnl_pct || 0)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </GlassCard>
+
+            <GlassCard className="card-pad">
+              <div className="panel-title">
+                <h2>News Feed</h2>
+                <Newspaper size={18} color="var(--text-secondary)" />
+              </div>
+              <div className="stack" style={{ gap: 12 }}>
+                {newsRows.slice(0, 6).map((item, index) => (
+                  <div
+                    key={item.id || item.url || index}
+                    className="news-item"
+                    style={{ "--news-accent": sentimentAccent(item.sentiment) }}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 10, marginBottom: 8 }}>
+                      <strong style={{ fontSize: 14 }}>{item.title || item.headline || "Untitled headline"}</strong>
+                      <span className="pill sentiment-pill">{item.sentiment || "Neutral"}</span>
+                    </div>
+                    <div className="subtle" style={{ fontSize: 13 }}>
+                      {item.source || item.domain || "CryptoPanic"}
+                    </div>
+                  </div>
+                ))}
+                {newsRows.length === 0 ? <EmptyState message="No BTC news available." /> : null}
+              </div>
+            </GlassCard>
+          </div>
         </div>
 
-        <div className="col-5 stack">
-          <GlassCard className="card-pad">
+        <aside className="tv-side">
+          <GlassCard className="card-pad" accent>
             <div className="panel-title">
               <h2>Composite Score</h2>
               <Bitcoin size={18} color="var(--text-secondary)" />
@@ -103,36 +261,22 @@ export default function BtcPage() {
                 <CircularGauge
                   value={Number(composite?.composite?.total ?? composite?.total ?? 0)}
                   label="Score"
-                  subtitle="0 to 100 gradient gauge"
-                  size={220}
+                  subtitle="Execution signal"
+                  size={190}
                 />
-                <div className="stack" style={{ gap: 10 }}>
+                <div className="score-list">
                   {scoreBars.map((bar) => (
                     <div key={bar.name}>
-                      <div
-                        style={{
-                          display: "flex",
-                          justifyContent: "space-between",
-                          marginBottom: 6,
-                          fontSize: 13,
-                        }}
-                      >
+                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6, fontSize: 13 }}>
                         <span className="subtle">{bar.name}</span>
                         <span className="mono">{bar.value}</span>
                       </div>
-                      <div
-                        style={{
-                          height: 10,
-                          borderRadius: 999,
-                          background: "rgba(255,255,255,0.06)",
-                          overflow: "hidden",
-                        }}
-                      >
+                      <div className="signal-bar">
                         <div
+                          className="signal-bar-fill"
                           style={{
                             width: `${Math.min(Math.max(bar.value, 0), 100)}%`,
-                            height: "100%",
-                            background: "var(--gradient-main)",
+                            opacity: bar.value < 35 ? 0.35 : 1,
                           }}
                         />
                       </div>
@@ -142,152 +286,51 @@ export default function BtcPage() {
               </>
             )}
           </GlassCard>
-        </div>
 
-        <div className="col-6">
-          <GlassCard className="card-pad">
+          <GlassCard
+            className={`card-pad ${currentPosition ? (Number(currentPosition.pnl_pct || 0) >= 0 ? "glass-card--profit" : "glass-card--loss") : ""}`.trim()}
+          >
             <div className="panel-title">
-              <h2>Open Position</h2>
+              <h2>Position</h2>
               <ShieldCheck size={18} color="var(--text-secondary)" />
             </div>
             {portfolioLoading ? (
               <LoadingSkeleton height={220} />
             ) : currentPosition ? (
-              <div className="grid-2">
-                <StatCard
-                  label="Entry Price"
-                  value={Number(currentPosition.entry_price || 0)}
-                  prefix="₩"
-                  icon={<BadgePercent size={18} />}
-                  trend={sparkline([currentPosition.entry_price, currentPosition.current_price])}
-                  delta={Number(currentPosition.pnl_pct || 0)}
-                  tone={Number(currentPosition.pnl_pct || 0) >= 0 ? "profit" : "loss"}
-                />
-                <StatCard
-                  label="Current Price"
-                  value={Number(currentPosition.current_price || currentPosition.market_price || 0)}
-                  prefix="₩"
-                  icon={<TrendingUp size={18} />}
-                  trend={sparkline([currentPosition.entry_price, currentPosition.current_price])}
-                  delta={Number(currentPosition.pnl_pct || 0)}
-                  tone={Number(currentPosition.pnl_pct || 0) >= 0 ? "profit" : "loss"}
-                />
-                <StatCard
-                  label="PnL"
-                  value={Number(currentPosition.pnl_pct || 0)}
-                  suffix="%"
-                  icon={<Activity size={18} />}
-                  trend={sparkline([currentPosition.pnl_pct || 0, currentPosition.pnl_pct || 0])}
-                  delta={Number(currentPosition.pnl_pct || 0)}
-                  tone={Number(currentPosition.pnl_pct || 0) >= 0 ? "profit" : "loss"}
-                />
-                <StatCard
-                  label="Holding Time"
-                  value={0}
-                  suffix="h"
-                  icon={<Clock3 size={18} />}
-                  trend={sparkline([1, 2, 3, 4])}
-                  delta={0}
-                  tone="neutral"
-                />
+              <div className="tabular-list">
+                <div className="kv-row"><span className="subtle">Entry</span><span className="mono">{krw(currentPosition.entry_price || 0)}</span></div>
+                <div className="kv-row"><span className="subtle">Current</span><span className="mono">{krw(currentPosition.current_price || currentPosition.market_price || 0)}</span></div>
+                <div className="kv-row"><span className="subtle">PnL</span><span className={Number(currentPosition.pnl_pct || 0) >= 0 ? "profit mono glow-profit" : "loss mono glow-loss"}>{pct(currentPosition.pnl_pct || 0)}</span></div>
+                <div className="kv-row"><span className="subtle">Size</span><span className="mono">{currentPosition.quantity || currentPosition.size || "--"}</span></div>
+                <div className="kv-row"><span className="subtle">Side</span><span className="mono">{currentPosition.side || currentPosition.position_side || "OPEN"}</span></div>
               </div>
             ) : (
               <EmptyState message="No active BTC position." />
             )}
           </GlassCard>
-        </div>
 
-        <div className="col-6">
           <GlassCard className="card-pad">
             <div className="panel-title">
-              <h2>Fear & Greed Gauge</h2>
+              <h2>Sentiment & Filters</h2>
               <Radar size={18} color="var(--text-secondary)" />
             </div>
-            <CircularGauge value={sentimentValue} label="F&G" subtitle={composite?.fg_label || "Sentiment"} size={220} />
-          </GlassCard>
-        </div>
-
-        <div className="col-6">
-          <GlassCard className="card-pad">
-            <div className="panel-title">
-              <h2>Recent Trades</h2>
-            </div>
-            <div className="table-shell">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Time</th>
-                    <th>Action</th>
-                    <th>Price</th>
-                    <th>PnL</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(tradeRows || []).slice(0, 5).map((trade, index) => (
-                    <tr key={trade.id || index}>
-                      <td>{compactTime(trade.created_at || trade.timestamp)}</td>
-                      <td className={String(trade.action || trade.trade_type).toUpperCase() === "BUY" ? "profit" : "loss"}>
-                        {trade.action || trade.trade_type || "—"}
-                      </td>
-                      <td>{krw(trade.price || trade.entry_price)}</td>
-                      <td className={Number(trade.pnl_pct || 0) >= 0 ? "profit" : "loss"}>
-                        {pct(trade.pnl_pct || 0)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </GlassCard>
-        </div>
-
-        <div className="col-6">
-          <GlassCard className="card-pad">
-            <div className="panel-title">
-              <h2>News Feed</h2>
-              <Newspaper size={18} color="var(--text-secondary)" />
-            </div>
-            <div className="stack" style={{ gap: 12 }}>
-              {newsRows.slice(0, 5).map((item, index) => (
-                <div
-                  key={item.id || item.url || index}
-                  style={{
-                    padding: 14,
-                    borderRadius: 16,
-                    background: "rgba(255,255,255,0.03)",
-                    border: "1px solid rgba(255,255,255,0.05)",
-                  }}
-                >
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, marginBottom: 8 }}>
-                    <strong style={{ fontSize: 14 }}>{item.title || item.headline || "Untitled headline"}</strong>
-                    <span className="pill">{item.sentiment || "Neutral"}</span>
-                  </div>
-                  <div className="subtle" style={{ fontSize: 13 }}>
-                    {item.source || item.domain || "CryptoPanic"}
-                  </div>
-                </div>
+            <CircularGauge value={sentimentValue} label="F&G" subtitle={composite?.fg_label || "Sentiment"} size={170} />
+            <div className="tv-section">
+              {filterStats.map((item) => (
+                <StatCard
+                  key={item.label}
+                  label={item.label}
+                  value={Number(item.value || 0)}
+                  suffix={item.suffix}
+                  trend={sparkline([item.value || 0, item.value || 0])}
+                  delta={0}
+                  tone={item.tone}
+                  icon={<CandlestickChart size={18} />}
+                />
               ))}
-              {newsRows.length === 0 ? <EmptyState message="No BTC news available." /> : null}
             </div>
           </GlassCard>
-        </div>
-
-        <div className="col-12">
-          <div className="grid-4">
-            {filterStats.map((item) => (
-              <StatCard
-                key={item.label}
-                label={item.label}
-                value={Number(item.value || 0)}
-                suffix={item.suffix}
-                trend={sparkline([item.value || 0, item.value || 0])}
-                delta={0}
-                tone={item.tone}
-                icon={<CandlestickChart size={18} />}
-              />
-            ))}
-          </div>
-        </div>
+        </aside>
       </div>
     </div>
   );

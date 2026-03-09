@@ -14,6 +14,12 @@ export default function MiniChart({ data = [], color = "#8b5cf6", type = "line" 
     const width = 100 / data.length;
     return (
       <svg viewBox="0 0 100 44" width="100%" height="44" preserveAspectRatio="none">
+        <defs>
+          <linearGradient id={`bar-${color.replace("#", "")}`} x1="0" x2="0" y1="0" y2="1">
+            <stop offset="0%" stopColor={color} stopOpacity="1" />
+            <stop offset="100%" stopColor={color} stopOpacity="0.35" />
+          </linearGradient>
+        </defs>
         {data.map((item, index) => {
           const height = ((Number(item?.value ?? 0) - min) / range) * 36 + 4;
           return (
@@ -24,7 +30,7 @@ export default function MiniChart({ data = [], color = "#8b5cf6", type = "line" 
               width={Math.max(width - 2, 2)}
               height={height}
               rx="2"
-              fill={color}
+              fill={`url(#bar-${color.replace("#", "")})`}
               opacity="0.9"
             />
           );
@@ -48,7 +54,18 @@ export default function MiniChart({ data = [], color = "#8b5cf6", type = "line" 
           <stop offset="0%" stopColor={color} stopOpacity="0.35" />
           <stop offset="100%" stopColor={color} stopOpacity="0" />
         </linearGradient>
+        <filter id={`mini-glow-${color.replace("#", "")}`}>
+          <feGaussianBlur stdDeviation="1.1" result="blur" />
+          <feMerge>
+            <feMergeNode in="blur" />
+            <feMergeNode in="SourceGraphic" />
+          </feMerge>
+        </filter>
       </defs>
+      <polygon
+        points={`0,44 ${points} 100,44`}
+        fill={`url(#mini-${color.replace("#", "")})`}
+      />
       <polyline
         fill="none"
         stroke={color}
@@ -56,6 +73,7 @@ export default function MiniChart({ data = [], color = "#8b5cf6", type = "line" 
         strokeLinejoin="round"
         strokeLinecap="round"
         points={points}
+        filter={`url(#mini-glow-${color.replace("#", "")})`}
       />
     </svg>
   );
