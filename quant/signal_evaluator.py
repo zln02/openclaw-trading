@@ -201,6 +201,26 @@ class SignalEvaluator:
 
     # ── Evaluation ──────────────────────────────────────────────────────
 
+    def _permutation_test(
+        self, signals: List[float], returns: List[float], n_perms: int = 500
+    ) -> float:
+        """순열 검정으로 IC 유의성 p-value 계산 (scipy 불필요).
+
+        Returns:
+            p-value in [0, 1].  낮을수록 IC가 통계적으로 유의함.
+        """
+        import random
+
+        observed_ic = abs(compute_ic(signals, returns))
+        returns_copy = list(returns)
+        count = 0
+        for _ in range(n_perms):
+            random.shuffle(returns_copy)
+            perm_ic = abs(compute_ic(signals, returns_copy))
+            if perm_ic >= observed_ic:
+                count += 1
+        return round(count / n_perms, 4)
+
     def evaluate_signal(self, signal_name: str) -> Dict[str, Any]:
         """Evaluate IC and IR for a single named signal."""
         sigs, rets = self._load_signal_pairs(signal_name)
@@ -212,6 +232,8 @@ class SignalEvaluator:
                 "n": n,
                 "ic": 0.0,
                 "ir": 0.0,
+                "p_value": 1.0,
+                "significant": False,
                 "status": "INSUFFICIENT_DATA",
                 "active": False,
             }
@@ -220,14 +242,27 @@ class SignalEvaluator:
         ic_series = self._rolling_ic_series(sigs, rets)
         ir = compute_ir(ic_series) if len(ic_series) >= 3 else 0.0
 
-        active = abs(ic) >= SIGNAL_IC_MIN and abs(ir) >= SIGNAL_IC_IR_MIN
+        p_value = self._permutation_test(sigs, rets)
+        significant = p_value < 0.05
+
+        active = abs(ic) >= SIGNAL_IC_MIN and abs(ir) >= SIGNAL_IC_IR_MIN and significant
         status = "ACTIVE" if active else ("LOW_IC" if abs(ic) < SIGNAL_IC_MIN else "LOW_IR")
+
+        if not significant:
+            log.warning(
+                "signal IC not statistically significant",
+                signal=signal_name,
+                ic=ic,
+                p_value=p_value,
+            )
 
         return {
             "signal": signal_name,
             "n": n,
             "ic": ic,
             "ir": ir,
+            "p_value": p_value,
+            "significant": significant,
             "ic_series_len": len(ic_series),
             "status": status,
             "active": active,

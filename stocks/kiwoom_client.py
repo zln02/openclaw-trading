@@ -222,6 +222,10 @@ class KiwoomAPIClient:
 
                 response = httpx.post(url, headers=headers, json=body, timeout=30.0)
 
+                if response.status_code == 429:
+                    _log(f"[{api_id}] Rate Limit (429) → 2초 대기 후 재시도", "WARN")
+                    time.sleep(2)
+                    continue
                 if response.status_code != 200:
                     raise Exception(
                         f"HTTP {response.status_code}: {response.text[:200]}"
@@ -486,6 +490,11 @@ class KiwoomAPIClient:
             _log(f"주문 성공: 주문번호 {order_no}", "TRADE")
         else:
             _log(f"주문 응답 이상: {result}", "WARN")
+            try:
+                from common.telegram import send_telegram
+                send_telegram(f"⚠️ Kiwoom 주문 실패\n응답: {result.get('return_msg', str(result)[:100])}")
+            except Exception:
+                pass
 
         return {
             "success": success,

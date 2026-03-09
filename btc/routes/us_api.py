@@ -20,6 +20,33 @@ router = APIRouter()
 _fx_cache = {"ts": 0, "rate": 0}
 
 
+def _batch_fetch_prices(symbols: list) -> dict:
+    """여러 심볼의 현재가를 한 번에 조회 (N+1 방지)."""
+    if not symbols:
+        return {}
+    try:
+        import yfinance as yf
+        data = yf.download(symbols, period="2d", progress=False, threads=True, auto_adjust=True)
+        prices = {}
+        close = data.get("Close") if hasattr(data, "get") else None
+        if close is None:
+            return {}
+        if len(symbols) == 1:
+            sym = symbols[0]
+            if hasattr(close, "dropna") and len(close.dropna()) > 0:
+                prices[sym] = float(close.dropna().iloc[-1])
+        else:
+            for sym in symbols:
+                if sym in close.columns:
+                    col = close[sym].dropna()
+                    if len(col) > 0:
+                        prices[sym] = float(col.iloc[-1])
+        return prices
+    except Exception as e:
+        log.warning(f"yfinance 배치 조회 실패: {e}")
+        return {}
+
+
 # @router.get("/us", response_class=HTMLResponse)
 # async def us_page():
 #     from btc.templates.us_html import US_DASHBOARD_HTML
@@ -72,37 +99,24 @@ async def get_us_portfolio():
         closed_res = supabase.table("us_trade_executions").select("*").eq("result", "CLOSED").order("created_at", desc=True).limit(100).execute()
         closed_positions = closed_res.data or []
         
-        # 현재 가격 계산
-        import yfinance as _yf_pf
+        # 현재 가격 계산 (배치 조회로 N+1 방지)
+        symbols = list({p.get("symbol", "") for p in open_positions if p.get("symbol")})
+        batch_prices = _batch_fetch_prices(symbols)
         total_invested = 0
         total_current = 0
-        
+
         for p in open_positions:
             sym = p.get("symbol", "")
             entry = float(p.get("price", 0))
             qty = float(p.get("quantity", 0))
             invested = entry * qty
             total_invested += invested
-            
-            try:
-                t = _yf_pf.Ticker(sym)
-                h = t.history(period="2d")
-                if not h.empty:
-                    cur = float(h["Close"].iloc[-1])
-                    p["current_price"] = round(cur, 2)
-                    p["pnl_pct"] = round((cur / entry - 1) * 100, 2) if entry else 0
-                    p["pnl_usd"] = round((cur - entry) * qty, 2)
-                    total_current += cur * qty
-                else:
-                    p["current_price"] = entry
-                    p["pnl_pct"] = 0
-                    p["pnl_usd"] = 0
-                    total_current += invested
-            except Exception:
-                p["current_price"] = entry
-                p["pnl_pct"] = 0
-                p["pnl_usd"] = 0
-                total_current += invested
+
+            cur = batch_prices.get(sym, entry)
+            p["current_price"] = round(cur, 2)
+            p["pnl_pct"] = round((cur / entry - 1) * 100, 2) if entry else 0
+            p["pnl_usd"] = round((cur - entry) * qty, 2)
+            total_current += cur * qty
         
         total_pnl_pct = round((total_current / total_invested - 1) * 100, 2) if total_invested > 0 else 0
         

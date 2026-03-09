@@ -36,10 +36,15 @@ log = get_logger("news_analyst")
 # ── Claude 모델 ID 매핑 ─────────────────────────────────────────────────────
 _CLAUDE_MODEL_MAP = {
     "claude-haiku": "claude-haiku-4-5-20251001",
+    "claude-haiku-4": "claude-haiku-4-5-20251001",
     "claude-haiku-4-5": "claude-haiku-4-5-20251001",
+    "claude-haiku-4-5-20251001": "claude-haiku-4-5-20251001",
     "claude-sonnet": "claude-sonnet-4-6",
+    "claude-sonnet-4": "claude-sonnet-4-6",
     "claude-sonnet-4-6": "claude-sonnet-4-6",
     "claude-opus": "claude-opus-4-6",
+    "claude-opus-4": "claude-opus-4-6",
+    "claude-opus-4-6": "claude-opus-4-6",
 }
 
 # Claude 토큰 단가 추정 ($/1K tokens, 보수적)

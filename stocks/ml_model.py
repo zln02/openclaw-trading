@@ -159,7 +159,7 @@ def extract_features(closes, volumes, highs, lows, idx):
     return_20d = (c[-1] / c[-21] - 1) * 100 if len(c) >= 21 else 0
 
     # 일일 고저 범위
-    high_low_range = (h[-1] - l[-1]) / price * 100
+    high_low_range = (h[-1] - l[-1]) / max(price, 1) * 100
 
     # 이동평균 대비
     ma5 = sum(c[-5:]) / 5
@@ -173,7 +173,7 @@ def extract_features(closes, volumes, highs, lows, idx):
     atr_pct = atr / price * 100 if price > 0 else 0
 
     # 거래량 추세
-    vol_trend = avg_vol_5 / avg_vol_20 if avg_vol_20 > 0 else 1
+    vol_trend = avg_vol_5 / max(avg_vol_20, 1)
 
     # 일부 피처는 가격으로 정규화
     return [
@@ -380,7 +380,10 @@ def compute_shap_values(model, X_sample: np.ndarray) -> dict:
 
     # 이진 분류: shap_vals shape = (n_samples, n_features)
     if isinstance(shap_vals, list):
-        shap_vals = shap_vals[1]  # 클래스 1 (매수)
+        sv = shap_vals[1] if len(shap_vals) > 1 else shap_vals[0]
+    else:
+        sv = shap_vals  # 1D array for binary classifier
+    shap_vals = sv
 
     mean_abs = np.abs(shap_vals).mean(axis=0)
     ranking = sorted(

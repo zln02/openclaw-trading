@@ -107,105 +107,73 @@ class StrategyReviewer:
             log.warning("today_strategy load failed", error=exc)
             return {}
 
-    def collect_weekly_metrics(self, as_of: str | date | datetime | None = None) -> dict:
-        end_day = _to_date(as_of)
-        start_day = end_day - timedelta(days=7)
-        start_iso = start_day.isoformat()
-        end_iso = (end_day + timedelta(days=1)).isoformat()
+    def _collect_market_trades(self, market: str, since: str, until: str | None = None) -> dict:
+        """특정 시장의 거래 데이터를 수집 (KR / US / BTC 공통 헬퍼).
 
-        out = {
-            "period_start": start_iso,
-            "period_end": end_day.isoformat(),
-            "kr": {"trades": 0, "closed": 0, "wins": 0, "losses": 0, "pnl_sum": 0.0},
-            "us": {"trades": 0, "closed": 0, "wins": 0, "losses": 0, "pnl_sum": 0.0},
-            "btc": {"trades": 0, "closed": 0, "wins": 0, "losses": 0, "pnl_sum": 0.0},
-        }
+        Args:
+            market: 'kr' | 'us' | 'btc'
+            since:  ISO 날짜 (포함)
+            until:  ISO 날짜 (미포함), None이면 무제한
 
+        Returns:
+            dict: {trades, closed, wins, losses, pnl_sum}
+        """
+        _TABLE   = {"kr": "trade_executions", "us": "us_trade_executions", "btc": "btc_position"}
+        _TIMECOL = {"kr": "created_at",        "us": "created_at",          "btc": "exit_time"}
+        _PNLCOL  = {"kr": ("pnl", "pnl_krw"),  "us": ("pnl", "pnl_usd"),    "btc": ("pnl", None)}
+
+        out = {"trades": 0, "closed": 0, "wins": 0, "losses": 0, "pnl_sum": 0.0}
         if not self.supabase:
             return out
 
-        # KR
         try:
-            rows = (
-                self.supabase.table("trade_executions")
+            q = (
+                self.supabase.table(_TABLE[market])
                 .select("*")
-                .gte("created_at", start_iso)
-                .lt("created_at", end_iso)
-                .execute()
-                .data
-                or []
+                .gte(_TIMECOL[market], since)
             )
-            out["kr"]["trades"] = len(rows)
-            for r in rows:
-                if str(r.get("result") or "").upper() in {"CLOSED", "SELL"}:
-                    out["kr"]["closed"] += 1
-                    pnl = _safe_float(r.get("pnl") or r.get("pnl_krw"), 0.0)
-                    out["kr"]["pnl_sum"] += pnl
-                    if pnl > 0:
-                        out["kr"]["wins"] += 1
-                    elif pnl < 0:
-                        out["kr"]["losses"] += 1
+            if until:
+                q = q.lt(_TIMECOL[market], until)
+            if market == "btc":
+                q = q.eq("status", "CLOSED")
+            rows = q.execute().data or []
         except Exception as exc:
-            log.warning("weekly KR metrics failed", error=exc)
+            log.warning(f"weekly {market.upper()} metrics failed", error=exc)
+            return out
 
-        # US
-        try:
-            rows = (
-                self.supabase.table("us_trade_executions")
-                .select("*")
-                .gte("created_at", start_iso)
-                .lt("created_at", end_iso)
-                .execute()
-                .data
-                or []
-            )
-            out["us"]["trades"] = len(rows)
-            for r in rows:
-                if str(r.get("result") or "").upper() in {"CLOSED", "SELL"}:
-                    out["us"]["closed"] += 1
-                    pnl = _safe_float(r.get("pnl") or r.get("pnl_usd"), 0.0)
-                    out["us"]["pnl_sum"] += pnl
-                    if pnl > 0:
-                        out["us"]["wins"] += 1
-                    elif pnl < 0:
-                        out["us"]["losses"] += 1
-        except Exception as exc:
-            log.warning("weekly US metrics failed", error=exc)
-
-        # BTC
-        try:
-            rows = (
-                self.supabase.table("btc_position")
-                .select("*")
-                .eq("status", "CLOSED")
-                .gte("exit_time", start_iso)
-                .lt("exit_time", end_iso)
-                .execute()
-                .data
-                or []
-            )
-            out["btc"]["trades"] = len(rows)
-            out["btc"]["closed"] = len(rows)
-            for r in rows:
-                pnl = _safe_float(r.get("pnl"), 0.0)
-                out["btc"]["pnl_sum"] += pnl
+        pnl_col, pnl_fallback = _PNLCOL[market]
+        out["trades"] = len(rows)
+        for r in rows:
+            is_closed = market == "btc" or str(r.get("result") or "").upper() in {"CLOSED", "SELL"}
+            if is_closed:
+                out["closed"] += 1
+                raw_pnl = r.get(pnl_col) or (r.get(pnl_fallback) if pnl_fallback else None)
+                pnl = _safe_float(raw_pnl, 0.0)
+                out["pnl_sum"] += pnl
                 if pnl > 0:
-                    out["btc"]["wins"] += 1
+                    out["wins"] += 1
                 elif pnl < 0:
-                    out["btc"]["losses"] += 1
-        except Exception as exc:
-            log.warning("weekly BTC metrics failed", error=exc)
+                    out["losses"] += 1
+        return out
 
-        # aggregate winrate
-        total_closed = out["kr"]["closed"] + out["us"]["closed"] + out["btc"]["closed"]
-        total_wins = out["kr"]["wins"] + out["us"]["wins"] + out["btc"]["wins"]
+    def collect_weekly_metrics(self, as_of: str | date | datetime | None = None) -> dict:
+        end_day = _to_date(as_of)
+        start_iso = (end_day - timedelta(days=7)).isoformat()
+        end_iso = (end_day + timedelta(days=1)).isoformat()
+
+        out: dict = {
+            "period_start": start_iso,
+            "period_end": end_day.isoformat(),
+        }
+        for market in ("kr", "us", "btc"):
+            out[market] = self._collect_market_trades(market, start_iso, end_iso)
+
+        total_closed = sum(out[m]["closed"] for m in ("kr", "us", "btc"))
+        total_wins = sum(out[m]["wins"] for m in ("kr", "us", "btc"))
         out["total_closed"] = total_closed
         out["total_wins"] = total_wins
         out["overall_win_rate"] = round((total_wins / total_closed * 100.0) if total_closed > 0 else 0.0, 2)
-        out["overall_pnl_sum"] = round(
-            out["kr"]["pnl_sum"] + out["us"]["pnl_sum"] + out["btc"]["pnl_sum"],
-            4,
-        )
+        out["overall_pnl_sum"] = round(sum(out[m]["pnl_sum"] for m in ("kr", "us", "btc")), 4)
         return out
 
     def collect_factor_context(self) -> dict:

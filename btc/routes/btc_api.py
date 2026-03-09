@@ -798,3 +798,21 @@ async def get_agent_decisions(limit: int = 20):
     except Exception as e:
         log.warning(f"agent_decisions: {e}")
         return {"decisions": [], "error": str(e)}
+
+
+@router.get("/api/btc/decision-log")
+async def get_decision_log(limit: int = 20):
+    """BTC 매매 판단 로그 (AI reason + 지표 스냅샷)."""
+    try:
+        rows = (
+            supabase.table("btc_trades")
+            .select("created_at, action, confidence, reason, composite_score, fear_greed, rsi")
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        return {"decisions": rows.data or []}
+    except Exception as e:
+        log.error(f"decision-log 조회 실패: {e}")
+        from common.api_utils import api_error
+        return api_error("판단 로그 조회 실패")

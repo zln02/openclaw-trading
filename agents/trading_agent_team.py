@@ -16,6 +16,7 @@ import json
 import os
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -266,6 +267,18 @@ _ALL_TOOLS = _DATA_TOOLS + _REPORT_TOOLS
 # 서브에이전트 실행 헬퍼
 # ══════════════════════════════════════════════════════════════════════════
 
+_VALID_DECISIONS = {"BUY", "SELL", "HOLD", "NO_POSITION"}
+_AGENT_EXECUTOR = ThreadPoolExecutor(max_workers=4)
+
+# 사이클 내 도구 결과 캐시 (중복 API 호출 방지)
+_tool_cache: Dict[str, Any] = {}
+
+
+def _clear_tool_cache() -> None:
+    """사이클 시작 시 캐시 초기화."""
+    _tool_cache.clear()
+
+
 def _run_sub_agent(
     role: str,
     system: str,
@@ -273,11 +286,13 @@ def _run_sub_agent(
     tools: list,
     model: str,
     max_tokens: int = 4096,
+    timeout_sec: int = 90,
 ) -> str:
-    """서브에이전트를 tool_runner로 실행하고 최종 텍스트를 반환."""
+    """서브에이전트를 tool_runner로 실행. 타임아웃 90초."""
     log.info(f"[{role}] 분석 시작: {task[:60]}...")
     start = time.time()
-    try:
+
+    def _do_run() -> str:
         runner = _client.beta.messages.tool_runner(
             model=model,
             max_tokens=max_tokens,
@@ -290,12 +305,30 @@ def _run_sub_agent(
             for block in message.content:
                 if hasattr(block, "text") and block.text:
                     result_text = block.text
-        elapsed = round(time.time() - start, 1)
-        log.info(f"[{role}] 완료 ({elapsed}s, {len(result_text)}자)")
         return result_text or "(결과 없음)"
+
+    try:
+        future = _AGENT_EXECUTOR.submit(_do_run)
+        result = future.result(timeout=timeout_sec)
+        elapsed = round(time.time() - start, 1)
+        log.info(f"[{role}] 완료 ({elapsed}s, {len(result)}자)")
+        return result
+    except FutureTimeout:
+        log.warning(f"[{role}] 타임아웃 ({timeout_sec}s) — 기본값 반환")
+        return f"[{role}] 응답 시간 초과 ({timeout_sec}s) — 기본 분석 사용"
     except Exception as e:
         log.warning(f"[{role}] 실행 실패: {e}")
         return f"[{role} 오류] {e}"
+
+
+def _validate_orchestrator_decision(decision_text: str) -> bool:
+    """오케스트레이터 결정 유효성 검증."""
+    text_upper = decision_text.upper()
+    for d in _VALID_DECISIONS:
+        if d in text_upper:
+            return True
+    log.warning(f"오케스트레이터 결정에 유효한 값 없음: {decision_text[:100]}")
+    return False
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -432,6 +465,7 @@ class TradingAgentTeam:
     def run(self) -> Dict[str, Any]:
         """5-에이전트 팀 전체 실행 후 결과 딕셔너리 반환."""
         log.info(f"[TradingAgentTeam] {self.market.upper()} 분석 시작")
+        _clear_tool_cache()  # 사이클 시작 시 도구 캐시 초기화
         ts = datetime.now(timezone.utc).isoformat()
 
         market_analysis  = self._run_market_analyst()
@@ -441,6 +475,11 @@ class TradingAgentTeam:
         orchestrator_out = self._run_orchestrator(
             market_analysis, news_analysis, risk_analysis
         )
+
+        # 오케스트레이터 결정 검증
+        if not _validate_orchestrator_decision(orchestrator_out):
+            log.warning("유효한 결정 없음 — HOLD로 처리")
+            orchestrator_out = f"[검증 실패] {orchestrator_out}\n최종 결정: HOLD (신뢰도: 0%)"
 
         reporter_out = self._run_reporter(
             market_analysis, news_analysis, risk_analysis, orchestrator_out

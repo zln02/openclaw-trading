@@ -18,6 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from common.env_loader import load_env
+from common.metrics import calc_trade_pnl
 from common.supabase_client import get_supabase
 from common.telegram import send_telegram
 
@@ -101,7 +102,7 @@ def _fetch_loss_trades() -> list[dict]:
                             "exit_price": exit_p,
                             "quantity": qty,
                             "pnl": pnl,
-                            "pnl_pct": (exit_p - entry) / entry * 100 if entry else 0,
+                            "pnl_pct": calc_trade_pnl(r, market="kr") or 0,
                             "exit_time": r.get("created_at"),
                             "reason": r.get("reason", ""),
                         })
@@ -128,7 +129,7 @@ def _fetch_loss_trades() -> list[dict]:
                             "exit_price": exit_p,
                             "quantity": qty,
                             "pnl": pnl,
-                            "pnl_pct": (exit_p - entry) / entry * 100 if entry else 0,
+                            "pnl_pct": calc_trade_pnl(r, market="us") or 0,
                             "exit_time": r.get("created_at", ""),
                             "reason": r.get("exit_reason", "") or r.get("reason", ""),
                         })

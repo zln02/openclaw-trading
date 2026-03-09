@@ -79,9 +79,11 @@ def _require_auth(request: Request, credentials: HTTPBasicCredentials = Depends(
             headers={"WWW-Authenticate": "Basic realm='OpenClaw Dashboard'"},
         )
 
+_CORS_ORIGINS = os.environ.get("CORS_ORIGINS", "http://localhost:3000").split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=_CORS_ORIGINS,
     allow_methods=["GET", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Accept"],
 )

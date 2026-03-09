@@ -38,7 +38,8 @@ except ImportError:
 def _safe_path(path: str) -> Path:
     """경로를 WORKSPACE 내부로 제한. 외부 경로면 ValueError."""
     p = (_WS / path).resolve() if not os.path.isabs(path) else Path(path).resolve()
-    if not str(p).startswith(str(_WS)):
+    # startswith(str(_WS)) 만으로는 "/workspace_evil" 같은 경로가 통과됨 → "/" 추가
+    if p != _WS and not str(p).startswith(str(_WS) + "/"):
         raise ValueError(f"보안: WORKSPACE 외부 경로 접근 차단 ({p})")
     return p
 

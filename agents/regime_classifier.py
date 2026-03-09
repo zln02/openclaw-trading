@@ -34,6 +34,18 @@ log = get_logger("regime_classifier")
 MODEL_DIR = BRAIN_PATH / "regime-model"
 MODEL_PATH = MODEL_DIR / "xgb_regime_model.json"
 
+# 피처 순서를 명시적으로 관리 (모델 학습/추론 일관성 보장)
+FEATURE_NAMES = [
+    "spy_ret_5d", "spy_ret_20d", "spy_vol_20d", "vix_level",
+    "vix_ret_5d", "vix_term_proxy", "ret_skew_60d", "ret_kurt_60d",
+    "credit_spread_proxy", "corr_shift_20_60",
+]
+
+
+def _features_to_array(features: dict) -> "list[float]":
+    """피처 딕셔너리 → 정렬된 배열 (피처 순서 보장)."""
+    return [_safe_float(features.get(name), 0.0) for name in FEATURE_NAMES]
+
 REGIME_PRESETS = {
     "RISK_ON": {
         "buy_threshold_adj": -3,
@@ -207,6 +219,19 @@ class RegimeResult:
 
 
 class RegimeClassifier:
+    FEATURE_ORDER = [
+        "spy_ret_5d",
+        "spy_ret_20d",
+        "spy_vol_20d",
+        "vix_level",
+        "vix_ret_5d",
+        "vix_term_proxy",
+        "ret_skew_60d",
+        "ret_kurt_60d",
+        "credit_spread_proxy",
+        "corr_shift_20_60",
+    ]
+
     def __init__(self, model_path: Path = MODEL_PATH):
         self.model_path = Path(model_path)
         self._model = None
@@ -316,21 +341,12 @@ class RegimeClassifier:
             if model is not None:
                 try:
                     labels = ["RISK_ON", "RISK_OFF", "TRANSITION", "CRISIS"]
-                    order = [
-                        "spy_ret_5d",
-                        "spy_ret_20d",
-                        "spy_vol_20d",
-                        "vix_level",
-                        "vix_ret_5d",
-                        "vix_term_proxy",
-                        "ret_skew_60d",
-                        "ret_kurt_60d",
-                        "credit_spread_proxy",
-                        "corr_shift_20_60",
-                    ]
                     import numpy as np
 
-                    X = np.array([[float(features.get(k, 0.0)) for k in order]], dtype=float)
+                    X = np.array(
+                        [[float(features.get(k, 0.0)) for k in self.FEATURE_ORDER]],
+                        dtype=float,
+                    )
                     probs = model.predict_proba(X)[0]
                     idx = int(max(range(len(probs)), key=lambda i: probs[i]))
                     regime = labels[idx] if idx < len(labels) else "TRANSITION"
@@ -366,20 +382,7 @@ class RegimeClassifier:
             try:
                 feat = self.get_features(as_of=d.isoformat())
                 rule = self.classify_rule(feat)
-                rows.append(
-                    [
-                        _safe_float(feat.get("spy_ret_5d")),
-                        _safe_float(feat.get("spy_ret_20d")),
-                        _safe_float(feat.get("spy_vol_20d")),
-                        _safe_float(feat.get("vix_level")),
-                        _safe_float(feat.get("vix_ret_5d")),
-                        _safe_float(feat.get("vix_term_proxy")),
-                        _safe_float(feat.get("ret_skew_60d")),
-                        _safe_float(feat.get("ret_kurt_60d")),
-                        _safe_float(feat.get("credit_spread_proxy")),
-                        _safe_float(feat.get("corr_shift_20_60")),
-                    ]
-                )
+                rows.append(_features_to_array(feat))
                 labels.append({"RISK_ON": 0, "RISK_OFF": 1, "TRANSITION": 2, "CRISIS": 3}[rule.regime])
             except Exception:
                 pass
@@ -390,8 +393,8 @@ class RegimeClassifier:
             else:
                 d = date(d.year, d.month + 1, 1)
 
-        if len(rows) < 24:
-            return {"ok": False, "error": f"not enough samples: {len(rows)}"}
+        if len(rows) < 36:
+            return {"ok": False, "error": f"not enough samples: {len(rows)} (min 36 months)"}
 
         X = np.array(rows, dtype=float)
         y = np.array(labels, dtype=int)
@@ -408,11 +411,22 @@ class RegimeClassifier:
         )
         model.fit(X, y)
 
+        # 교차 검증 (TimeSeriesSplit)
+        cv_result = {}
+        try:
+            from sklearn.model_selection import TimeSeriesSplit, cross_val_score
+            cv = TimeSeriesSplit(n_splits=3)
+            scores = cross_val_score(model, X, y, cv=cv, scoring="accuracy")
+            log.info(f"레짐 모델 CV 정확도: {scores.mean():.3f} ± {scores.std():.3f}")
+            cv_result = {"accuracy_cv": round(float(scores.mean()), 4), "accuracy_cv_std": round(float(scores.std()), 4)}
+        except Exception as cv_exc:
+            log.warning(f"CV 평가 실패: {cv_exc}")
+
         MODEL_DIR.mkdir(parents=True, exist_ok=True)
         model.save_model(str(self.model_path))
         self._model = model
 
-        return {"ok": True, "samples": int(len(rows)), "model_path": str(self.model_path)}
+        return {"ok": True, "samples": int(len(rows)), "model_path": str(self.model_path), **cv_result}
 
     def get_preset(self, regime: str) -> dict:
         return REGIME_PRESETS.get(str(regime or "").upper(), {})

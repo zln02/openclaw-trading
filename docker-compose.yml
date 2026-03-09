@@ -1,0 +1,54 @@
+version: '3.8'
+
+services:
+  dashboard:
+    build: .
+    ports:
+      - "8080:8080"
+    env_file: .env
+    environment:
+      - PYTHONPATH=/app
+    volumes:
+      - ./brain:/app/brain
+      - ./logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/system"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+
+  btc-agent:
+    build: .
+    command: ["python", "btc/btc_trading_agent.py"]
+    env_file: .env
+    environment:
+      - PYTHONPATH=/app
+    volumes:
+      - ./brain:/app/brain
+      - ./logs:/app/logs
+    restart: unless-stopped
+    depends_on:
+      - dashboard
+
+  kr-agent:
+    build: .
+    command: ["python", "stocks/stock_trading_agent.py"]
+    env_file: .env
+    environment:
+      - PYTHONPATH=/app
+    volumes:
+      - ./brain:/app/brain
+      - ./logs:/app/logs
+    restart: unless-stopped
+
+  us-agent:
+    build: .
+    command: ["python", "stocks/us_stock_trading_agent.py"]
+    env_file: .env
+    environment:
+      - PYTHONPATH=/app
+    volumes:
+      - ./brain:/app/brain
+      - ./logs:/app/logs
+    restart: unless-stopped

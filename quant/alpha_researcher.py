@@ -260,18 +260,22 @@ class AlphaResearcher:
 
     # ── Grid search ──────────────────────────────────────────────────────
 
+    _EARLY_STOP_NO_IMPROVE = 20  # 연속 미개선 횟수 초과 시 중단
+
     def _grid_search(
         self, stock_series: List[Tuple[str, List[Dict]]], dry_run: bool = False
     ) -> List[Dict[str, Any]]:
-        """파라미터 공간 전체 grid search."""
+        """파라미터 공간 전체 grid search (조기 종료 포함)."""
         keys = list(self._param_space.keys())
         values = [self._param_space[k] for k in keys]
         combos = list(product(*values))
 
         log.info("grid search 시작", n_combos=len(combos), n_stocks=len(stock_series))
         results = []
+        best_ir = -999.0
+        no_improve_count = 0
 
-        for combo in combos:
+        for i, combo in enumerate(combos):
             params = dict(zip(keys, combo))
 
             # 모든 종목에 대해 walk-forward IC 평균
@@ -284,20 +288,35 @@ class AlphaResearcher:
                     total_windows += nw
 
             if not all_ic:
-                continue
+                no_improve_count += 1
+            else:
+                avg_ic = round(sum(all_ic) / len(all_ic), 6)
+                avg_ir = round(sum(all_ir) / len(all_ir), 4)
+                results.append({
+                    "params": params,
+                    "ic": avg_ic,
+                    "ir": avg_ir,
+                    "n_stocks": len(all_ic),
+                    "n_windows": total_windows,
+                })
 
-            avg_ic = round(sum(all_ic) / len(all_ic), 6)
-            avg_ir = round(sum(all_ir) / len(all_ir), 4)
-            results.append({
-                "params": params,
-                "ic": avg_ic,
-                "ir": avg_ir,
-                "n_stocks": len(all_ic),
-                "n_windows": total_windows,
-            })
+                if avg_ir > best_ir:
+                    best_ir = avg_ir
+                    no_improve_count = 0
+                else:
+                    no_improve_count += 1
 
-            if dry_run:
-                log.info("dry-run combo", params=params, ic=avg_ic, ir=avg_ir)
+                if dry_run:
+                    log.info("dry-run combo", params=params, ic=avg_ic, ir=avg_ir)
+
+            if no_improve_count >= self._EARLY_STOP_NO_IMPROVE:
+                log.info(
+                    "조기 종료",
+                    evaluated=i + 1,
+                    total=len(combos),
+                    no_improve_streak=no_improve_count,
+                )
+                break
 
         results.sort(key=lambda x: x["ir"], reverse=True)
         return results

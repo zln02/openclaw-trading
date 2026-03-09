@@ -1,12 +1,37 @@
+import { useState } from "react";
 import {
   Building2, Wallet, Clock, TrendingUp,
   AlertTriangle, Brain, Target, Layers, ChevronUp, ChevronDown,
 } from "lucide-react";
+import { PieChart, Pie, Cell, Tooltip } from "recharts";
 import usePolling from "../hooks/usePolling";
 import StatCard from "../components/StatCard";
 import ScoreGauge from "../components/ScoreGauge";
 import TradeTable from "../components/TradeTable";
 import { getKrComposite, getKrTrades, getKrSystem, getKrTop, getStockPortfolio } from "../api";
+
+const SECTOR_COLORS = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#06b6d4"];
+
+function SectorChart({ positions }) {
+  const sectors = {};
+  positions.forEach((p) => {
+    const s = p.sector || p.industry || "기타";
+    sectors[s] = (sectors[s] || 0) + (Number(p.eval_amount || p.evaluation || 0));
+  });
+  const data = Object.entries(sectors).map(([name, value]) => ({ name, value }));
+  if (!data.length) return null;
+  return (
+    <div className="flex flex-col items-center">
+      <p className="text-xs text-text-secondary mb-1">섹터 분포</p>
+      <PieChart width={200} height={140}>
+        <Pie data={data} cx={100} cy={70} outerRadius={60} dataKey="value" nameKey="name">
+          {data.map((_, i) => <Cell key={i} fill={SECTOR_COLORS[i % SECTOR_COLORS.length]} />)}
+        </Pie>
+        <Tooltip formatter={(v) => `₩${Number(v).toLocaleString()}`} />
+      </PieChart>
+    </div>
+  );
+}
 
 const fmt   = (n) => n != null ? Number(n).toLocaleString() : "—";
 const pct   = (n) => n != null ? `${Number(n) >= 0 ? "+" : ""}${Number(n).toFixed(2)}%` : "—";
@@ -42,11 +67,12 @@ function RetBadge({ value, label }) {
 }
 
 export default function KrStockPage() {
-  const { data: composite, error: compositeError } = usePolling(getKrComposite,   10000);
+  const { data: composite, error: compositeError, lastUpdated } = usePolling(getKrComposite, 10000);
   const { data: kiwoom }   = usePolling(getStockPortfolio, 15000);
   const { data: trades }   = usePolling(getKrTrades,       20000);
   const { data: system }   = usePolling(getKrSystem,       30000);
   const { data: topStocks }= usePolling(getKrTop,          60000);
+  const [stockFilter, setStockFilter] = useState("");
 
   // 키움 실시간 포트폴리오 (배너와 동일 데이터)
   const positions   = kiwoom?.positions || [];
@@ -68,17 +94,50 @@ export default function KrStockPage() {
         </div>
       )}
 
+      {/* 일일 손실 한도 초과 경고 배너 */}
+      {composite?.is_daily_loss_exceeded && (
+        <div className="flex items-start gap-3 px-4 py-3 rounded-lg bg-red-500/15 border border-red-500/40 text-red-400">
+          <AlertTriangle className="w-5 h-5 shrink-0 mt-0.5" />
+          <div>
+            <p className="font-semibold text-sm">🚨 일일 손실 한도 초과 — KR 주식 거래 중단</p>
+            <p className="text-xs mt-0.5 text-red-400/80">
+              오늘 실현 손실: <span className="font-mono font-bold">{composite.daily_loss_pct?.toFixed(2)}%</span>
+              &nbsp;/ 한도: <span className="font-mono">{composite.max_daily_loss_pct}%</span>
+              &nbsp;· 내일 자정 이후 자동 재개됩니다.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* 일일 손실 주의 배너 (한도의 75% 이상) */}
+      {!composite?.is_daily_loss_exceeded && composite?.daily_loss_pct != null && composite.daily_loss_pct <= composite.max_daily_loss_pct * 0.75 && composite.daily_loss_pct < 0 && (
+        <div className="flex items-center gap-3 px-4 py-2 rounded-lg bg-yellow-500/10 border border-yellow-500/30 text-yellow-400 text-sm">
+          <AlertTriangle className="w-4 h-4 shrink-0" />
+          <span>
+            ⚠️ 일일 손실 주의: <span className="font-mono font-semibold">{composite.daily_loss_pct?.toFixed(2)}%</span>
+            &nbsp;/ 한도 <span className="font-mono">{composite.max_daily_loss_pct}%</span>
+          </span>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <Building2 className="w-7 h-7 text-blue-400" />
           <h1 className="text-2xl font-bold text-text-primary">KR 주식 대시보드</h1>
         </div>
-        {system?.last_cron && (
-          <span className="text-xs text-text-secondary flex items-center gap-1 bg-card/50 px-3 py-1 rounded-full border border-border">
-            <Clock className="w-3 h-3" /> {system.last_cron}
-          </span>
-        )}
+        <div className="flex items-center gap-3">
+          {lastUpdated && (
+            <span className="text-xs text-text-secondary">
+              마지막 업데이트: {lastUpdated.toLocaleTimeString("ko-KR")}
+            </span>
+          )}
+          {system?.last_cron && (
+            <span className="text-xs text-text-secondary flex items-center gap-1 bg-card/50 px-3 py-1 rounded-full border border-border">
+              <Clock className="w-3 h-3" /> {system.last_cron}
+            </span>
+          )}
+        </div>
       </div>
 
       {/* Score Row */}
@@ -211,6 +270,23 @@ export default function KrStockPage() {
           </div>
         </div>
       </div>
+
+      {/* Sector Distribution + Filter */}
+      {positions.length > 0 && (
+        <div className="card">
+          <div className="card-header flex items-center justify-between">
+            <h3 className="text-sm font-medium text-text-primary">섹터 분포 / 종목 검색</h3>
+            <input
+              type="text"
+              placeholder="종목명 또는 코드..."
+              value={stockFilter}
+              onChange={(e) => setStockFilter(e.target.value)}
+              className="text-xs bg-background border border-border rounded px-2 py-1 text-text-primary w-40 focus:outline-none focus:border-blue-500"
+            />
+          </div>
+          <SectorChart positions={positions} />
+        </div>
+      )}
 
       {/* Open Positions — 키움 실시간 */}
       {positions.length > 0 && (

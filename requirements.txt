@@ -45,3 +45,7 @@ openpyxl>=3.1.0
 # ML explainability
 shap>=0.44.0
 numpy>=1.24.0
+
+# 개발/테스트 의존성
+pytest>=7.0.0
+pytest-cov>=4.0.0

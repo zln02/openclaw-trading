@@ -116,3 +116,7 @@ ALPHA_PARAM_SPACE: dict | None = {
 PARAM_OPT_WIN_RATE_LOW: float = 0.40    # 승률 이 이하 → 방어 모드
 PARAM_OPT_SHARPE_HIGH: float = 1.5     # 샤프 이 이상 → 공격 허용
 PARAM_OPT_IR_IMPROVE_MIN: float = 0.10 # IR 개선 최소값 (+10% 이상일 때 파라미터 교체)
+
+# ── Attribution 다운웨이팅 임계값 ────────────────────────────────────────────
+ATTRIBUTION_DOWNWEIGHT_THRESHOLD: float = -0.5  # avg_contrib 이 이하 → 다운웨이팅
+ATTRIBUTION_DECAY_FACTOR: float = 0.5           # 다운웨이팅 계수 (weight × 이 값)

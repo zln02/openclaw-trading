@@ -83,7 +83,7 @@ const getUsPortfolio = getUsPositions;  // positions = portfolio open positions
 const getUsTop = () => Promise.resolve([]);  // US top stocks 엔드포인트 미구현 시 빈 배열 반환
 
 export default function UsStockPage() {
-  const { data: composite, error: compositeError } = usePolling(getUsComposite, 10000);
+  const { data: composite, error: compositeError, lastUpdated } = usePolling(getUsComposite, 10000);
   const { data: portfolio }  = usePolling(getUsPortfolio, 15000);
   const { data: trades }     = usePolling(getUsTrades, 20000);
   const { data: system }     = usePolling(getUsSystem, 30000);
@@ -91,6 +91,7 @@ export default function UsStockPage() {
 
   const summary   = portfolio?.summary || {};
   const positions = portfolio?.positions || portfolio?.open_positions || [];
+  const fxRate    = composite?.fx_rate;
 
   return (
     <div className="space-y-6">
@@ -101,6 +102,18 @@ export default function UsStockPage() {
           US 데이터 로드 실패: {compositeError}
         </div>
       )}
+
+      {/* Header with lastUpdated + FX */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <Globe className="w-7 h-7 text-indigo-400" />
+          <h1 className="text-2xl font-bold text-text-primary">US 주식 대시보드</h1>
+        </div>
+        <div className="flex items-center gap-3 text-xs text-text-secondary">
+          {fxRate && <span className="bg-card/50 px-3 py-1 rounded-full border border-border">USD/KRW: {Number(fxRate).toLocaleString()}</span>}
+          {lastUpdated && <span>업데이트: {lastUpdated.toLocaleTimeString("ko-KR")}</span>}
+        </div>
+      </div>
 
       {/* Ticker Tape — 미국 주요 지수 실시간 */}
       <div className="card p-0 overflow-hidden rounded-lg">

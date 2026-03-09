@@ -13,6 +13,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
+from common.metrics import calc_trade_pnl
+
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -193,32 +195,40 @@ class WeeklyAttributionRunner:
     # ── Data loading ──────────────────────────────────────────────────────
 
     def _load_closed_trades(self, lookback_days: int = 7) -> List[Dict[str, Any]]:
-        """지난 N일간 체결된 trades (factor_snapshot 있는 것만)."""
+        """지난 N일간 체결된 trades + 미청산 OPEN 포지션 (factor_snapshot 있는 것만)."""
         if not self.supabase:
             return []
         cutoff = (
             datetime.now(timezone.utc) - timedelta(days=lookback_days)
         ).date().isoformat()
-        try:
-            rows = (
-                self.supabase.table("trade_executions")
-                .select("stock_code,factor_snapshot,price,quantity,entry_price")
-                .eq("result", "CLOSED")
-                .eq("trade_type", "SELL")
-                .gte("created_at", cutoff)
-                .execute()
-                .data or []
-            )
-        except Exception as exc:
+
+        def _try_load(query) -> list:
             try:
-                from common.logger import get_logger
-                get_logger("attribution").warning("trade 로드 실패", error=exc)
-            except Exception:
-                pass
-            return []
+                return query.execute().data or []
+            except Exception as exc:
+                try:
+                    from common.logger import get_logger
+                    get_logger("attribution").warning("trade 로드 실패", error=exc)
+                except Exception:
+                    pass
+                return []
+
+        closed_rows = _try_load(
+            self.supabase.table("trade_executions")
+            .select("stock_code,factor_snapshot,price,quantity,entry_price,result")
+            .eq("result", "CLOSED")
+            .eq("trade_type", "SELL")
+            .gte("created_at", cutoff)
+        )
+        open_rows = _try_load(
+            self.supabase.table("trade_executions")
+            .select("stock_code,factor_snapshot,price,quantity,entry_price,result")
+            .eq("result", "OPEN")
+        )
+        all_rows = closed_rows + open_rows
 
         result = []
-        for r in rows:
+        for r in all_rows:
             snap_raw = r.get("factor_snapshot")
             if not snap_raw:
                 continue
@@ -228,13 +238,12 @@ class WeeklyAttributionRunner:
                 continue
             if not isinstance(snap, dict):
                 continue
-            # PnL 계산: price/entry_price에서 직접 계산
-            entry = _safe_float(r.get("entry_price"), 0.0)
-            sell = _safe_float(r.get("price"), 0.0)
-            if entry > 0 and sell > 0:
-                pnl = (sell - entry) / entry * 100.0
+            if r.get("result") == "OPEN":
+                pnl = 0.0  # 미실현 포지션: PnL 0으로 포함 (팩터 노출 추적용)
             else:
-                continue
+                pnl = calc_trade_pnl(r, market="kr")
+                if pnl is None:
+                    continue
             result.append({"pnl_pct": pnl, "factors": snap})
         return result
 
@@ -285,10 +294,22 @@ class WeeklyAttributionRunner:
     def _downweight_low_contributors(
         self,
         factor_attrs: Dict[str, Dict[str, float]],
-        threshold_avg: float = -0.5,
-        decay: float = 0.5,
+        threshold_avg: float | None = None,
+        decay: float | None = None,
     ) -> bool:
         """avg_contrib < threshold인 팩터를 weights.json에서 다운웨이팅."""
+        try:
+            from common.config import ATTRIBUTION_DOWNWEIGHT_THRESHOLD, ATTRIBUTION_DECAY_FACTOR
+            if threshold_avg is None:
+                threshold_avg = ATTRIBUTION_DOWNWEIGHT_THRESHOLD
+            if decay is None:
+                decay = ATTRIBUTION_DECAY_FACTOR
+        except Exception:
+            if threshold_avg is None:
+                threshold_avg = -0.5
+            if decay is None:
+                decay = 0.5
+
         if not self._weights_path.exists():
             return False
         try:

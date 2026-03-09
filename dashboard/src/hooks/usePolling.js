@@ -8,11 +8,18 @@ export default function usePolling(fetcher, intervalMs = 30000) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [lastUpdated, setLastUpdated] = useState(null);
 
   const refresh = useCallback(() => {
     setLoading(true);
     fetcher()
-      .then((d) => { setData(d); setError(null); })
+      .then((d) => {
+        if (d != null) {
+          setData(d);
+          setLastUpdated(new Date());
+          setError(null);
+        }
+      })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
   }, [fetcher]);
@@ -24,5 +31,5 @@ export default function usePolling(fetcher, intervalMs = 30000) {
     return () => clearInterval(id);
   }, [refresh, intervalMs]);
 
-  return { data, error, loading, refresh };
+  return { data, error, loading, refresh, lastUpdated };
 }

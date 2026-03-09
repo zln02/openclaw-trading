@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -27,6 +28,7 @@ from common.config import (
 )
 from common.env_loader import load_env
 from common.logger import get_logger
+from common.metrics import calc_sharpe, calc_trade_pnl, calc_win_rate
 from common.supabase_client import get_supabase
 from common.telegram import Priority, send_telegram
 
@@ -82,22 +84,17 @@ def _load_weekly_stats(supabase, lookback_days: int = 7) -> Dict[str, Any]:
 
     pnls: List[float] = []
     for r in rows:
-        entry = _safe_float(r.get("entry_price"), 0)
-        sell = _safe_float(r.get("price"), 0)
-        if entry > 0 and sell > 0:
-            pnl = (sell - entry) / entry * 100
+        pnl = calc_trade_pnl(r, market="kr")
+        if pnl is not None:
             pnls.append(pnl)
 
     if not pnls:
         return {"n_trades": len(rows)}
 
     n = len(pnls)
-    wins = sum(1 for p in pnls if p > 0)
-    win_rate = wins / n if n > 0 else 0.0
+    win_rate = calc_win_rate(rows, market="kr")
     avg_pnl = sum(pnls) / n if n > 0 else 0.0
-    mean = avg_pnl
-    std = (sum((p - mean) ** 2 for p in pnls) / n) ** 0.5 if n > 1 else 0.0
-    sharpe = (mean / std * (252 ** 0.5)) if std > 0 else 0.0
+    sharpe = calc_sharpe(pnls)
 
     return {
         "n_trades": n,
@@ -266,8 +263,56 @@ class ParamOptimizer:
     def __init__(self, supabase_client=None):
         self.supabase = supabase_client or get_supabase()
 
+    def _backup_params(self) -> None:
+        """현재 agent_params.json을 날짜 스탬프 파일로 백업."""
+        src = _AGENT_PARAMS_PATH
+        if not src.exists():
+            return
+        dst = _AGENT_PARAMS_PATH.parent / f"agent_params_backup_{datetime.now(timezone.utc).date().isoformat()}.json"
+        try:
+            shutil.copy2(src, dst)
+            log.info("파라미터 백업 완료", backup=str(dst))
+        except Exception as exc:
+            log.warning("파라미터 백업 실패", error=exc)
+
+    def rollback_params(self, backup_date: str | None = None) -> bool:
+        """가장 최근 또는 지정 날짜의 백업으로 파라미터를 롤백.
+
+        Args:
+            backup_date: 'YYYY-MM-DD' 형식. None이면 가장 최근 백업 사용.
+
+        Returns:
+            True if rollback succeeded, False otherwise.
+        """
+        if backup_date:
+            src = _AGENT_PARAMS_PATH.parent / f"agent_params_backup_{backup_date}.json"
+        else:
+            backups = sorted(
+                _AGENT_PARAMS_PATH.parent.glob("agent_params_backup_*.json"), reverse=True
+            )
+            if not backups:
+                log.warning("롤백할 백업 없음")
+                return False
+            src = backups[0]
+
+        if not src.exists():
+            log.warning("백업 파일 없음", path=str(src))
+            return False
+
+        try:
+            shutil.copy2(src, _AGENT_PARAMS_PATH)
+            log.info("파라미터 롤백 완료", source=src.name)
+            return True
+        except Exception as exc:
+            log.warning("파라미터 롤백 실패", error=exc)
+            return False
+
     def run(self, dry_run: bool = False, lookback_days: int = 7) -> Dict[str, Any]:
         log.info("param_optimizer 시작", dry_run=dry_run)
+
+        # 변경 전 백업
+        if not dry_run:
+            self._backup_params()
 
         # 1. 저품질 신호 disable
         disabled_signals = _disable_low_ir_signals(dry_run=dry_run)

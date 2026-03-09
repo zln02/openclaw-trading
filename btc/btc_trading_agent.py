@@ -383,7 +383,8 @@ def get_daily_momentum() -> dict:
 def calc_btc_composite(fg_value, rsi_d, bb_pct, vol_ratio_d, trend, ret_7d=0,
                         funding=None, oi=None, ls_ratio=None, kimchi=None,
                         regime: str = "TRANSITION",
-                        news_sentiment: float = 0.0):
+                        news_sentiment: float = 0.0,
+                        whale=None):
     """
     BTC 매수 복합 스코어 (0~100).
     v6: 온체인 데이터(펀딩비, OI, 롱숏비율) 추가.
@@ -511,6 +512,17 @@ def calc_btc_composite(fg_value, rsi_d, bb_pct, vol_ratio_d, trend, ret_7d=0,
         elif kimchi >= 3.0:
             bonus -= 1
 
+    # 고래 신호 (±3점)
+    whale_sc = 0
+    whale = whale or {}
+    whale_sig = whale.get("signal", "NEUTRAL")
+    if whale_sig == "HODL_SIGNAL":
+        whale_sc = 3   # 거래소 유출 급증 = 장기 보유 신호 → 매수 우호
+    elif whale_sig in ("SELL_PRESSURE", "LTH_DISTRIBUTION_RISK"):
+        whale_sc = -3  # 거래소 유입 급증 / LTH 분배 → 매도 압력
+    elif whale_sig == "LTH_MOVEMENT_ALERT":
+        whale_sc = -1
+
     # ── 레짐 기반 실제 동적 조정 (v6.1) ──────────────
     _regime_bonus_map = {
         "RISK_ON":    +5,   # 강세장: 진입 문턱 낮춤
@@ -520,7 +532,7 @@ def calc_btc_composite(fg_value, rsi_d, bb_pct, vol_ratio_d, trend, ret_7d=0,
     }
     regime_adj = _regime_bonus_map.get(str(regime).upper(), 0)
 
-    raw = fg_sc + rsi_sc + bb_sc + vol_sc + tr_sc + funding_sc + ls_sc + oi_sc + news_sc + bonus + regime_adj
+    raw = fg_sc + rsi_sc + bb_sc + vol_sc + tr_sc + funding_sc + ls_sc + oi_sc + news_sc + whale_sc + bonus + regime_adj
     legacy_total = max(0, min(raw, 100))
 
     components = {
@@ -529,6 +541,7 @@ def calc_btc_composite(fg_value, rsi_d, bb_pct, vol_ratio_d, trend, ret_7d=0,
         "vol": vol_sc, "trend": tr_sc,
         "funding": funding_sc, "ls": ls_sc, "oi": oi_sc,
         "news": news_sc,
+        "whale": whale_sc,
         "bonus": bonus,
         "regime_adj": regime_adj,
         "regime": regime,
@@ -1163,6 +1176,22 @@ def run_trading_cycle():
     oi       = get_btc_open_interest()
     ls_ratio = get_btc_long_short_ratio()
     whale    = get_btc_whale_activity()
+
+    # ── 고래 시그널 분류 (기존 whale 데이터 재사용, 추가 API 호출 없음) ──
+    whale_signal: dict = {}
+    try:
+        from btc.signals.whale_tracker import classify_whale_activity as _classify_whale
+        _unc = float((whale or {}).get("unconfirmed_tx") or 0)
+        if _unc > 0:
+            _bl = max(_unc * 0.010, 1.0)
+            whale_signal = _classify_whale(
+                inflow_btc=_unc * 0.015,
+                outflow_btc=_unc * 0.013,
+                inflow_avg_btc=_bl,
+                outflow_avg_btc=_bl,
+            )
+    except Exception:
+        pass
 
     # ── 시장 레짐 (v6.1: 동적 가중치 실제 연동) ──
     try:

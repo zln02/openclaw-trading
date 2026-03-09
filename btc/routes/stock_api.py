@@ -46,15 +46,24 @@ def is_market_open_now() -> bool:
     return 900 <= t <= 1530
 
 
+_name_cache: dict = {}
+_name_cache_ts: float = 0.0
+
 def _stock_name(code: str) -> str:
+    """종목 코드 → 종목명 (5분 캐시, N+1 쿼리 방지)."""
+    global _name_cache, _name_cache_ts
     if not supabase:
         return ""
-    try:
-        db_code = code.lstrip("A") if code.startswith("A") else code
-        r = supabase.table("top50_stocks").select("stock_name").eq("stock_code", db_code).limit(1).execute().data or []
-        return r[0].get("stock_name", "") if r else ""
-    except Exception:
-        return ""
+    # 5분마다 캐시 갱신
+    if _time.time() - _name_cache_ts > 300 or not _name_cache:
+        try:
+            rows = supabase.table("top50_stocks").select("stock_code, stock_name").execute().data or []
+            _name_cache = {r["stock_code"]: r.get("stock_name", "") for r in rows}
+            _name_cache_ts = _time.time()
+        except Exception:
+            pass
+    db_code = code.lstrip("A") if code.startswith("A") else code
+    return _name_cache.get(db_code, "")
 
 
 # ── Stock page ──────────────────────────────────────────
@@ -715,6 +724,39 @@ async def get_kr_composite():
                 "trend": trend,
                 "sentiment": int(win_rate),
             })
+
+        # 오늘 일일 손실 한도 체크
+        try:
+            today_iso = datetime.now().date().isoformat()
+            today_rows = (
+                supabase.table("trade_executions")
+                .select("price,entry_price,quantity")
+                .eq("trade_type", "SELL")
+                .eq("result", "CLOSED")
+                .gte("created_at", today_iso)
+                .execute()
+            ).data or []
+            today_pnl = 0.0
+            today_inv = 0.0
+            for r in today_rows:
+                sell = float(r.get("price") or 0)
+                entry = float(r.get("entry_price") or sell)
+                qty = int(r.get("quantity") or 0)
+                today_pnl += (sell - entry) * qty
+                today_inv += entry * qty
+            if today_inv > 0:
+                today_pnl_pct = round(today_pnl / today_inv * 100, 2)
+            else:
+                today_pnl_pct = 0.0
+            max_daily_loss_pct = -8.0  # -0.08 * 100
+            is_daily_loss_exceeded = today_pnl_pct <= max_daily_loss_pct
+            composite["daily_loss_pct"] = today_pnl_pct
+            composite["max_daily_loss_pct"] = max_daily_loss_pct
+            composite["is_daily_loss_exceeded"] = is_daily_loss_exceeded
+        except Exception:
+            composite["daily_loss_pct"] = 0.0
+            composite["max_daily_loss_pct"] = -8.0
+            composite["is_daily_loss_exceeded"] = False
 
         # daily_ohlcv 에서 KOSPI/KOSDAQ proxy (005930=삼성, 000660=SK하이닉스)
         try:
