@@ -50,7 +50,7 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
 
 @dataclass
 class DailyReportContext:
-    date_str: str
+    date_str: str = ""
     # BTC
     btc_pnl: float = 0.0
     btc_pnl_pct: float = 0.0
@@ -77,6 +77,14 @@ class DailyReportContext:
     trend: str = "UNKNOWN"
     # INFO 버퍼
     info_snippets: list = field(default_factory=list)
+    # Legacy summary fields kept for test/backward compatibility
+    today_pnl_pct: float = 0.0
+    today_pnl_abs: float = 0.0
+    trade_count: int = 0
+    wins: int = 0
+    losses: int = 0
+    tomorrow_strategy: str = ""
+    risk_status: str = "UNKNOWN"
 
 
 class DailyReportGenerator:
@@ -306,6 +314,31 @@ class DailyReportGenerator:
             msg += f"\n{SEP}\n🗒 오늘 알림 ({len(ctx.info_snippets)}건)\n{snippets_summary}"
 
         return msg
+
+    def build_markdown(self, ctx: DailyReportContext, report_date: str) -> str:
+        """Legacy markdown formatter retained for older tests and integrations."""
+        date_label = report_date or ctx.date_str or datetime.now().date().isoformat()
+        pnl_pct = ctx.today_pnl_pct if ctx.today_pnl_pct else ctx.btc_pnl_pct
+        pnl_abs = ctx.today_pnl_abs if ctx.today_pnl_abs else ctx.total_pnl
+        trade_count = ctx.trade_count or (ctx.btc_buys + ctx.kr_buys + ctx.us_buys)
+        wins = ctx.wins
+        losses = ctx.losses
+        tomorrow_strategy = ctx.tomorrow_strategy or "No strategy provided."
+        risk_status = ctx.risk_status or ctx.trend
+
+        return "\n".join(
+            [
+                f"# Daily Trading Report ({date_label})",
+                "",
+                f"- Today's PnL: {pnl_abs:,.0f} ({pnl_pct:+.2f}%)",
+                f"- Trade Count: {trade_count}",
+                f"- Wins / Losses: {wins} / {losses}",
+                f"- Risk Status: {risk_status}",
+                "",
+                "## Tomorrow Strategy",
+                tomorrow_strategy,
+            ]
+        )
 
     def run(self, send: bool = True) -> dict:
         ctx = self.collect_context()

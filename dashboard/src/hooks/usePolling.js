@@ -1,35 +1,58 @@
-import { useState, useEffect, useCallback } from "react";
+import { useEffect, useRef, useState } from "react";
 
-/**
- * Poll an async fetcher at a given interval.
- * Returns { data, error, loading, refresh }.
- */
 export default function usePolling(fetcher, intervalMs = 30000) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [lastUpdated, setLastUpdated] = useState(null);
+  const [updatedAt, setUpdatedAt] = useState(null);
+  const fetcherRef = useRef(fetcher);
+  const hasDataRef = useRef(false);
 
-  const refresh = useCallback(() => {
-    setLoading(true);
-    fetcher()
-      .then((d) => {
-        if (d != null) {
-          setData(d);
-          setLastUpdated(new Date());
-          setError(null);
-        }
-      })
-      .catch((e) => setError(e.message))
-      .finally(() => setLoading(false));
+  useEffect(() => {
+    fetcherRef.current = fetcher;
   }, [fetcher]);
 
   useEffect(() => {
-    refresh();
-    if (intervalMs <= 0) return;
-    const id = setInterval(refresh, intervalMs);
-    return () => clearInterval(id);
-  }, [refresh, intervalMs]);
+    let active = true;
 
-  return { data, error, loading, refresh, lastUpdated };
+    async function refresh() {
+      if (!active) {
+        return;
+      }
+      setLoading((prev) => (!hasDataRef.current ? true : prev));
+      try {
+        const next = await fetcherRef.current();
+        if (!active) {
+          return;
+        }
+        setData(next);
+        hasDataRef.current = true;
+        setError(null);
+        setUpdatedAt(new Date());
+      } catch (caught) {
+        if (!active) {
+          return;
+        }
+        setError(caught instanceof Error ? caught.message : String(caught));
+      } finally {
+        if (active) {
+          setLoading(false);
+        }
+      }
+    }
+
+    refresh();
+    if (intervalMs <= 0) {
+      return () => {
+        active = false;
+      };
+    }
+    const id = setInterval(refresh, intervalMs);
+    return () => {
+      active = false;
+      clearInterval(id);
+    };
+  }, [intervalMs]);
+
+  return { data, error, loading, updatedAt };
 }

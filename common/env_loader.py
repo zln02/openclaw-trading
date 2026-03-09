@@ -1,10 +1,37 @@
 """Environment variable loader - openclaw.json + .env files."""
-import os
+from __future__ import annotations
+
 import json
+import os
+import re
 from pathlib import Path
 
-_OPENCLAW_ROOT = Path("/home/wlsdud5035/.openclaw")
+from common.config import OPENCLAW_JSON, OPENCLAW_ROOT, WORKSPACE
+
 _loaded = False
+_ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _parse_env_file(path: Path) -> dict[str, str]:
+    parsed: dict[str, str] = {}
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        if line.startswith("export "):
+            line = line[7:].lstrip()
+        key, _, value = line.partition("=")
+        key = key.strip()
+        if not _ENV_KEY_RE.match(key):
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        hash_index = value.find(" #")
+        if hash_index != -1:
+            value = value[:hash_index].rstrip()
+        parsed[key] = value.replace("\\n", "\n")
+    return parsed
 
 
 def load_env() -> None:
@@ -14,32 +41,28 @@ def load_env() -> None:
         return
     _loaded = True
 
-    openclaw_json = _OPENCLAW_ROOT / "openclaw.json"
-    if openclaw_json.exists():
+    if OPENCLAW_JSON.exists():
         try:
-            data = json.loads(openclaw_json.read_text())
+            data = json.loads(OPENCLAW_JSON.read_text(encoding="utf-8"))
             for k, v in (data.get("env") or {}).items():
                 if k != "shellEnv" and isinstance(v, str):
                     os.environ.setdefault(k, v)
+            telegram_token = ((data.get("channels") or {}).get("telegram") or {}).get("botToken")
+            if isinstance(telegram_token, str) and telegram_token:
+                os.environ.setdefault("TELEGRAM_BOT_TOKEN", telegram_token)
         except Exception:
             pass
 
     env_files = [
-        _OPENCLAW_ROOT / ".env",
-        _OPENCLAW_ROOT / "workspace" / ".env",
-        _OPENCLAW_ROOT / "workspace" / "skills" / "kiwoom-api" / ".env",
+        OPENCLAW_ROOT / ".env",
+        WORKSPACE / ".env",
+        WORKSPACE / "skills" / "kiwoom-api" / ".env",
     ]
     for p in env_files:
         if not p.exists():
             continue
         try:
-            for line in p.read_text().splitlines():
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    k, _, v = line.partition("=")
-                    k = k.strip()
-                    v = v.strip().strip("'\"").replace("\\n", "\n")
-                    if k:
-                        os.environ.setdefault(k, v)
+            for k, v in _parse_env_file(p).items():
+                os.environ.setdefault(k, v)
         except Exception:
             continue

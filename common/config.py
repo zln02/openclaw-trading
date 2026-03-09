@@ -1,9 +1,24 @@
 """Shared paths and constants for the OpenClaw trading system."""
+from __future__ import annotations
+
+import os
 from pathlib import Path
 
-OPENCLAW_ROOT = Path("/home/wlsdud5035/.openclaw")
-WORKSPACE = OPENCLAW_ROOT / "workspace"
-LOG_DIR = OPENCLAW_ROOT / "logs"
+
+def _resolve_openclaw_root() -> Path:
+    root = (
+        os.environ.get("OPENCLAW_CONFIG_DIR")
+        or os.environ.get("OPENCLAW_STATE_DIR")
+        or str(Path.home() / ".openclaw")
+    )
+    return Path(root).expanduser()
+
+
+OPENCLAW_ROOT = _resolve_openclaw_root()
+WORKSPACE = Path(
+    os.environ.get("OPENCLAW_WORKSPACE_DIR", str(OPENCLAW_ROOT / "workspace"))
+).expanduser()
+LOG_DIR = Path(os.environ.get("OPENCLAW_LOG_DIR", str(OPENCLAW_ROOT / "logs"))).expanduser()
 
 BRAIN_PATH = WORKSPACE / "brain"
 MEMORY_PATH = WORKSPACE / "memory"
@@ -17,7 +32,9 @@ US_TRADING_LOG = LOG_DIR / "us_trading.log"
 DASHBOARD_LOG = LOG_DIR / "dashboard.log"
 
 STRATEGY_JSON = WORKSPACE / "stocks" / "today_strategy.json"
-OPENCLAW_JSON = OPENCLAW_ROOT / "openclaw.json"
+OPENCLAW_JSON = Path(
+    os.environ.get("OPENCLAW_CONFIG_PATH", str(OPENCLAW_ROOT / "openclaw.json"))
+).expanduser()
 
 DASHBOARD_PORT = 8080
 

@@ -5,6 +5,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from agents.alert_manager import AlertManager
 from agents.daily_report import DailyReportContext, DailyReportGenerator
@@ -13,20 +14,22 @@ from agents.weekly_report import WeeklyReportGenerator
 
 class AlertManagerTests(unittest.TestCase):
     def test_alert_generation_and_cooldown(self) -> None:
-        mgr = AlertManager()
-        snapshot = {
-            "drawdown": -0.04,
-            "var_95": 0.03,
-            "corr_shift": 0.35,
-            "volume_spike_ratio": 2.3,
-        }
+        with tempfile.TemporaryDirectory() as td:
+            with patch("agents.alert_manager._COOLDOWN_DIR", Path(td)):
+                mgr = AlertManager()
+                snapshot = {
+                    "drawdown": -0.04,
+                    "var_95": 0.03,
+                    "corr_shift": 0.35,
+                    "volume_spike_ratio": 2.3,
+                }
 
-        first = mgr.process(snapshot, send_telegram_alert=False)
-        second = mgr.process(snapshot, send_telegram_alert=False)
+                first = mgr.process(snapshot, send_telegram_alert=False)
+                second = mgr.process(snapshot, send_telegram_alert=False)
 
-        self.assertGreaterEqual(first["candidate_count"], 3)
-        self.assertGreater(first["emitted_count"], 0)
-        self.assertEqual(second["emitted_count"], 0)  # dedupe cooldown
+                self.assertGreaterEqual(first["candidate_count"], 3)
+                self.assertGreater(first["emitted_count"], 0)
+                self.assertEqual(second["emitted_count"], 0)  # dedupe cooldown
 
 
 class DailyReportTests(unittest.TestCase):

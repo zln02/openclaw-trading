@@ -1,391 +1,349 @@
-# OpenClaw Trading System v6.0
+# OpenClaw Trading System
 
-BTC · KR 주식 · US 주식 자동매매 통합 플랫폼
-Level 5 — 연구-실전 루프 (알파 발굴 → 검증 → 자동 반영)
+<p align="center">
+  <img src="docs/images/banner.png" alt="OpenClaw Trading System banner" width="100%" />
+</p>
+<!-- 📸 SCREENSHOT: 배너 이미지 (1200x400). Figma/Canva로 제작. 보라+블루 그라디언트 배경에 로고 + 시스템 개요 텍스트 -->
 
-> **포트폴리오 공개 프로젝트** — 실거래(BTC), 모의투자(KR), DRY-RUN(US) 환경에서 운영 중
+<p align="center"><strong>BTC · KR Stocks · US Stocks — Fully Automated Trading Platform with Research-to-Production Loop</strong></p>
 
----
+<p align="center">
+  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/Python-3.11%2B-blue?style=for-the-badge" alt="Python 3.11+" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="MIT License" /></a>
+  <img src="https://img.shields.io/badge/BTC-Live%20Trading-orange?style=for-the-badge" alt="BTC Live Trading" />
+  <img src="https://img.shields.io/badge/KR-Paper%20Trading-yellow?style=for-the-badge" alt="KR Paper Trading" />
+  <img src="https://img.shields.io/badge/US-DRY--RUN-lightgrey?style=for-the-badge" alt="US DRY-RUN" />
+  <img src="https://img.shields.io/badge/Level%205-Research%20Loop-purple?style=for-the-badge" alt="Level 5 Research Loop" />
+  <a href="https://github.com/zln02/openclaw-trading/stargazers"><img src="https://img.shields.io/github/stars/zln02/openclaw-trading?style=for-the-badge&logo=github&label=Stars" alt="GitHub Stars" /></a>
+  <a href="https://github.com/zln02/openclaw-trading/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/zln02/openclaw-trading/ci.yml?branch=main&style=for-the-badge&label=CI" alt="CI Passing" /></a>
+</p>
 
-## 시스템 레벨
+<p align="center">
+  <a href="README.ko.md">Korean README</a> ·
+  <a href="docs/SCREENSHOT_GUIDE.md">Screenshot Guide</a> ·
+  <a href="CONTRIBUTING.md">Contributing</a>
+</p>
 
-| Level | 내용 | 상태 |
-|-------|------|------|
-| 3 | 적응형 (복합신호 + 리스크관리) | ✅ |
-| 4 | 팩터 모델 운용 (IC/IR → 가중치 → 포트폴리오) | ✅ |
-| 5 | 연구-실전 루프 (알파 발굴 → 검증 → 자동 반영) | ✅ |
+- **3-Market Coverage:** BTC (live) + KR Stocks (paper) + US Stocks (dry-run)
+- **Level 5 Research Loop:** Automated alpha discovery → IC/IR validation → parameter auto-tuning
+- **AI Agent Team:** 5 Claude agents for market analysis, risk management, and execution
 
----
+## Demo
 
-## Level 5 Research Loop
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/images/dashboard-btc.png" alt="BTC Dashboard" width="100%" />
+      <br />
+      <strong>BTC Dashboard</strong>
+      <!-- 📸 SCREENSHOT: BTC 대시보드 탭. 캔들차트 + 복합스코어 게이지 + 포지션 카드 + F&G 인디케이터가 보이게 캡처. 브라우저 주소창 제거. 1280x720 권장 -->
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/images/dashboard-kr.png" alt="KR Stocks" width="100%" />
+      <br />
+      <strong>KR Stocks</strong>
+      <!-- 📸 SCREENSHOT: KR 주식 탭. 포트폴리오 원형차트 + 보유종목 테이블 + TOP 모멘텀 랭킹이 보이게 캡처. 1280x720 -->
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/images/dashboard-us.png" alt="US Stocks" width="100%" />
+      <br />
+      <strong>US Stocks</strong>
+      <!-- 📸 SCREENSHOT: US 주식 탭. 시장지수 카드 + 모멘텀 랭킹 테이블 + DRY-RUN 포지션이 보이게 캡처. 1280x720 -->
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/images/dashboard-agents.png" alt="AI Agents" width="100%" />
+      <br />
+      <strong>AI Agents</strong>
+      <!-- 📸 SCREENSHOT: Agents 탭. AI 에이전트 결정 이력 타임라인 + 최근 판단 카드가 보이게 캡처. 1280x720 -->
+    </td>
+  </tr>
+</table>
 
-| 스크립트 | 실행 시점 | 역할 |
-|----------|-----------|------|
-| `quant/alpha_researcher.py` | 토요일 22:00 | 룰 기반 파라미터 그리드서치 + walk-forward IC/IR |
-| `quant/signal_evaluator.py` | 일요일 23:00 | 신호 IC/IR 계산 → `brain/signal-ic/weights.json` 업데이트 |
-| `quant/param_optimizer.py` | 일요일 23:30 | Attribution 분석 + 자율 파라미터 조정 + 텔레그램 알림 |
-| `stocks/ml_model.py retrain` | 평일 08:30 | KR 50회 체결 시 XGBoost 자동 재학습 |
+## Telegram Alerts
 
+<p align="center">
+  <img src="docs/images/telegram-alerts.png" alt="Telegram trading alerts" width="360" />
+</p>
+<!-- 📸 SCREENSHOT: 텔레그램 봇 알림 3~4개 보이게 캡처 (매수/매도 알림, 일일 리포트, Level 5 파라미터 변경 알림). 개인정보(채팅ID 등) 모자이크. 폰 스크린샷 또는 텔레그램 데스크탑 캡처. 360x640 또는 원본 비율 -->
+
+## 📈 Performance
+
+| Metric | BTC (Live) | KR (Paper) | US (DRY-RUN) |
+|--------|-----------|------------|---------------|
+| ROI (30d) | `TBD` | `TBD` | `TBD` |
+| Win Rate | `TBD` | `TBD` | `TBD` |
+| Sharpe Ratio | `TBD` | `TBD` | `TBD` |
+| Max Drawdown | `TBD` | `TBD` | `TBD` |
+
+<p align="center">
+  <img src="docs/images/equity-curve.png" alt="Equity curve placeholder" width="100%" />
+</p>
+<!-- 📸 SCREENSHOT: scripts/generate_performance_report.py 실행 결과 equity curve 차트. 3개 시장 라인이 한 차트에. 배경 다크 테마 권장 -->
+
+Run `python scripts/generate_performance_report.py` to generate latest metrics.
+
+## Quick Start
+
+```bash
+git clone https://github.com/zln02/openclaw-trading
+cd openclaw-trading
+cp .env.example .env  # Add your API keys
+docker-compose up -d
+open http://localhost:8080
 ```
-[매일 실매매]
-  BTC/KR/US 에이전트
-    → 진입 시: factor_snapshot 저장
-    → ML 신호 블렌딩 (KR: rule×0.6 + ML×0.4)
-    → 레짐 적응형 팩터 가중치 (RISK_ON/OFF/TRANSITION/CRISIS)
 
-[매주]
-  토 22:00  Alpha Researcher  → brain/alpha/best_params.json
-  일 23:00  Signal Evaluator  → brain/signal-ic/weights.json
-  일 23:30  Param Optimizer   → brain/agent_params.json + 텔레그램
-```
+## Features
 
----
+<details>
+<summary><strong>Multi-Market Trading Engine</strong></summary>
 
-## 아키텍처
+OpenClaw Trading System runs three market modes in one operational stack:
+
+- BTC live trading with composite signals, regime-aware filters, F&G context, and real execution tracking.
+- KR stocks paper trading with rule-based logic, XGBoost overlays, portfolio monitoring, and Kiwoom integration.
+- US stocks dry-run momentum execution with market-state cards, momentum ranking, and simulated order flow.
+
+Operational conventions currently used in the repository:
+
+- BTC runs continuously and is monitored through log freshness and dashboard health probes.
+- KR stock cycles are designed around weekday intraday trading, premarket preparation, and separate check cycles.
+- US flow is intentionally isolated as DRY-RUN while momentum ranking, daily reports, and market APIs are hardened.
+
+</details>
+
+<details>
+<summary><strong>Strategy Layer</strong></summary>
+
+The system combines multiple signal families rather than a single indicator:
+
+- BTC composite scoring merges RSI, Bollinger context, regime state, funding, open interest, volatility filters, and market sentiment.
+- KR stocks blend rule-based ranking with ML-assisted selection and portfolio controls such as max positions and sector constraints.
+- US stocks focus on momentum ranking, market regime awareness, volatility gating, and execution discipline before live deployment.
+
+Risk assumptions are centralized in shared defaults and overridden per agent where needed:
+
+- Position sizing and invest ratios
+- Stop-loss / take-profit / trailing stop behavior
+- Max trades per day and cooldown windows
+- Market-specific constraints such as VIX or Kimchi premium filters
+
+</details>
+
+<details>
+<summary><strong>Level 5 Research Loop</strong></summary>
+
+The repository includes a research-to-production loop that continuously improves live parameters:
+
+- `quant/alpha_researcher.py` explores new signal hypotheses and parameter grids.
+- `quant/signal_evaluator.py` validates IC/IR and tracks whether signals remain production-worthy.
+- `quant/param_optimizer.py` can auto-tune parameters after evaluation and feed results back to runtime agents.
+- Research outputs are designed to influence BTC, KR, and US parameter sets rather than stay trapped in notebooks.
+
+Road-tested workflow in the repo:
+
+1. Discover candidate features and signal variants.
+2. Validate with walk-forward style checks and IC/IR thresholds.
+3. Auto-update production parameters where improvement exceeds replacement thresholds.
+4. Observe downstream changes through alerts, daily/weekly reports, and dashboard state.
+
+</details>
+
+<details>
+<summary><strong>AI Agent Team</strong></summary>
+
+The orchestration layer is built around specialized Claude-based agents:
+
+- Market Analyst
+- News Analyst
+- Risk Manager
+- Reporter
+- Orchestrator
+
+These agents support:
+
+- Regime interpretation
+- Research review and strategy revision
+- Alert generation
+- Daily and weekly reporting
+- Decision traceability through the dashboard and logs
+
+</details>
+
+<details>
+<summary><strong>Dashboard, Alerts, and Reporting</strong></summary>
+
+The dashboard stack exposes market-specific views and operating telemetry:
+
+- BTC dashboard: candles, composite score, positions, sentiment context
+- KR dashboard: holdings, portfolio mix, ranking tables, market summary
+- US dashboard: major index cards, momentum ranking, dry-run positions
+- Agents dashboard: recent decisions, timelines, and reporting artifacts
+
+Alerting and reporting currently include:
+
+- Telegram buy/sell alerts
+- Daily trading reports
+- Weekly strategy reviews
+- Health status snapshots
+- Drawdown / VaR / correlation / volume-spike alerts
+
+</details>
+
+<details>
+<summary><strong>Security and Operations</strong></summary>
+
+This repository is opinionated about local-first operations:
+
+- Runtime paths resolve from `OPENCLAW_CONFIG_DIR`, `OPENCLAW_WORKSPACE_DIR`, `OPENCLAW_LOG_DIR`, and `OPENCLAW_CONFIG_PATH`.
+- `.env` files are parsed as data, not executed with `source`.
+- Health checks now write a machine-readable status snapshot to `~/.openclaw/logs/health_status.json`.
+- Shell wrappers were normalized so cron tasks and manual runs share the same path and env resolution model.
+
+Operational guidance reflected from the existing docs:
+
+- Treat inbound chat surfaces and external market APIs as untrusted.
+- Keep API keys out of git and local-only artifacts out of commits.
+- Add explicit dashboard health endpoints and fallback behavior for rate-limited broker/API integrations.
+- Use paper or dry-run modes before promoting changes to live capital.
+
+</details>
+
+<details>
+<summary><strong>Core OpenClaw Platform Foundation</strong></summary>
+
+The trading system is built on top of the broader OpenClaw platform:
+
+- Gateway-based local control plane
+- Multi-channel messaging support
+- Dashboard/web surfaces
+- Skill and automation infrastructure
+- Remote operations and daemonized runtime
+
+That means this repository is both:
+
+- A trading operations workspace
+- An application layer running on the OpenClaw runtime
+
+</details>
+
+## Architecture
 
 ```mermaid
-flowchart LR
-    subgraph Ext["📡 외부 API"]
-        Upbit["Upbit\nBTC 실거래"]
-        Kiwoom["키움증권\nKR 모의투자"]
-        YF["yfinance\nUS DRY-RUN"]
-        GPT["GPT-4o-mini\nAI 판단"]
-        Dart["OpenDart\n재무데이터"]
-    end
+graph TB
 
-    subgraph Core["🤖 에이전트 · 엔진"]
-        BTC["BTC Agent\n레짐 적응형"]
-        KR["KR Stock Agent\nML 블렌딩 + 팩터 로깅"]
-        US["US Stock Agent\n팩터 로깅 + 레짐 가중치"]
-        News["News Analyst"]
-        Rev["Strategy Reviewer"]
-        Quant["Quant Engine\nSignal · Risk · Portfolio"]
-        Exec["Execution Layer\nTWAP · VWAP · SmartRouter"]
-    end
+subgraph "Data Layer"
 
-    subgraph Research["🔬 Level 5 Research Loop"]
-        Alpha["Alpha Researcher\n그리드서치 + IC"]
-        SigEval["Signal Evaluator\nIC/IR → weights"]
-        ParamOpt["Param Optimizer\nAttribution + 자율조정"]
-    end
+U[Upbit API
+BTC Live] --> K[Data Pipeline]
 
-    subgraph DB["🗄️ Supabase"]
-        Pos["trade_executions\nus_trade_executions\nsignal_ic_history"]
-        Brain["brain/\nbest_params · weights · agent_params"]
-    end
+KW[키움증권 API
+KR Paper] --> K
 
-    subgraph Dash["📊 대시보드"]
-        Web["React + FastAPI :8080"]
-    end
+YF[yfinance
+US DRY-RUN] --> K
 
-    TG["🔔 Telegram Bot"]
+end
 
-    Upbit --> BTC
-    Kiwoom --> KR
-    YF --> US
-    GPT --> News & Rev
-    Dart --> KR
-    Quant --> BTC & KR & US
-    Exec --> US
-    BTC & KR & US --> Pos
-    Pos --> Alpha & SigEval
-    SigEval --> ParamOpt --> Brain
-    Brain --> BTC & KR & US
-    Pos --> Web
-    BTC & KR & US & Rev & ParamOpt --> TG
+subgraph "Intelligence Layer"
+
+K --> RC[Regime Classifier
+RISK_ON/OFF/TRANSITION/CRISIS]
+
+RC --> BTC[BTC Agent
+Composite Score]
+
+RC --> KR[KR Agent
+Rule 60% + ML 40%]
+
+RC --> US[US Agent
+Momentum Ranking]
+
+ML[XGBoost
+Walk-forward CV + SHAP] --> KR
+
+end
+
+subgraph "Level 5 Research Loop"
+
+AR[Alpha Researcher
+Sat 22:00] --> SE[Signal Evaluator
+Sun 23:00]
+
+SE --> PO[Param Optimizer
+Sun 23:30]
+
+PO -->|auto-update| BTC & KR & US
+
+end
+
+subgraph "AI Agent Team"
+
+ORC[Orchestrator
+Claude Opus] --> MA[Market Analyst]
+
+ORC --> NA[News Analyst]
+
+ORC --> RM[Risk Manager]
+
+ORC --> RP[Reporter]
+
+end
+
+BTC & KR & US --> DB[(Supabase
+PostgreSQL)]
+
+DB --> DASH[FastAPI + React
+Dashboard :8080]
+
+DB --> TG[Telegram Bot]
+
+ORC --> BTC
 ```
 
----
+## Project Structure
 
-## 시스템 구성
+<details>
+<summary><strong>Expand project tree</strong></summary>
 
-| 항목 | 스택 |
-|------|------|
-| 서버 | GCP e2-small (24시간) |
-| BTC 거래소 | Upbit API (실거래) |
-| KR 주식 | 키움증권 REST API (모의투자) |
-| US 주식 | yfinance + 모멘텀 스코어링 (DRY-RUN) |
-| AI 판단 | GPT-4o-mini |
-| ML | XGBoost (KR 주식, walk-forward CV + SHAP) |
-| DB | Supabase (PostgreSQL) |
-| 알림 | Telegram Bot |
-| Web 대시보드 | FastAPI + React/Vite (포트 8080) |
-| Google Sheets | gspread (거래 기록·포트폴리오·통계) |
-
----
-
-## 매매 전략
-
-### BTC — 레짐 적응형 복합 스코어 (v6.2)
-
-**복합 스코어 (0~100점)**
-
-| 항목 | 배점 | 신호 소스 |
-|------|------|-----------|
-| Fear & Greed 지수 | 22점 | alternative.me |
-| 일봉 RSI | 20점 | yfinance (1h TTL 캐시) |
-| 1시간봉 추세 | 12점 | Upbit OHLCV |
-| 볼린저밴드 위치 | 12점 | yfinance |
-| 일봉 거래량 | 10점 | yfinance |
-| 펀딩비 | 8점 | 온체인 API |
-| 뉴스 감정 | ±8점 | CryptoPanic (키워드 분석) |
-| 롱/숏 비율 | 6점 | 온체인 API |
-| OI (미결제약정) | 5점 | 온체인 API |
-| 보너스 + 레짐 조정 | ±25점 | 레짐 분류기 |
-
-- 레짐(RISK_ON/OFF/TRANSITION/CRISIS)별 ±20점 조정, IC 기반 동적 가중치 적용 가능
-- **매수**: 복합스코어 ≥ 45 AND 1h 추세 ≠ DOWNTREND
-- **매수 오버라이드**: 극도공포(F&G ≤ 15), 거래량 3배 폭발, 김치프리미엄 역전
-- **매도 룰**: ① dRSI≥75+DOWNTREND ② F&G≥75+수익있음 ③ BB상단(85%)+dRSI≥65 ④ 추세전환+수익≥2% ⑤ 타임컷 7일
-- **청산**: ATR 동적 손절 / 고정 -3% / 분할익절(+8%→50%, +12%→25%, +15%→전량) / 적응형 트레일링
-- AI 보조 판단: GPT-4o-mini (룰 미발동 시, 복합스코어·온체인·일봉 지표 전달)
-
-### KR 주식 — AI + ML 하이브리드 + 레짐 적응
-- 모멘텀 + RSI/BB/거래량 + DART 재무 스코어 (룰 기반 60%)
-- XGBoost ML 예측 블렌딩 (40%), ML 단독 78%+ 시 즉시 매수
-- 레짐별 팩터 가중치 동적 조절 (RISK_OFF: 가치/퀄리티↑, 모멘텀↓)
-- 진입 시 top-5 팩터 스코어 `factor_snapshot` 저장 → 귀속 분석
-- 분할매수 3단계(최소 4시간 간격) / 손절 -3% / 익절 +8%
-- 08:00 AI 브리핑 → 09:00~15:30 자동매매
-
-### US 주식 — 모멘텀 랭킹 + 레짐 적응
-- S&P 500 + NASDAQ 100 유니버스, 5일/20일 수익률·거래량비·신고가 근접도 스코어
-- 레짐별 모멘텀/가치 가중치 조절, factor_snapshot 저장
-- A/B/C/D 등급, 상위 종목 진입 / 가상자본 $10k DRY-RUN
-
----
-
-## 대시보드 (포트 8080)
-
-| 탭 | 경로 | 내용 |
-|----|------|------|
-| BTC | `/` | 캔들, 복합스코어, 포지션, F&G, 뉴스, 온체인 |
-| KR 주식 | `/kr` | 포트폴리오(키움 실시간), 보유종목, TOP 모멘텀 종목, 거래기록 |
-| US 주식 | `/us` | 시장 지수, 모멘텀 랭킹, 포지션, 환율(KRW) |
-| 에이전트 | `/agents` | AI 에이전트 결정 이력 |
-
-상단 배너: BTC·KR·US 총자산·손익 실시간 트리뷰
-
----
-
-## 프로젝트 구조
-
-```
-workspace/
-├── btc/
-│   ├── btc_trading_agent.py        # BTC 매매 에이전트 (레짐 적응형)
-│   ├── btc_dashboard.py            # Web 대시보드 엔트리 (FastAPI)
-│   ├── routes/
-│   │   ├── btc_api.py
-│   │   ├── stock_api.py            # KR/US API 엔드포인트
-│   │   └── us_api.py
-│   └── signals/                    # 온체인/오더플로우/캐리/고래 시그널
-├── stocks/
-│   ├── stock_trading_agent.py      # KR 에이전트 (ML 블렌딩 + 팩터 로깅)
-│   ├── us_stock_trading_agent.py   # US 에이전트 (팩터 로깅 + 레짐 가중치)
-│   ├── ml_model.py                 # XGBoost (walk-forward CV + SHAP + retrain)
-│   ├── kiwoom_client.py
-│   ├── stock_data_collector.py
-│   └── telegram_bot.py
-├── quant/
-│   ├── alpha_researcher.py         # Level 5: 파라미터 그리드서치 + walk-forward IC
-│   ├── param_optimizer.py          # Level 5: 자율 파라미터 조정
-│   ├── signal_evaluator.py         # IC/IR 측정 + Supabase 저장
-│   ├── backtest/                   # 백테스트 엔진 + 유니버스
-│   ├── factors/                    # 팩터 레지스트리·분석·결합 (20개 팩터)
-│   ├── portfolio/
-│   │   └── attribution.py          # Brinson 귀속분석 + WeeklyAttributionRunner
-│   └── risk/                       # VaR·낙폭가드·포지션사이징·상관관계
-├── agents/
-│   ├── regime_classifier.py        # 레짐 분류 (RISK_ON/OFF/TRANSITION/CRISIS)
-│   ├── news_analyst.py
-│   ├── strategy_reviewer.py
-│   ├── alert_manager.py
-│   └── daily_report.py / weekly_report.py
-├── common/
-│   ├── config.py                   # 전역 파라미터 (ALPHA_PARAM_SPACE 포함)
-│   ├── env_loader.py
-│   ├── supabase_client.py
-│   ├── telegram.py
-│   └── logger.py
-├── scripts/
-│   ├── run_btc_cron.sh
-│   ├── run_stock_cron.sh
-│   ├── run_us_cron.sh
-│   ├── run_top_tier_cron.sh
-│   ├── run_alpha_researcher.sh     # Level 5 크론 래퍼
-│   ├── run_signal_evaluator.sh     # Level 5 크론 래퍼
-│   ├── run_param_optimizer.sh      # Level 5 크론 래퍼
-│   ├── run_dashboard.sh
-│   ├── check_health.sh
-│   └── crontab.top_tier.sample     # 전체 크론 예시 (적용됨)
-├── dashboard/                      # React + Vite 프론트엔드
-│   └── src/pages/
-│       ├── BtcPage.jsx
-│       ├── KrStockPage.jsx         # 키움 실시간 포트폴리오
-│       ├── UsStockPage.jsx
-│       └── AgentsPage.jsx
-├── supabase/
-│   ├── us_schema.sql
-│   ├── agent_decisions_schema.sql
-│   └── level5_columns.sql          # Level 5 마이그레이션
-├── brain/                          # 분석 결과 저장소
-│   ├── signal-ic/weights.json      # 신호 IC 가중치
-│   ├── alpha/best_params.json      # 최적 파라미터
-│   └── agent_params.json           # 에이전트 적용 파라미터
-├── execution/                      # TWAP · VWAP · SmartRouter
-├── secretary/                      # 비서 에이전트 (Notion 연동)
-└── company/                        # AI 소프트웨어 회사 모듈
+```text
+.
+├── agents/              # AI agent team, alerts, daily reports, weekly reviews
+├── btc/                 # BTC live trading logic, dashboard entrypoints, BTC APIs
+├── common/              # Shared config, env loading, logging, retry, Telegram, Supabase
+├── dashboard/           # Frontend assets for dashboard/web UI
+├── docs/                # Documentation, deployment notes, screenshot guide, audit docs
+├── execution/           # Execution quality, router, TWAP/VWAP, slippage tracking
+├── quant/               # Research loop, factor analysis, risk, portfolio, backtesting
+├── schema/              # SQL schema definitions
+├── scripts/             # Cron wrappers, health checks, dashboard runners, packaging helpers
+├── secretary/           # Autonomous helper utilities and local memory tooling
+├── stocks/              # KR/US trading agents, ML models, broker integration, collectors
+├── supabase/            # Supabase-related schema files
+├── test/                # TypeScript-side tests
+├── tests/               # Python-side unit and phase tests
+├── docker-compose.yml   # Containerized local runtime
+├── README.md            # English README
+└── README.ko.md         # Korean README
 ```
 
----
+</details>
 
-## 실행
+## Roadmap
 
-```bash
-source .venv/bin/activate
+- [x] Level 3: Adaptive Composite Signals
+- [x] Level 4: Factor Model Operations (IC/IR → Weights)
+- [x] Level 5: Research-to-Production Loop
+- [ ] Level 6: Multi-Strategy Portfolio (Long-Short + Market Neutral)
+- [ ] Level 7: On-chain DEX Arbitrage
+- [ ] Public API for external trader integration
+- [ ] Mobile Dashboard (React Native)
 
-# 에이전트
-python btc/btc_trading_agent.py
-python stocks/stock_trading_agent.py
-python stocks/us_stock_trading_agent.py
+## Contributing
 
-# Web 대시보드
-bash scripts/run_dashboard.sh           # http://서버:8080
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-# Level 5 Research Loop (수동 실행)
-python -m quant.alpha_researcher --dry-run
-python -m quant.signal_evaluator
-python -m quant.param_optimizer --dry-run
+## License
 
-# Attribution 분석
-python -m quant.portfolio.attribution --weekly --dry-run
-
-# ML 재학습
-python stocks/ml_model.py retrain 50
-
-# 성과 리포트
-python stocks/performance_report.py kr
-python stocks/performance_report.py us
-```
-
----
-
-## Cron (적용됨)
-
-```
-매분        BTC 손절/익절 체크
-매 2분      Phase 18 알림 매니저
-매 10분     BTC 사이클 / KR 장중 / Phase 14-16 시그널
-매 15분     US 야간 / 헬스체크
-
-매일
-  08:00    KR 장전 스캔
-  08:30    KR ML 재학습 체크 (50회 체결 시 자동)  ← Level 5
-  21:00    일간/주간 리포트
-
-매주
-  토 22:00  Alpha Researcher (그리드서치 + IC)    ← Level 5
-  일 23:00  Signal Evaluator (IC/IR → weights)    ← Level 5
-  일 23:30  Param Optimizer (Attribution + 조정)  ← Level 5
-```
-
-전체: `scripts/crontab.top_tier.sample`
-
----
-
-## 환경변수
-
-`openclaw.json` 또는 `.env` (common/env_loader.py):
-
-```
-UPBIT_ACCESS_KEY=
-UPBIT_SECRET_KEY=
-SUPABASE_URL=
-SUPABASE_SECRET_KEY=
-OPENAI_API_KEY=
-TELEGRAM_BOT_TOKEN=
-TELEGRAM_CHAT_ID=
-KIWOOM_APP_KEY=
-KIWOOM_APP_SECRET=
-OPENDART_API_KEY=
-```
-
-선택:
-```
-ANTHROPIC_API_KEY=        # Claude API (에이전트 팀)
-GOOGLE_SHEET_ID=          # Google Sheets 연동
-BRAVE_API_KEY=            # 뉴스 검색 (daily_loss_analyzer)
-```
-
-**보안**: 시트 ID·API 키는 저장소에 올리지 말고 `.env` 또는 환경변수로 관리.
-
----
-
-## 리스크 설정
-
-| 시장 | 손절 | 익절 | 트레일링 | 최대 포지션 | 일일 한도 |
-|------|------|------|----------|-------------|-----------|
-| BTC | -3% | +15% | 2% | 1 | 3회 |
-| KR 주식 | -3% | +8% | — | 5 | 2회/종목 |
-| US 주식 | -5% | +12% | 3% | 5 | DRY-RUN |
-
----
-
-## Supabase 마이그레이션
-
-초기 설정 또는 Level 5 업그레이드 시 Supabase Dashboard > SQL Editor에서 실행:
-
-```sql
--- Level 5 컬럼 추가 (trade_executions + signal_ic_history)
-\i supabase/level5_columns.sql
-
--- US 스키마
-\i supabase/us_schema.sql
-```
-
----
-
-## AI 에이전트 팀 (Phase 14)
-
-### Claude 5-에이전트 자동매매 팀 (`agents/trading_agent_team.py`)
-- **Orchestrator** (claude-opus-4-6): 최종 BUY/SELL/HOLD 결정, adaptive thinking
-- **MarketAnalyst** (sonnet-4-6): 기술 지표 + 온체인 분석
-- **NewsAnalyst** (haiku-4-5): 실시간 뉴스 감정 분석
-- **RiskManager** (sonnet-4-6): 포지션 리스크·포트폴리오 평가
-- **Reporter** (haiku-4-5): 결정 사유 정리 + 텔레그램 발송
-
-```bash
-python -m agents.trading_agent_team --market btc
-```
-
-### AI 소프트웨어 회사 (`company/`)
-CEO(opus-4-6) → CTO / Backend / Frontend / Quant / DevOps / QA 위임 구조
-
-```bash
-python -m company --task "대시보드에 BTC 수익률 차트 추가해줘"
-python -m company --task "stock_api.py 버그 찾아줘" --role qa
-```
-
----
-
-## 보안
-
-| 항목 | 구현 |
-|------|------|
-| 대시보드 인증 | HTTP Basic Auth (`DASHBOARD_USER` / `DASHBOARD_PASSWORD`) |
-| CORS | `GET`, `OPTIONS`만 허용 |
-| 텔레그램 봇 | `TELEGRAM_CHAT_ID` 미설정 시 봇 비활성화, 발신자 ID 검증 |
-| AI 회사 bash | 위험 명령어 블록리스트 (rm -rf, sudo, eval, 원격실행 등) |
-| 경로 제한 | WORKSPACE 외부 파일 접근 차단 |
-| API 키 관리 | 코드베이스에 하드코딩 금지 — `openclaw.json` 또는 `.env` 전용 |
-
----
-
-## 문서
-
-| 문서 | 설명 |
-|------|------|
-| [docs/top-tier-phases.md](docs/top-tier-phases.md) | 단계별 스펙 상세 |
-| [docs/telegram_commands.md](docs/telegram_commands.md) | 텔레그램 봇 명령어 |
-| [docs/GOOGLE_SHEETS_DASHBOARD.md](docs/GOOGLE_SHEETS_DASHBOARD.md) | Google Sheets 설정 |
+This project is licensed under the MIT License. See [LICENSE](LICENSE).

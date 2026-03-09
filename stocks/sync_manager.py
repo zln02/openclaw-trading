@@ -13,34 +13,18 @@
 """
 
 import os
-import json
 import sys
-from pathlib import Path
 from datetime import datetime
 
 from supabase import create_client
 
 from kiwoom_client import KiwoomClient
+from common.env_loader import load_env
 
 
 def _load_env():
     """openclaw.json + .env 로 Supabase/키움 환경 세팅"""
-    openclaw_json = Path("/home/wlsdud5035/.openclaw/openclaw.json")
-    if openclaw_json.exists():
-        d = json.loads(openclaw_json.read_text())
-        for k, v in (d.get("env") or {}).items():
-            if isinstance(v, str):
-                os.environ.setdefault(k, v)
-    for p in [
-        Path("/home/wlsdud5035/.openclaw/.env"),
-        Path("/home/wlsdud5035/.openclaw/workspace/skills/kiwoom-api/.env"),
-    ]:
-        if not p.exists():
-            continue
-        for line in p.read_text().splitlines():
-            if "=" in line and not line.startswith("#"):
-                k, _, v = line.partition("=")
-                os.environ.setdefault(k.strip(), v.strip())
+    load_env()
 
 
 def _log(msg: str, level: str = "INFO"):
@@ -205,4 +189,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

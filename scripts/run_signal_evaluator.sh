@@ -4,8 +4,9 @@
 
 set -euo pipefail
 
-WORKSPACE=/home/wlsdud5035/.openclaw/workspace
-LOG_DIR=/home/wlsdud5035/.openclaw/logs
+source "$(dirname "$0")/load_env.sh"
+load_openclaw_env
+require_openclaw_workspace
 
 cd "$WORKSPACE"
 source .venv/bin/activate

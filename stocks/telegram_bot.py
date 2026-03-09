@@ -21,25 +21,12 @@ import requests
 
 from kiwoom_client import KiwoomClient
 from supabase import create_client
+from common.config import WORKSPACE
+from common.env_loader import load_env
 
 
 def _load_env():
-    openclaw_json = Path("/home/wlsdud5035/.openclaw/openclaw.json")
-    if openclaw_json.exists():
-        data = json.loads(openclaw_json.read_text())
-        for k, v in (data.get("env") or {}).items():
-            if isinstance(v, str):
-                os.environ.setdefault(k, v)
-    for p in [
-        Path("/home/wlsdud5035/.openclaw/.env"),
-        Path("/home/wlsdud5035/.openclaw/workspace/skills/kiwoom-api/.env"),
-    ]:
-        if not p.exists():
-            continue
-        for line in p.read_text().splitlines():
-            if "=" in line and not line.startswith("#"):
-                k, _, v = line.partition("=")
-                os.environ.setdefault(k.strip(), v.strip())
+    load_env()
 
 
 _load_env()
@@ -109,12 +96,12 @@ def get_status_text() -> str:
 
 def set_stop_flag():
     """자동매매 중지 플래그 파일 생성 (에이전트는 이 파일을 보고 사이클 스킵하도록 향후 연계)"""
-    flag = Path("/home/wlsdud5035/.openclaw/workspace/stocks/STOP_TRADING")
+    flag = WORKSPACE / "stocks" / "STOP_TRADING"
     flag.write_text(datetime.now().isoformat())
 
 
 def clear_stop_flag():
-    flag = Path("/home/wlsdud5035/.openclaw/workspace/stocks/STOP_TRADING")
+    flag = WORKSPACE / "stocks" / "STOP_TRADING"
     if flag.exists():
         flag.unlink()
 
@@ -343,4 +330,3 @@ def poll_updates():
 
 if __name__ == "__main__":
     poll_updates()
-

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # 에이전트 헬스체크 — 5분마다 cron으로 실행
 # BTC/KR/US 각 에이전트 프로세스 및 실행 시간 체크:
 #   - BTC : 24/7, 30분 이상 미실행 → 알림
@@ -6,16 +6,17 @@
 #   - US  : 평일 KST 22:00~06:00 장중에만 체크, 30분 이상 미실행 → 알림
 # 대시보드 HTTP 체크는 별도로 유지
 
-OPENCLAW_ROOT="/home/wlsdud5035/.openclaw"
-OPENCLAW_JSON="$OPENCLAW_ROOT/openclaw.json"
-OPENCLAW_ENV="$OPENCLAW_ROOT/.env"
-LOG_DIR="$OPENCLAW_ROOT/logs"
+set -euo pipefail
+
+source "$(dirname "$0")/load_env.sh"
+load_openclaw_env
+
+mkdir -p "$LOG_DIR"
+HEALTH_STATUS_FILE="$LOG_DIR/health_status.json"
+DASHBOARD_URL="${DASHBOARD_HEALTH_URL:-http://localhost:${DASHBOARD_PORT:-8080}/stocks}"
 
 # 임계치 (분)
 STALE_MINUTES=30
-
-# .env 로드
-if [ -f "$OPENCLAW_ENV" ]; then set -a; source "$OPENCLAW_ENV"; set +a; fi
 
 # openclaw.json에서 텔레그램 자격증명 추출
 BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-$(python3 -c "
@@ -40,7 +41,7 @@ except Exception:
 # ── 텔레그램 전송 함수 ──────────────────────────────────────────────────
 send_tg() {
     local msg="$1"
-    if [ -z "$BOT_TOKEN" ] || [ -z "$CHAT_ID" ]; then 
+    if [ -z "$BOT_TOKEN" ] || [ -z "$CHAT_ID" ]; then
         echo "❌ Telegram 설정 없음: BOT_TOKEN=${BOT_TOKEN:+설정됨}, CHAT_ID=${CHAT_ID:+설정됨}"
         return
     fi
@@ -62,17 +63,20 @@ send_tg() {
     fi
     
     # 알림 전송 및 캐시 기록
-    curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+    if curl -fsS -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
         --data-urlencode "chat_id=${CHAT_ID}" \
         --data-urlencode "text=${msg}" \
-        -d "parse_mode=HTML" > /dev/null
-    
-    echo "$current_time" > "$cache_file"
-    echo "✅ Telegram 알림 전송: ${msg:0:50}..."
+        -d "parse_mode=HTML" > /dev/null; then
+        echo "$current_time" > "$cache_file"
+        echo "✅ Telegram 알림 전송: ${msg:0:50}..."
+    else
+        echo "❌ Telegram 알림 전송 실패"
+    fi
 }
 
 # ── 시각 계산 헬퍼 ───────────────────────────────────────────────────────
 NOW=$(date +%s)
+NOW_ISO=$(date -Iseconds)
 DAY=$(date +%u)   # 1=월 … 7=일
 HOUR=$(date +%H)  # 00–23 (leading zero 있으면 8진수 오류 방지를 위해 10진수로 사용)
 MIN=$(date +%M)
@@ -119,6 +123,8 @@ check_agent_health() {
 # ── 1. BTC 에이전트 체크 (24/7) ───────────────────────────────────────────
 BTC_LOG="$LOG_DIR/btc_trading.log"
 BTC_RESULT=$(check_agent_health "BTC" "$BTC_LOG" "btc_trading_agent.py" "cron")
+KR_RESULT="SKIPPED"
+US_RESULT="SKIPPED"
 
 echo "BTC 상태: $BTC_RESULT"
 
@@ -185,12 +191,35 @@ else
 fi
 
 # ── 4. 대시보드 HTTP 체크 ─────────────────────────────────────────────────
-HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/health 2>/dev/null)
+HTTP_CODE=$(curl -sS --max-time 5 -o /dev/null -w "%{http_code}" "$DASHBOARD_URL" 2>/dev/null || echo "000")
 if [ "$HTTP_CODE" != "200" ]; then
     send_tg "🚨 <b>[헬스체크] 대시보드 응답 없음</b>%0AHTTP ${HTTP_CODE}%0A%0A💬 제이한테 <b>'대시보드 고쳐줘'</b> 라고 해봐!"
 else
     echo "대시보드 상태: 정상 (HTTP 200)"
 fi
+
+# ── 5. 상태 스냅샷 기록 ───────────────────────────────────────────────────────
+python3 - "$HEALTH_STATUS_FILE" "$NOW_ISO" "$STALE_MINUTES" "$BTC_RESULT" "$KR_RESULT" "$US_RESULT" "$HTTP_CODE" "$DASHBOARD_URL" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+payload = {
+    "timestamp": sys.argv[2],
+    "stale_minutes": int(sys.argv[3]),
+    "agents": {
+        "btc": sys.argv[4],
+        "kr": sys.argv[5],
+        "us": sys.argv[6],
+    },
+    "dashboard": {
+        "url": sys.argv[8],
+        "http_code": sys.argv[7],
+        "ok": sys.argv[7] == "200",
+    },
+}
+Path(sys.argv[1]).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+PY
 
 # ── 5. 요약 로그 기록 ───────────────────────────────────────────────────────
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] 헬스체크 완료 - BTC:$BTC_RESULT, KR:$KR_RESULT, US:$US_RESULT, 대시보드:$HTTP_CODE" >> "$LOG_DIR/health_check.log"
