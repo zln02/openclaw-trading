@@ -1,24 +1,27 @@
-import { useMemo } from "react";
 import { Bot, TrendingUp, TrendingDown, Minus, Clock, AlertTriangle } from "lucide-react";
-import usePolling from "../hooks/usePolling";
+import PropTypes from "prop-types";
+import { useMemo } from "react";
 import { getAgentDecisions } from "../api";
+import usePolling from "../hooks/usePolling";
 
 const MARKET_LABEL = { btc: "BTC", kr: "KR 주식", us: "US 주식" };
 
 function DecisionBadge({ decision }) {
   const d = String(decision || "").toUpperCase();
-  if (d === "BUY")
+  if (d === "BUY") {
     return (
       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-green-500/20 text-green-400">
         <TrendingUp className="w-3 h-3" /> BUY
       </span>
     );
-  if (d === "SELL")
+  }
+  if (d === "SELL") {
     return (
       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-red-500/20 text-red-400">
         <TrendingDown className="w-3 h-3" /> SELL
       </span>
     );
+  }
   return (
     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-yellow-500/20 text-yellow-400">
       <Minus className="w-3 h-3" /> HOLD
@@ -26,12 +29,18 @@ function DecisionBadge({ decision }) {
   );
 }
 
+DecisionBadge.propTypes = {
+  decision: PropTypes.string,
+};
+
 function LatestCard({ market, decisions }) {
   const latest = decisions.find((d) => d.market === market);
   return (
     <div className="card p-4 flex flex-col gap-2">
       <div className="flex items-center justify-between">
-        <span className="text-sm font-semibold text-text-primary">{MARKET_LABEL[market] ?? market}</span>
+        <span className="text-sm font-semibold text-text-primary">
+          {MARKET_LABEL[market] ?? market}
+        </span>
         {latest ? (
           <DecisionBadge decision={latest.decision} />
         ) : (
@@ -53,6 +62,11 @@ function LatestCard({ market, decisions }) {
     </div>
   );
 }
+
+LatestCard.propTypes = {
+  market: PropTypes.string.isRequired,
+  decisions: PropTypes.arrayOf(PropTypes.object).isRequired,
+};
 
 export default function AgentsPage() {
   const { data, error, loading } = usePolling(getAgentDecisions, 30000);
@@ -80,15 +94,13 @@ export default function AgentsPage() {
           최신 결정
         </h2>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          {loading && !data ? (
-            ["btc", "kr", "us"].map((m) => (
-              <div key={m} className="card p-4 animate-pulse h-28 bg-card/50" />
-            ))
-          ) : (
-            ["btc", "kr", "us"].map((m) => (
-              <LatestCard key={m} market={m} decisions={decisions} />
-            ))
-          )}
+          {loading && !data
+            ? ["btc", "kr", "us"].map((m) => (
+                <div key={m} className="card p-4 animate-pulse h-28 bg-card/50" />
+              ))
+            : ["btc", "kr", "us"].map((m) => (
+                <LatestCard key={m} market={m} decisions={decisions} />
+              ))}
         </div>
       </div>
 
@@ -99,7 +111,9 @@ export default function AgentsPage() {
         </h2>
         <div className="card overflow-hidden">
           {loading && !data ? (
-            <div className="p-8 text-center text-text-secondary text-sm animate-pulse">로딩 중…</div>
+            <div className="p-8 text-center text-text-secondary text-sm animate-pulse">
+              로딩 중…
+            </div>
           ) : decisions.length === 0 ? (
             <div className="p-8 text-center text-text-secondary text-sm">결정 이력이 없습니다.</div>
           ) : (

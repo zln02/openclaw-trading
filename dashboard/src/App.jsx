@@ -1,9 +1,9 @@
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import Layout from "./components/Layout";
+import AgentsPage from "./pages/AgentsPage";
 import BtcPage from "./pages/BtcPage";
 import KrStockPage from "./pages/KrStockPage";
 import UsStockPage from "./pages/UsStockPage";
-import AgentsPage from "./pages/AgentsPage";
 
 export default function App() {
   return (

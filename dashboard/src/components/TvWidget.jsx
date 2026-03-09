@@ -1,5 +1,5 @@
-import { useEffect, useRef, memo } from "react";
 import PropTypes from "prop-types";
+import { useEffect, useRef, memo } from "react";
 
 /**
  * TradingView 위젯 범용 컴포넌트.
@@ -18,7 +18,9 @@ const TvWidget = memo(function TvWidget({ widgetType, config, height = 420 }) {
 
   useEffect(() => {
     const container = containerRef.current;
-    if (!container) return;
+    if (!container) {
+      return;
+    }
 
     // 이전 인스턴스 제거
     container.innerHTML = "";
@@ -32,9 +34,11 @@ const TvWidget = memo(function TvWidget({ widgetType, config, height = 420 }) {
 
     // cleanup — 탭 이동 시 이전 위젯 제거
     return () => {
-      if (container) container.innerHTML = "";
+      if (container) {
+        container.innerHTML = "";
+      }
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Mount once: TradingView 위젯이 자체 생명주기를 관리
 
   return (

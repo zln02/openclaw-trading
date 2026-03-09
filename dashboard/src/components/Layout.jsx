@@ -1,5 +1,5 @@
-import { NavLink, Outlet } from "react-router-dom";
 import { Bitcoin, BarChart3, Globe, Bot, Activity, Settings } from "lucide-react";
+import { NavLink, Outlet } from "react-router-dom";
 import PortfolioBanner from "./PortfolioBanner";
 
 const NAV = [
@@ -22,7 +22,9 @@ export default function Layout() {
                 <Activity className="w-6 h-6 text-accent" />
                 <span className="font-bold text-lg tracking-tight text-text-primary">OpenClaw</span>
               </div>
-              <span className="hidden sm:inline text-xs text-text-secondary ml-2">v6.0 · 자동매매 대시보드</span>
+              <span className="hidden sm:inline text-xs text-text-secondary ml-2">
+                v6.0 · 자동매매 대시보드
+              </span>
             </div>
 
             {/* Navigation Tabs */}
@@ -34,9 +36,7 @@ export default function Layout() {
                   end={to === "/"}
                   className={({ isActive }) =>
                     `flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-t-lg transition-all duration-200 ${
-                      isActive
-                        ? "tab-active"
-                        : "tab-inactive"
+                      isActive ? "tab-active" : "tab-inactive"
                     }`
                   }
                 >

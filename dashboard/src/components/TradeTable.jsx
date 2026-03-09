@@ -11,7 +11,10 @@ export default function TradeTable({ trades = [], columns = [] }) {
         <thead>
           <tr className="border-b border-border">
             {columns.map((col) => (
-              <th key={col.key} className="text-left py-3 px-3 text-xs text-text-secondary font-medium uppercase tracking-wide">
+              <th
+                key={col.key}
+                className="text-left py-3 px-3 text-xs text-text-secondary font-medium uppercase tracking-wide"
+              >
                 {col.label}
               </th>
             ))}
@@ -22,7 +25,7 @@ export default function TradeTable({ trades = [], columns = [] }) {
             <tr key={i} className="border-b border-border/50 hover:bg-card/30 transition-colors">
               {columns.map((col) => (
                 <td key={col.key} className="py-3 px-3 whitespace-nowrap">
-                  {col.render ? col.render(row[col.key], row) : row[col.key] ?? "—"}
+                  {col.render ? col.render(row[col.key], row) : (row[col.key] ?? "—")}
                 </td>
               ))}
             </tr>
@@ -40,6 +43,6 @@ TradeTable.propTypes = {
       key: PropTypes.string.isRequired,
       label: PropTypes.string.isRequired,
       render: PropTypes.func,
-    })
+    }),
   ),
 };

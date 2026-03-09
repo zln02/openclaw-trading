@@ -1,30 +1,35 @@
-import PropTypes from "prop-types";
 import { TrendingUp, TrendingDown, Minus, Info } from "lucide-react";
+import PropTypes from "prop-types";
 
-export default function StatCard({ 
-  label, 
-  value, 
-  sub, 
-  trend, 
-  icon: Icon, 
+export default function StatCard({
+  label,
+  value,
+  sub,
+  trend,
+  icon: Icon,
   size = "default",
-  tooltip 
+  tooltip,
 }) {
   const trendColor =
-    trend === "up" ? "text-profit" : trend === "down" ? "text-loss" : trend === "warning" ? "text-yellow-400" : "text-text-secondary";
-  const TrendIcon =
-    trend === "up" ? TrendingUp : trend === "down" ? TrendingDown : Minus;
+    trend === "up"
+      ? "text-profit"
+      : trend === "down"
+        ? "text-loss"
+        : trend === "warning"
+          ? "text-yellow-400"
+          : "text-text-secondary";
+  const TrendIcon = trend === "up" ? TrendingUp : trend === "down" ? TrendingDown : Minus;
 
   const sizeClasses = {
     compact: "p-3",
     default: "p-4",
-    large: "p-5"
+    large: "p-5",
   };
 
   const valueSizeClasses = {
     compact: "text-lg",
     default: "text-xl",
-    large: "text-2xl"
+    large: "text-2xl",
   };
 
   return (
@@ -39,16 +44,14 @@ export default function StatCard({
           </div>
         </div>
       )}
-      
+
       <div className="flex items-start justify-between mb-2">
         <span className="data-label">{label}</span>
         {Icon && <Icon className="w-4 h-4 text-text-secondary" />}
       </div>
-      
-      <div className={`data-value ${valueSizeClasses[size]} mb-1`}>
-        {value ?? "—"}
-      </div>
-      
+
+      <div className={`data-value ${valueSizeClasses[size]} mb-1`}>{value ?? "—"}</div>
+
       {sub != null && (
         <div className={`flex items-center gap-1 text-xs ${trendColor}`}>
           <TrendIcon className="w-3 h-3" />

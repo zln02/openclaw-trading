@@ -1,13 +1,17 @@
 export function buildPnLCurve(equitySeries = []) {
   const rows = Array.isArray(equitySeries) ? equitySeries : [];
-  if (!rows.length) return [];
+  if (!rows.length) {
+    return [];
+  }
 
   const first = Number(rows[0].equity || rows[0].value || 0);
-  if (!first) return [];
+  if (!first) {
+    return [];
+  }
 
   return rows.map((r) => {
     const equity = Number(r.equity || r.value || 0);
-    const pnlPct = first > 0 ? ((equity / first) - 1) * 100 : 0;
+    const pnlPct = first > 0 ? (equity / first - 1) * 100 : 0;
     return {
       ts: r.ts || r.time || r.date,
       equity,
@@ -22,8 +26,11 @@ export function computeVarGauge(var95 = 0, varLimit = 0.025) {
   const ratio = limit > 0 ? v / limit : 0;
 
   let level = "OK";
-  if (ratio >= 1.3) level = "DANGER";
-  else if (ratio >= 1.0) level = "WARNING";
+  if (ratio >= 1.3) {
+    level = "DANGER";
+  } else if (ratio >= 1.0) {
+    level = "WARNING";
+  }
 
   return {
     var95: v,
@@ -35,7 +42,9 @@ export function computeVarGauge(var95 = 0, varLimit = 0.025) {
 
 export function computeDrawdownHeatmap(equitySeries = [], bucketSize = 5) {
   const curve = buildPnLCurve(equitySeries);
-  if (!curve.length) return [];
+  if (!curve.length) {
+    return [];
+  }
 
   const buckets = [];
   for (let i = 0; i < curve.length; i += Math.max(1, bucketSize)) {
@@ -67,7 +76,9 @@ export function buildAllocationPie(weights = {}) {
   }));
 
   const total = entries.reduce((acc, row) => acc + row.weight, 0);
-  if (total <= 0) return [];
+  if (total <= 0) {
+    return [];
+  }
 
   return entries.map((row) => ({
     ...row,

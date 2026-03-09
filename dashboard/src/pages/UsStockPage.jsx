@@ -1,10 +1,10 @@
 import { Globe, Wallet, Clock, TrendingUp, BarChart2, Activity, AlertTriangle } from "lucide-react";
-import usePolling from "../hooks/usePolling";
-import StatCard from "../components/StatCard";
+import { getUsComposite, getUsPositions, getUsTrades, getUsSystem } from "../api";
 import ScoreGauge from "../components/ScoreGauge";
+import StatCard from "../components/StatCard";
 import TradeTable from "../components/TradeTable";
 import TvWidget from "../components/TvWidget";
-import { getUsComposite, getUsPositions, getUsTrades, getUsSystem } from "../api";
+import usePolling from "../hooks/usePolling";
 
 const TV_US_OVERVIEW_CONFIG = {
   colorTheme: "dark",
@@ -20,25 +20,25 @@ const TV_US_OVERVIEW_CONFIG = {
       symbols: [
         { s: "FOREXCOM:SPXUSD", d: "S&P 500" },
         { s: "FOREXCOM:NSXUSD", d: "NASDAQ 100" },
-        { s: "FOREXCOM:DJI",    d: "Dow Jones" },
+        { s: "FOREXCOM:DJI", d: "Dow Jones" },
       ],
     },
     {
       title: "ETFs",
       symbols: [
-        { s: "AMEX:SPY",    d: "SPY" },
-        { s: "NASDAQ:QQQ",  d: "QQQ" },
-        { s: "AMEX:IWM",    d: "IWM (Russell)" },
+        { s: "AMEX:SPY", d: "SPY" },
+        { s: "NASDAQ:QQQ", d: "QQQ" },
+        { s: "AMEX:IWM", d: "IWM (Russell)" },
         { s: "NASDAQ:TQQQ", d: "TQQQ (3x)" },
       ],
     },
     {
       title: "Sectors",
       symbols: [
-        { s: "AMEX:XLK",  d: "Technology" },
-        { s: "AMEX:XLF",  d: "Financials" },
-        { s: "AMEX:XLE",  d: "Energy" },
-        { s: "AMEX:XLV",  d: "Health Care" },
+        { s: "AMEX:XLK", d: "Technology" },
+        { s: "AMEX:XLF", d: "Financials" },
+        { s: "AMEX:XLE", d: "Energy" },
+        { s: "AMEX:XLV", d: "Health Care" },
       ],
     },
   ],
@@ -48,10 +48,10 @@ const TV_TICKER_CONFIG = {
   symbols: [
     { proName: "FOREXCOM:SPXUSD", title: "S&P 500" },
     { proName: "FOREXCOM:NSXUSD", title: "NASDAQ 100" },
-    { proName: "AMEX:SPY",        title: "SPY" },
-    { proName: "NASDAQ:QQQ",      title: "QQQ" },
+    { proName: "AMEX:SPY", title: "SPY" },
+    { proName: "NASDAQ:QQQ", title: "QQQ" },
     { proName: "BITSTAMP:BTCUSD", title: "Bitcoin" },
-    { proName: "FX_IDC:USDKRW",   title: "USD/KRW" },
+    { proName: "FX_IDC:USDKRW", title: "USD/KRW" },
   ],
   showSymbolLogo: true,
   isTransparent: false,
@@ -60,38 +60,49 @@ const TV_TICKER_CONFIG = {
   locale: "en",
 };
 
-const fmt = (n) => n != null ? Number(n).toLocaleString() : "—";
-const pct = (n) => n != null ? `${Number(n) >= 0 ? "+" : ""}${Number(n).toFixed(2)}%` : "—";
+const fmt = (n) => (n != null ? Number(n).toLocaleString() : "—");
+const pct = (n) => (n != null ? `${Number(n) >= 0 ? "+" : ""}${Number(n).toFixed(2)}%` : "—");
 
 const TRADE_COLS = [
   { key: "timestamp", label: "시간", render: (v) => v?.slice(5, 16) },
   { key: "symbol", label: "종목", render: (v) => <span className="font-mono">{v}</span> },
-  { key: "action", label: "구분", render: (v) => (
-    <span className={v === "BUY" ? "profit-text" : v === "SELL" ? "loss-text" : "text-text-secondary"}>{v}</span>
-  )},
+  {
+    key: "action",
+    label: "구분",
+    render: (v) => (
+      <span
+        className={v === "BUY" ? "profit-text" : v === "SELL" ? "loss-text" : "text-text-secondary"}
+      >
+        {v}
+      </span>
+    ),
+  },
   { key: "price", label: "가격", render: (v) => <span className="font-mono">${fmt(v)}</span> },
   { key: "quantity", label: "수량", render: (v) => <span className="font-mono">{fmt(v)}</span> },
-  { key: "pnl_usd", label: "P&L", render: (v) => (
-    <span className={v > 0 ? "profit-text" : v < 0 ? "loss-text" : "text-text-secondary"}>
-      ${fmt(v)}
-    </span>
-  )},
+  {
+    key: "pnl_usd",
+    label: "P&L",
+    render: (v) => (
+      <span className={v > 0 ? "profit-text" : v < 0 ? "loss-text" : "text-text-secondary"}>
+        ${fmt(v)}
+      </span>
+    ),
+  },
 ];
 
 // 엔드포인트 함수는 ../api.js 중앙화 모듈에서 import
-const getUsPortfolio = getUsPositions;  // positions = portfolio open positions
-const getUsTop = () => Promise.resolve([]);  // US top stocks 엔드포인트 미구현 시 빈 배열 반환
+const getUsPortfolio = getUsPositions; // positions = portfolio open positions
+const getUsTop = () => Promise.resolve([]); // US top stocks 엔드포인트 미구현 시 빈 배열 반환
 
 export default function UsStockPage() {
-  const { data: composite, error: compositeError, lastUpdated } = usePolling(getUsComposite, 10000);
-  const { data: portfolio }  = usePolling(getUsPortfolio, 15000);
-  const { data: trades }     = usePolling(getUsTrades, 20000);
-  const { data: system }     = usePolling(getUsSystem, 30000);
-  const { data: topStocks }  = usePolling(getUsTop, 60000);
+  const { data: composite, error: compositeError } = usePolling(getUsComposite, 10000);
+  const { data: portfolio } = usePolling(getUsPortfolio, 15000);
+  const { data: trades } = usePolling(getUsTrades, 20000);
+  const { data: system } = usePolling(getUsSystem, 30000);
+  const { data: topStocks } = usePolling(getUsTop, 60000);
 
-  const summary   = portfolio?.summary || {};
+  const summary = portfolio?.summary || {};
   const positions = portfolio?.positions || portfolio?.open_positions || [];
-  const fxRate    = composite?.fx_rate;
 
   return (
     <div className="space-y-6">
@@ -102,18 +113,6 @@ export default function UsStockPage() {
           US 데이터 로드 실패: {compositeError}
         </div>
       )}
-
-      {/* Header with lastUpdated + FX */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <Globe className="w-7 h-7 text-indigo-400" />
-          <h1 className="text-2xl font-bold text-text-primary">US 주식 대시보드</h1>
-        </div>
-        <div className="flex items-center gap-3 text-xs text-text-secondary">
-          {fxRate && <span className="bg-card/50 px-3 py-1 rounded-full border border-border">USD/KRW: {Number(fxRate).toLocaleString()}</span>}
-          {lastUpdated && <span>업데이트: {lastUpdated.toLocaleTimeString("ko-KR")}</span>}
-        </div>
-      </div>
 
       {/* Ticker Tape — 미국 주요 지수 실시간 */}
       <div className="card p-0 overflow-hidden rounded-lg">
@@ -186,7 +185,9 @@ export default function UsStockPage() {
             </div>
             <div>
               <div className="text-text-secondary mb-1">미실현 손익</div>
-              <div className={`font-mono font-medium ${summary?.unrealized_pnl >= 0 ? "profit-text" : "loss-text"}`}>
+              <div
+                className={`font-mono font-medium ${summary?.unrealized_pnl >= 0 ? "profit-text" : "loss-text"}`}
+              >
                 ${fmt(summary?.unrealized_pnl)}
               </div>
             </div>
@@ -207,16 +208,17 @@ export default function UsStockPage() {
           <div className="space-y-2 max-h-48 overflow-y-auto">
             {(topStocks ?? []).length > 0 ? (
               topStocks.slice(0, 6).map((stock) => (
-                <div key={stock.id ?? stock.symbol} className="flex items-center justify-between text-sm">
+                <div
+                  key={stock.id ?? stock.symbol}
+                  className="flex items-center justify-between text-sm"
+                >
                   <span className="font-mono font-medium">{stock.symbol}</span>
                   <div className="flex items-center gap-4 text-xs">
                     <span className="text-text-secondary">Score {stock.score}</span>
                     <span className={stock.ret_5d >= 0 ? "profit-text" : "loss-text"}>
                       5d {pct(stock.ret_5d)}
                     </span>
-                    <span className="text-text-muted">
-                      20d {pct(stock.ret_20d)}
-                    </span>
+                    <span className="text-text-muted">20d {pct(stock.ret_20d)}</span>
                   </div>
                 </div>
               ))
@@ -241,7 +243,10 @@ export default function UsStockPage() {
               <thead>
                 <tr className="border-b border-border">
                   {["종목", "수량", "진입가", "현재가", "수익률", "P&L"].map((h) => (
-                    <th key={h} className={`py-3 px-3 text-xs text-text-secondary font-medium uppercase tracking-wide ${h === "종목" ? "text-left" : "text-right"}`}>
+                    <th
+                      key={h}
+                      className={`py-3 px-3 text-xs text-text-secondary font-medium uppercase tracking-wide ${h === "종목" ? "text-left" : "text-right"}`}
+                    >
                       {h}
                     </th>
                   ))}
@@ -249,15 +254,22 @@ export default function UsStockPage() {
               </thead>
               <tbody>
                 {positions.slice(0, 5).map((pos) => (
-                  <tr key={pos.id} className="border-b border-border/50 hover:bg-card/30 transition-colors">
+                  <tr
+                    key={pos.id}
+                    className="border-b border-border/50 hover:bg-card/30 transition-colors"
+                  >
                     <td className="py-3 px-3 font-mono">{pos.symbol}</td>
                     <td className="text-right py-3 px-3">{fmt(pos.quantity)}</td>
                     <td className="text-right py-3 px-3 font-mono">${fmt(pos.price)}</td>
                     <td className="text-right py-3 px-3 font-mono">${fmt(pos.current_price)}</td>
-                    <td className={`text-right py-3 px-3 font-mono ${pos.pnl_pct >= 0 ? "profit-text" : "loss-text"}`}>
+                    <td
+                      className={`text-right py-3 px-3 font-mono ${pos.pnl_pct >= 0 ? "profit-text" : "loss-text"}`}
+                    >
                       {pct(pos.pnl_pct)}
                     </td>
-                    <td className={`text-right py-3 px-3 font-mono ${pos.pnl_usd >= 0 ? "profit-text" : "loss-text"}`}>
+                    <td
+                      className={`text-right py-3 px-3 font-mono ${pos.pnl_usd >= 0 ? "profit-text" : "loss-text"}`}
+                    >
                       ${fmt(pos.pnl_usd)}
                     </td>
                   </tr>
@@ -272,7 +284,9 @@ export default function UsStockPage() {
       <div className="card p-0 overflow-hidden">
         <div className="px-4 pt-4 pb-2 border-b border-border">
           <h3 className="text-sm font-medium text-text-primary">US 시장 — 실시간 지수 & ETF</h3>
-          <p className="text-xs text-text-secondary mt-0.5">S&P 500 · NASDAQ · Dow Jones · ETF · 섹터 — TradingView 제공</p>
+          <p className="text-xs text-text-secondary mt-0.5">
+            S&P 500 · NASDAQ · Dow Jones · ETF · 섹터 — TradingView 제공
+          </p>
         </div>
         <TvWidget widgetType="market-overview" config={TV_US_OVERVIEW_CONFIG} height={440} />
       </div>
