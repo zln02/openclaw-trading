@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { DollarSign, Globe2, Landmark, Sigma, TrendingUp } from "lucide-react";
-import { getUsChart, getUsFx, getUsMarket, getUsPositions, getUsTrades } from "../api";
+import { getUsChart, getUsFx, getUsMarket, getUsPortfolio, getUsPositions, getUsTrades } from "../api";
 import usePolling from "../hooks/usePolling";
 import { compactTime, pct, usd } from "../lib/format";
 import DeferredRender from "../components/ui/DeferredRender";
@@ -21,8 +21,11 @@ const factorData = [
 export default function UsStockPage() {
   const { data: market, loading: marketLoading } = usePolling(getUsMarket, 60000);
   const { data: fx } = usePolling(getUsFx, 60000);
+  const { data: usPortfolio } = usePolling(getUsPortfolio, 30000);
   const { data: positions, loading: positionsLoading } = usePolling(getUsPositions, 30000);
   const { data: trades } = usePolling(getUsTrades, 30000);
+
+  const usSummary = usPortfolio?.summary || {};
 
   const marketCards = [
     { label: "S&P 500", value: market?.sp500 ?? market?.spx ?? 0, delta: Number(market?.sp500_change_pct || 0) },
@@ -71,6 +74,33 @@ export default function UsStockPage() {
         <div>
           <h1>US Momentum Command</h1>
           <p>Dry-run market monitor for index context, factor-weighted ranking, and simulated portfolio tracking.</p>
+        </div>
+      </div>
+
+      {/* ── 포트폴리오 요약 배너 ── */}
+      <div className="portfolio-banner">
+        <div className="pf-tile">
+          <div className="pf-label">투자금 (USD)</div>
+          <div className="pf-value mono">{usd(usSummary.total_invested || 0)}</div>
+        </div>
+        <div className="pf-tile">
+          <div className="pf-label">평가금 (USD)</div>
+          <div className="pf-value mono">{usd(usSummary.total_current || 0)}</div>
+        </div>
+        <div className="pf-tile">
+          <div className="pf-label">미실현 손익</div>
+          <div className={`pf-value mono ${Number(usSummary.unrealized_pnl_pct || 0) >= 0 ? "profit" : "loss"}`}>
+            {pct(usSummary.unrealized_pnl_pct || 0)}
+            {usSummary.unrealized_pnl ? ` (${usd(usSummary.unrealized_pnl)})` : ""}
+          </div>
+        </div>
+        <div className="pf-tile">
+          <div className="pf-label">환율 (USD/KRW)</div>
+          <div className="pf-value mono">{Number(fx?.rate || fx?.usdkrw || 0).toLocaleString()}</div>
+        </div>
+        <div className="pf-tile">
+          <div className="pf-label">오픈 포지션</div>
+          <div className="pf-value mono">{openPositions.length}개</div>
         </div>
       </div>
 

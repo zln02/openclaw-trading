@@ -6,12 +6,14 @@ export default function CircularGauge({ value = 0, label, subtitle, size = 220 }
   const circumference = 2 * Math.PI * radius;
   const offset = circumference - (clamped / 100) * circumference;
   const stroke = clamped >= 70 ? "#22c55e" : clamped >= 45 ? "#8b5cf6" : "#ef4444";
+  const gradId = `gauge-${String(label || "").replace(/[^a-zA-Z0-9]/g, "")}`;
 
   return (
-    <div className="gauge-shell">
-      <svg className="gauge-svg" width={size} height={size} style={{ transform: "rotate(-90deg)" }}>
+    <div style={{ position: "relative", width: size, height: size, margin: "0 auto" }}>
+      {/* SVG는 -90도 회전 (12시 방향 시작) */}
+      <svg width={size} height={size} style={{ transform: "rotate(-90deg)", display: "block" }}>
         <defs>
-          <linearGradient id={`gauge-${label}`} x1="0%" x2="100%" y1="0%" y2="100%">
+          <linearGradient id={gradId} x1="0%" x2="100%" y1="0%" y2="100%">
             <stop offset="0%" stopColor="#8b5cf6" />
             <stop offset="100%" stopColor="#3b82f6" />
           </linearGradient>
@@ -20,7 +22,6 @@ export default function CircularGauge({ value = 0, label, subtitle, size = 220 }
           cx={size / 2}
           cy={size / 2}
           r={radius}
-          className="gauge-track"
           stroke="rgba(255,255,255,0.08)"
           strokeWidth="14"
           fill="none"
@@ -29,21 +30,44 @@ export default function CircularGauge({ value = 0, label, subtitle, size = 220 }
           cx={size / 2}
           cy={size / 2}
           r={radius}
-          className="gauge-arc"
-          stroke={stroke === "#22c55e" ? stroke : `url(#gauge-${label})`}
+          stroke={clamped >= 70 ? stroke : `url(#${gradId})`}
           strokeWidth="14"
           strokeLinecap="round"
           fill="none"
           strokeDasharray={circumference}
           strokeDashoffset={offset}
+          style={{ transition: "stroke-dashoffset 0.6s ease" }}
         />
       </svg>
-      <div style={{ marginTop: `-${size * 0.62}px`, textAlign: "center" }}>
-        <div className="subtle" style={{ textTransform: "uppercase", letterSpacing: "0.08em", fontSize: 12 }}>
+      {/* 텍스트: SVG 회전과 무관하게 절대 중앙 배치 */}
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          pointerEvents: "none",
+        }}
+      >
+        <div
+          className="subtle"
+          style={{ textTransform: "uppercase", letterSpacing: "0.08em", fontSize: 11, marginBottom: 2 }}
+        >
           {label}
         </div>
-        <div className="gauge-value mono" style={{ color: stroke }}>{clamped}</div>
-        {subtitle ? <div className="subtle">{subtitle}</div> : null}
+        <div
+          className="mono"
+          style={{ color: stroke, fontSize: Math.round(size * 0.19), fontWeight: 800, lineHeight: 1 }}
+        >
+          {clamped}
+        </div>
+        {subtitle ? (
+          <div className="subtle" style={{ fontSize: 11, marginTop: 4 }}>
+            {subtitle}
+          </div>
+        ) : null}
       </div>
     </div>
   );

@@ -63,6 +63,7 @@ export const getStockRealtimeAlt = (symbol) => fetchJSONSafe(`/api/stocks/realti
 
 // US Stocks
 export const getUsComposite = () => fetchJSONSafe("/api/us/composite");
+export const getUsPortfolio = () => fetchJSONSafe("/api/us/portfolio");
 export const getUsPositions = () => fetchJSON("/api/us/positions");
 export const getUsTrades = () => fetchJSON("/api/us/trades");
 export const getUsMarket = () => fetchJSON("/api/us/market");

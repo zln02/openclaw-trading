@@ -68,6 +68,7 @@ export default function BtcPage() {
   }, [candles]);
 
   const currentPosition = portfolio?.open_positions?.[0];
+  const btcSummary = portfolio?.summary || {};
   const scoreBars = sectionBarData(composite);
   const sentimentValue = Number(composite?.fg_value || 0);
   const tradeRows = trades?.trades || trades || [];
@@ -99,6 +100,33 @@ export default function BtcPage() {
       </div>
 
       {compositeError ? <ErrorState message={`BTC API connection failed: ${compositeError}`} /> : null}
+
+      {/* ── 포트폴리오 요약 배너 ── */}
+      <div className="portfolio-banner">
+        <div className="pf-tile">
+          <div className="pf-label">투자금</div>
+          <div className="pf-value mono">{krw(btcSummary.total_invested || 0)}</div>
+        </div>
+        <div className="pf-tile">
+          <div className="pf-label">평가금</div>
+          <div className="pf-value mono">{krw(btcSummary.estimated_asset || btcSummary.total_eval || 0)}</div>
+        </div>
+        <div className="pf-tile">
+          <div className="pf-label">미실현 손익</div>
+          <div className={`pf-value mono ${Number(btcSummary.unrealized_pnl_pct || 0) >= 0 ? "profit" : "loss"}`}>
+            {pct(btcSummary.unrealized_pnl_pct || 0)}
+            {btcSummary.unrealized_pnl ? ` (${krw(btcSummary.unrealized_pnl)})` : ""}
+          </div>
+        </div>
+        <div className="pf-tile">
+          <div className="pf-label">가용 KRW</div>
+          <div className="pf-value mono">{krw(btcSummary.krw_balance || 0)}</div>
+        </div>
+        <div className="pf-tile">
+          <div className="pf-label">승률</div>
+          <div className="pf-value mono">{btcSummary.winrate != null ? `${btcSummary.winrate}%` : "—"}</div>
+        </div>
+      </div>
 
       <div className="tv-terminal">
         <aside className="tv-left-rail">

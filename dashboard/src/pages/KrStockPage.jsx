@@ -1,6 +1,7 @@
 import { Brain, BriefcaseBusiness, Landmark, ListOrdered, ShieldEllipsis, History } from "lucide-react";
 import { useMemo, useState } from "react";
 import {
+  getKrPortfolio,
   getKrTop,
   getStockPortfolio,
   getStockStrategy,
@@ -21,11 +22,13 @@ const COLORS = ["#8b5cf6", "#3b82f6", "#22c55e", "#f59e0b", "#ef4444", "#14b8a6"
 
 export default function KrStockPage() {
   const { data: portfolio, loading: portfolioLoading } = usePolling(getStockPortfolio, 30000);
+  const { data: krPortfolio } = usePolling(getKrPortfolio, 30000);
   const { data: topStocks, loading: topLoading } = usePolling(getKrTop, 60000);
   const { data: trades, loading: tradesLoading } = usePolling(getStockTrades, 30000);
   const { data: strategy } = usePolling(getStockStrategy, 60000);
 
   const positions = portfolio?.positions || portfolio?.holdings || [];
+  const krSummary = krPortfolio?.summary || {};
   const donutData = positions.map((row) => ({
     name: row.stock_name || row.name || row.stock_code,
     value: Number(row.weight || row.evaluation_amount || row.market_value || 0),
@@ -84,6 +87,35 @@ export default function KrStockPage() {
         <div>
           <h1>KR Stocks Portfolio Lab</h1>
           <p>Paper-trading workspace for Kiwoom-connected portfolio control, ML conviction, and ranked momentum selection.</p>
+        </div>
+      </div>
+
+      {/* ── 포트폴리오 요약 배너 ── */}
+      <div className="portfolio-banner">
+        <div className="pf-tile">
+          <div className="pf-label">투자금</div>
+          <div className="pf-value mono">{krw(krSummary.total_invested || portfolio?.total_purchase || 0)}</div>
+        </div>
+        <div className="pf-tile">
+          <div className="pf-label">평가금</div>
+          <div className="pf-value mono">{krw(krSummary.total_eval || portfolio?.total_evaluation || 0)}</div>
+        </div>
+        <div className="pf-tile">
+          <div className="pf-label">미실현 손익</div>
+          <div className={`pf-value mono ${Number(krSummary.unrealized_pnl || 0) >= 0 ? "profit" : "loss"}`}>
+            {krSummary.total_invested
+              ? pct(((krSummary.total_eval - krSummary.total_invested) / krSummary.total_invested) * 100)
+              : "—"}
+            {krSummary.unrealized_pnl ? ` (${krw(krSummary.unrealized_pnl)})` : ""}
+          </div>
+        </div>
+        <div className="pf-tile">
+          <div className="pf-label">가용 KRW</div>
+          <div className="pf-value mono">{krw(krSummary.krw_balance || portfolio?.deposit || 0)}</div>
+        </div>
+        <div className="pf-tile">
+          <div className="pf-label">보유 종목</div>
+          <div className="pf-value mono">{positions.length}종목</div>
         </div>
       </div>
 
