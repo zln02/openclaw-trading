@@ -1,19 +1,18 @@
-version: '3.8'
-
 services:
   dashboard:
     build: .
     ports:
-      - "8080:8080"
+      - "127.0.0.1:18080:8080"
     env_file: .env
     environment:
       - PYTHONPATH=/app
     volumes:
       - ./brain:/app/brain
+      - ./certs:/app/certs:ro
       - ./logs:/app/logs
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/api/system"]
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 60s
       timeout: 10s
       retries: 3

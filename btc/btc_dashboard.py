@@ -79,7 +79,10 @@ def _require_auth(request: Request, credentials: HTTPBasicCredentials = Depends(
             headers={"WWW-Authenticate": "Basic realm='OpenClaw Dashboard'"},
         )
 
-_CORS_ORIGINS = os.environ.get("CORS_ORIGINS", "http://localhost:3000").split(",")
+_CORS_ORIGINS = os.environ.get(
+    "CORS_ORIGINS",
+    "https://opentrading.duckdns.org,http://localhost:3000,https://localhost:3000,http://127.0.0.1:3000,https://127.0.0.1:3000",
+).split(",")
 
 app.add_middleware(
     CORSMiddleware,
@@ -141,4 +144,18 @@ if _DIST.is_dir():
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=DASHBOARD_PORT)
+    ssl_certfile = os.environ.get("SSL_CERTFILE")
+    ssl_keyfile = os.environ.get("SSL_KEYFILE")
+
+    uvicorn_kwargs = {
+        "app": app,
+        "host": "0.0.0.0",
+        "port": DASHBOARD_PORT,
+    }
+    if ssl_certfile and ssl_keyfile:
+        uvicorn_kwargs["ssl_certfile"] = ssl_certfile
+        uvicorn_kwargs["ssl_keyfile"] = ssl_keyfile
+    elif ssl_certfile or ssl_keyfile:
+        print("SSL_CERTFILE and SSL_KEYFILE must both be set. Starting without HTTPS.", file=sys.stderr)
+
+    uvicorn.run(**uvicorn_kwargs)

@@ -19,6 +19,7 @@ COPY agents/ agents/
 COPY quant/ quant/
 COPY memory/ memory/
 COPY scripts/ scripts/
+COPY dashboard/dist/ dashboard/dist/
 
 # 환경변수
 ENV PYTHONPATH=/app
@@ -28,4 +29,4 @@ ENV PYTHONUNBUFFERED=1
 EXPOSE 8080
 
 # 기본 진입점: 대시보드
-CMD ["python", "-m", "uvicorn", "btc.btc_dashboard:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["python", "btc/btc_dashboard.py"]
