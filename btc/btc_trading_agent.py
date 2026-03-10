@@ -112,12 +112,14 @@ UPBIT_SECRET  = os.environ.get("UPBIT_SECRET_KEY", "")
 OPENAI_KEY    = os.environ.get("OPENAI_API_KEY", "")
 DRY_RUN       = os.environ.get("DRY_RUN", "0") == "1"
 
-if not all([UPBIT_ACCESS, UPBIT_SECRET, OPENAI_KEY]):
-    log.critical("필수 환경변수 없음: UPBIT keys + OPENAI_API_KEY 필요")
+if not all([UPBIT_ACCESS, UPBIT_SECRET]):
+    log.critical("필수 환경변수 없음: UPBIT keys 필요")
     sys.exit(1)
 upbit   = pyupbit.Upbit(UPBIT_ACCESS, UPBIT_SECRET)
 supabase = get_supabase()
-client  = OpenAI(api_key=OPENAI_KEY)
+client  = OpenAI(api_key=OPENAI_KEY) if OPENAI_KEY else None
+if client is None:
+    log.warning("OPENAI_API_KEY 없음 — 룰 기반 fallback 판단으로 동작")
 
 # ── 리스크 설정 (v6 — Top-tier Quant) ─────────────
 RISK = {
@@ -769,6 +771,30 @@ RSI: {rsi_d:.1f} | BB%: {mom.get('bb_pct', 50):.1f}% | 7일수익: {mom.get('ret
 
 [출력 형식 - JSON만]
 {{"action":"BUY또는SELL또는HOLD","confidence":0~100,"reason":"한줄근거"}}"""
+
+    if client is None:
+        action = "HOLD"
+        confidence = 55
+        reason = "LLM 비활성화 - 룰 기반 중립 유지"
+
+        if (
+            composite_total >= max(RISK["buy_composite_min"], 60)
+            and htf["trend"] != "DOWNTREND"
+            and fg["value"] <= 55
+        ):
+            action = "BUY"
+            confidence = 68
+            reason = "LLM 없음 - 복합스코어/심리/추세 기준 BUY"
+        elif (
+            composite_total <= max(RISK["sell_composite_max"], 20)
+            or fg["value"] >= 75
+            or (htf["trend"] == "DOWNTREND" and indicators.get("rsi", 50) >= 65)
+        ):
+            action = "SELL"
+            confidence = 72
+            reason = "LLM 없음 - 과열/하락 추세 기준 SELL"
+
+        return {"action": action, "confidence": confidence, "reason": reason}
 
     try:
         res = client.chat.completions.create(
