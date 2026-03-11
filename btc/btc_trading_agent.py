@@ -778,7 +778,7 @@ RSI: {rsi_d:.1f} | BB%: {mom.get('bb_pct', 50):.1f}% | 7일수익: {mom.get('ret
         reason = "LLM 비활성화 - 룰 기반 중립 유지"
 
         if (
-            composite_total >= max(RISK["buy_composite_min"], 60)
+            comp_total >= max(RISK["buy_composite_min"], 60)
             and htf["trend"] != "DOWNTREND"
             and fg["value"] <= 55
         ):
@@ -786,7 +786,7 @@ RSI: {rsi_d:.1f} | BB%: {mom.get('bb_pct', 50):.1f}% | 7일수익: {mom.get('ret
             confidence = 68
             reason = "LLM 없음 - 복합스코어/심리/추세 기준 BUY"
         elif (
-            composite_total <= max(RISK["sell_composite_max"], 20)
+            comp_total <= max(RISK["sell_composite_max"], 20)
             or fg["value"] >= 75
             or (htf["trend"] == "DOWNTREND" and indicators.get("rsi", 50) >= 65)
         ):

@@ -36,7 +36,6 @@ FX_CACHE_TTL = 3600
 
 
 def _refresh_upbit_cache():
-    global _upbit_cache
     # Cache TTL: 60s. However, if we have a KRW value but the extended fields
     # are still missing (e.g. after a hot reload/deploy), refresh immediately.
     if time.time() - _upbit_cache["time"] <= 60:
@@ -89,7 +88,6 @@ def _refresh_upbit_cache():
 
 def _get_fx_rate():
     """Fetch real-time USD to KRW exchange rate."""
-    global _fx_cache
     if time.time() - _fx_cache["time"] < FX_CACHE_TTL:
         return _fx_cache["rate"]
     try:
@@ -118,7 +116,6 @@ def _get_fx_rate():
 
 
 def _get_hourly_trend():
-    global _trend_cache
     if time.time() - _trend_cache["time"] < 300:
         return _trend_cache["value"]
     try:
