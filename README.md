@@ -56,29 +56,6 @@
   </tr>
 </table>
 
-## Telegram Alerts
-
-<p align="center">
-  <img src="docs/images/telegram-alerts.png" alt="Telegram trading alerts" width="360" />
-</p>
-<!-- 📸 SCREENSHOT: 텔레그램 봇 알림 3~4개 보이게 캡처 (매수/매도 알림, 일일 리포트, Level 5 파라미터 변경 알림). 개인정보(채팅ID 등) 모자이크. 폰 스크린샷 또는 텔레그램 데스크탑 캡처. 360x640 또는 원본 비율 -->
-
-## 📈 Performance
-
-| Metric | BTC (Live) | KR (Paper) | US (DRY-RUN) |
-|--------|-----------|------------|---------------|
-| ROI (30d) | `TBD` | `TBD` | `TBD` |
-| Win Rate | `TBD` | `TBD` | `TBD` |
-| Sharpe Ratio | `TBD` | `TBD` | `TBD` |
-| Max Drawdown | `TBD` | `TBD` | `TBD` |
-
-<p align="center">
-  <img src="docs/images/equity-curve.png" alt="Equity curve placeholder" width="100%" />
-</p>
-<!-- 📸 SCREENSHOT: scripts/generate_performance_report.py 실행 결과 equity curve 차트. 3개 시장 라인이 한 차트에. 배경 다크 테마 권장 -->
-
-Run `python scripts/generate_performance_report.py` to generate latest metrics.
-
 ## Quick Start
 
 ```bash
