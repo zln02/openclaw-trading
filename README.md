@@ -28,6 +28,7 @@
   <br />
   <strong>BTC Dashboard</strong>
 </p>
+<!-- Add screenshot: docs/screenshots/btc-dashboard.png -->
 <!-- 📸 SCREENSHOT: BTC 대시보드 탭. 캔들차트 + 복합스코어 게이지 + 포지션 카드 + F&G 인디케이터가 보이게 캡처. 브라우저 주소창 제거. 1280x720 권장 -->
 
 <p align="center">
@@ -35,6 +36,7 @@
   <br />
   <strong>KR Stocks</strong>
 </p>
+<!-- Add screenshot: docs/screenshots/kr-stocks.png -->
 <!-- 📸 SCREENSHOT: KR 주식 탭. 포트폴리오 원형차트 + 보유종목 테이블 + TOP 모멘텀 랭킹이 보이게 캡처. 1280x720 -->
 
 <p align="center">
@@ -42,9 +44,16 @@
   <br />
   <strong>US Stocks</strong>
 </p>
+<!-- Add screenshot: docs/screenshots/us-stocks.png -->
 <!-- 📸 SCREENSHOT: US 주식 탭. 시장지수 카드 + 모멘텀 랭킹 테이블 + DRY-RUN 포지션이 보이게 캡처. 1280x720 -->
 
 ## Quick Start
+
+### Prerequisites
+
+- Python 3.10+
+- Docker & Docker Compose
+- API keys: Upbit, (optional) Kiwoom, Telegram Bot Token
 
 ```bash
 git clone https://github.com/zln02/openclaw-trading
@@ -115,11 +124,13 @@ Road-tested workflow in the repo:
 
 The orchestration layer is built around specialized Claude-based agents:
 
-- Market Analyst
-- News Analyst
-- Risk Manager
-- Reporter
-- Orchestrator
+| Agent | Role |
+|-------|------|
+| Market Analyst | Real-time market regime classification & signal generation |
+| News Analyst | News sentiment analysis & event-driven alerts |
+| Risk Manager | Position sizing, drawdown monitoring, VaR calculation |
+| Reporter | Daily/weekly report generation & Telegram delivery |
+| Orchestrator | Agent coordination, decision pipeline, conflict resolution |
 
 These agents support:
 
@@ -188,6 +199,68 @@ That means this repository is both:
 </details>
 
 ## Architecture
+
+```mermaid
+flowchart LR
+
+subgraph Ext["📡 External APIs"]
+
+Upbit["Upbit (BTC Live)"]
+
+Kiwoom["Kiwoom (KR Paper)"]
+
+YF["yfinance (US DRY-RUN)"]
+
+Claude["Claude AI Agents"]
+
+end
+
+subgraph Core["🤖 Engine"]
+
+BTC["BTC Agent"]
+
+KR["KR Stock Agent"]
+
+US["US Stock Agent"]
+
+Exec["Execution (TWAP/VWAP)"]
+
+end
+
+subgraph Research["🔬 Level 5 Loop"]
+
+Alpha["Alpha Researcher"]
+
+Eval["Signal Evaluator"]
+
+Opt["Param Optimizer"]
+
+end
+
+subgraph Infra["🗄️ Infrastructure"]
+
+DB["Supabase (PostgreSQL)"]
+
+API["Public Signal API"]
+
+WS["WebSocket Stream"]
+
+end
+
+Output["📊 Dashboard + 📱 Mobile + 🔔 Telegram"]
+
+Ext --> Core
+
+Core --> Exec --> DB
+
+DB --> Research --> Core
+
+DB --> API & WS
+
+API & WS --> Output
+
+Core --> Output
+```
 
 ```mermaid
 graph TB
@@ -296,6 +369,9 @@ ORC --> BTC
 - [x] Level 5: Research-to-Production Loop
 - [ ] Level 6: Multi-Strategy Portfolio (Long-Short + Market Neutral)
 - [ ] Level 7: On-chain DEX Arbitrage
+- [ ]  Level 8: Backtest Report Automation & Walk-Forward Validation Pipeline
+- [ ]  Multi-Exchange Support (Binance, Bybit)
+- [ ]  Portfolio Analytics Dashboard (Sharpe, Sortino, Max Drawdown visualization)
 - [ ] Public API for external trader integration
 - [ ] Mobile Dashboard (React Native)
 
