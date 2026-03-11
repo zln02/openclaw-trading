@@ -30,31 +30,26 @@
 
 ## Demo
 
-<table>
-  <tr>
-    <td align="center" width="50%">
-      <img src="docs/images/dashboard-btc.png" alt="BTC Dashboard" width="100%" />
-      <br />
-      <strong>BTC Dashboard</strong>
-      <!-- 📸 SCREENSHOT: BTC 대시보드 탭. 캔들차트 + 복합스코어 게이지 + 포지션 카드 + F&G 인디케이터가 보이게 캡처. 브라우저 주소창 제거. 1280x720 권장 -->
-    </td>
-    <td align="center" width="50%">
-      <img src="docs/images/dashboard-kr.png" alt="KR Stocks" width="100%" />
-      <br />
-      <strong>KR Stocks</strong>
-      <!-- 📸 SCREENSHOT: KR 주식 탭. 포트폴리오 원형차트 + 보유종목 테이블 + TOP 모멘텀 랭킹이 보이게 캡처. 1280x720 -->
-    </td>
-  </tr>
-  <tr>
-    <td align="center" width="50%">
-      <img src="docs/images/dashboard-us.png" alt="US Stocks" width="100%" />
-      <br />
-      <strong>US Stocks</strong>
-      <!-- 📸 SCREENSHOT: US 주식 탭. 시장지수 카드 + 모멘텀 랭킹 테이블 + DRY-RUN 포지션이 보이게 캡처. 1280x720 -->
-    </td>
-    <td align="center" width="50%"></td>
-  </tr>
-</table>
+<p align="center">
+  <img src="docs/images/dashboard-btc.png" alt="BTC Dashboard" width="100%" />
+  <br />
+  <strong>BTC Dashboard</strong>
+</p>
+<!-- 📸 SCREENSHOT: BTC 대시보드 탭. 캔들차트 + 복합스코어 게이지 + 포지션 카드 + F&G 인디케이터가 보이게 캡처. 브라우저 주소창 제거. 1280x720 권장 -->
+
+<p align="center">
+  <img src="docs/images/dashboard-kr.png" alt="KR Stocks" width="100%" />
+  <br />
+  <strong>KR Stocks</strong>
+</p>
+<!-- 📸 SCREENSHOT: KR 주식 탭. 포트폴리오 원형차트 + 보유종목 테이블 + TOP 모멘텀 랭킹이 보이게 캡처. 1280x720 -->
+
+<p align="center">
+  <img src="docs/images/dashboard-us.png" alt="US Stocks" width="100%" />
+  <br />
+  <strong>US Stocks</strong>
+</p>
+<!-- 📸 SCREENSHOT: US 주식 탭. 시장지수 카드 + 모멘텀 랭킹 테이블 + DRY-RUN 포지션이 보이게 캡처. 1280x720 -->
 
 ## Quick Start
 
