@@ -53,8 +53,8 @@ supabase = get_supabase()
 # 리스크 설정 (미주용)
 # ─────────────────────────────────────────────
 RISK = {
-    "stop_loss": -0.035,
-    "take_profit": 0.10,
+    "stop_loss": -0.03,
+    "take_profit": 0.06,
     "partial_tp_pct": 0.06,
     "partial_tp_ratio": 0.50,
     "trailing_stop": 0.02,
@@ -77,6 +77,7 @@ RISK = {
     "earnings_filter": True,      # 어닝 5일 전 매수 차단
     "max_sector_positions": 2,    # 동일 섹터 최대 2종목
     "volatility_sizing": True,    # ATR 기반 포지션 사이징
+    "dry_run": True,
 }
 
 RULES = {
@@ -94,6 +95,16 @@ STOP_FLAG = Path(__file__).parent / "US_STOP_TRADING"
 _us_regime_adj_cache: Dict = {}
 
 
+def get_us_risk_regime() -> str:
+    """US 신규 진입 차단용 상위 레짐 분류."""
+    try:
+        result = RegimeClassifier().classify()
+        return str(result.get("regime", "TRANSITION")).upper()
+    except Exception as e:
+        log(f"US 상위 레짐 조회 실패: {e}", "WARN")
+        return "TRANSITION"
+
+
 def _get_us_regime_adj() -> Dict:
     """레짐별 US 팩터 가중치 조정값 반환 (Phase 3-B)."""
     global _us_regime_adj_cache
@@ -101,9 +112,7 @@ def _get_us_regime_adj() -> Dict:
         return _us_regime_adj_cache
     defaults = {"momentum_mult": 1.0, "value_mult": 1.0, "quality_mult": 1.0, "regime": "UNKNOWN"}
     try:
-        from agents.regime_classifier import RegimeClassifier
-        result = RegimeClassifier().classify()
-        regime = result.get("regime", "TRANSITION")
+        regime = get_us_risk_regime()
         _us_regime_adj_cache = {
             "RISK_ON":     {"momentum_mult": 1.25, "value_mult": 0.85, "quality_mult": 1.00},
             "TRANSITION":  {"momentum_mult": 1.00, "value_mult": 1.00, "quality_mult": 1.00},
@@ -148,6 +157,7 @@ def is_us_market_open() -> bool:
 # 시장 레짐 필터 (SPY 200MA + VIX) — common 모듈 위임
 # ─────────────────────────────────────────────
 from common.market_data import get_market_regime  # noqa: E402
+from agents.regime_classifier import RegimeClassifier  # noqa: E402
 
 
 def calc_relative_strength(symbol: str, days: int = 20) -> float:
@@ -329,6 +339,10 @@ def should_buy(symbol: str, score: float, indicators: dict) -> dict:
         return {"action": "HOLD", "reason": f"RSI 극과매수 ({rsi:.0f} > {RULES['buy_rsi_hard_max']})"}
     if vol_ratio < RULES["buy_vol_hard_min"]:
         return {"action": "HOLD", "reason": f"거래량 급감 ({vol_ratio:.2f}x)"}
+
+    risk_regime = get_us_risk_regime()
+    if risk_regime in {"RISK_OFF", "CRISIS"}:
+        return {"action": "HOLD", "reason": f"{risk_regime} 레짐 — 신규 매수 차단"}
 
     # 마켓 레짐 필터
     if RISK.get("market_regime_filter"):
@@ -699,7 +713,7 @@ def run_trading_cycle():
     _get_us_regime_adj()               # 사이클 초기에 레짐 로드
 
     log("=" * 50)
-    log("🇺🇸 US 자동매매 사이클 시작")
+    log("🇺🇸 US 자동매매 사이클 시작 (DRY-RUN)")
 
     if STOP_FLAG.exists():
         log("⛔ US_STOP_TRADING 플래그 감지 — 사이클 스킵")
@@ -718,10 +732,15 @@ def run_trading_cycle():
 
     # 시장 레짐 확인
     regime = get_market_regime()
+    risk_regime = get_us_risk_regime()
     log(f"시장 레짐: {regime['regime']} | SPY: {regime.get('spy_price',0):.0f} (200MA: {regime.get('spy_ma200',0):.0f}) | VIX: {regime.get('vix',0):.1f}")
+    log(f"상위 레짐: {risk_regime}")
 
     if regime["regime"] == "BEAR" and RISK.get("market_regime_filter"):
         log("🐻 BEAR 마켓 — 신규 매수 전면 차단")
+        return
+    if risk_regime in {"RISK_OFF", "CRISIS"}:
+        log(f"⛔ {risk_regime} 레짐 — US 신규 매수 전면 차단")
         return
 
     # 모멘텀 스캔 (상위 10% 대상으로 분석)

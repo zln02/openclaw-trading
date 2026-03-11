@@ -854,6 +854,7 @@ def execute_trade(
     krw_balance = upbit.get_balance("KRW") or 0
     pos         = get_open_position()
     price       = indicators["price"]
+    log.info(f"잔고 스냅샷: KRW={float(krw_balance):,.0f} | BTC={float(btc_balance):.8f}")
 
     # ── 손절/익절 + 트레일링 스탑 ──
     if btc_balance > 0.00001 and pos:
@@ -986,8 +987,16 @@ def execute_trade(
         comp_total = comp["total"] if comp else 50
         stage      = get_split_stage(comp_total)
         invest_krw = krw_balance * RISK["split_ratios"][stage - 1]
+        log.info(
+            f"매수 가능 금액 계산: stage={stage} | split_ratio={RISK['split_ratios'][stage - 1]:.2f} "
+            f"| invest_krw={float(invest_krw):,.0f}"
+        )
 
         if invest_krw < 5000:
+            log.warning(
+                f"매수 실패: INSUFFICIENT_KRW | KRW={float(krw_balance):,.0f} | "
+                f"invest_krw={float(invest_krw):,.0f}"
+            )
             return {"result": "INSUFFICIENT_KRW"}
 
         if not DRY_RUN:

@@ -15,7 +15,7 @@ import json
 import time
 import sys
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -64,6 +64,7 @@ RISK = {
     "split_rsi_thresholds": [50, 42, 35],
     "min_order_krw": 30000,
     "cooldown_minutes": 10,
+    "loss_cooldown_days": 5,
     "min_hours_between_splits": 3,
     "max_sector_positions": 2,           # 동일 섹터 최대 2종목
     "fee_buy": 0.00015,
@@ -559,6 +560,33 @@ def check_cooldown(code: str) -> bool:
             .data or []
         )
         return len(recent) > 0
+    except Exception:
+        return False
+
+
+def check_loss_cooldown(code: str) -> bool:
+    """최근 손실 종료 종목 재진입 차단."""
+    try:
+        cutoff = (datetime.now() - timedelta(days=RISK['loss_cooldown_days'])).isoformat()
+        recent_sells = (
+            supabase.table('trade_executions')
+            .select('price,entry_price,reason')
+            .eq('stock_code', code)
+            .eq('trade_type', 'SELL')
+            .eq('result', 'CLOSED')
+            .gte('created_at', cutoff)
+            .order('created_at', desc=True)
+            .limit(3)
+            .execute()
+            .data or []
+        )
+        for row in recent_sells:
+            price = float(row.get('price', 0) or 0)
+            entry = float(row.get('entry_price', 0) or 0)
+            reason = str(row.get('reason', '') or '')
+            if (entry > 0 and price < entry) or ('손절' in reason):
+                return True
+        return False
     except Exception:
         return False
 
@@ -1085,6 +1113,9 @@ def execute_buy(
     if check_cooldown(code):
         log(f'{name}: 최근 매도 후 쿨다운 중', 'WARN')
         return {'result': 'COOLDOWN'}
+    if check_loss_cooldown(code):
+        log(f'{name}: 최근 손실 종목 쿨다운 중', 'WARN')
+        return {'result': 'LOSS_COOLDOWN'}
 
     # 최대 포지션 수 체크
     all_open = get_open_positions()
