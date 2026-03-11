@@ -1,3 +1,14 @@
+FROM node:20-bookworm-slim AS dashboard-builder
+
+WORKDIR /dashboard
+
+COPY dashboard/package.json dashboard/package-lock.json ./
+RUN npm ci
+
+COPY dashboard/ ./
+RUN npm run build
+
+
 FROM python:3.11-slim
 
 WORKDIR /app
@@ -19,7 +30,7 @@ COPY agents/ agents/
 COPY quant/ quant/
 COPY memory/ memory/
 COPY scripts/ scripts/
-COPY dashboard/dist/ dashboard/dist/
+COPY --from=dashboard-builder /dashboard/dist/ dashboard/dist/
 
 # 환경변수
 ENV PYTHONPATH=/app

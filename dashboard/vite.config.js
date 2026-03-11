@@ -6,12 +6,8 @@ export default defineConfig(() => {
   const certFile = process.env.VITE_SSL_CERT;
   const keyFile = process.env.VITE_SSL_KEY;
   const hasHttpsFiles = certFile && keyFile && fs.existsSync(certFile) && fs.existsSync(keyFile);
-  const isGitHubPagesBuild = process.env.GITHUB_ACTIONS === "true";
-  const repoName = process.env.GITHUB_REPOSITORY?.split("/")[1];
-  const base = isGitHubPagesBuild && repoName ? `/${repoName}/` : "/";
 
   return {
-    base,
     plugins: [react()],
     server: {
       port: 3000,
