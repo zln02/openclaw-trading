@@ -26,7 +26,7 @@
 
 - **3-Market Coverage:** BTC (live) + KR Stocks (paper) + US Stocks (dry-run)
 - **Level 5 Research Loop:** Automated alpha discovery → IC/IR validation → parameter auto-tuning
-- **AI Agent Team:** 5 Claude agents for market analysis, risk management, and execution
+- **AI Agent Team:** 5 Claude agents support analysis, risk review, and reporting
 
 ## Demo
 
@@ -52,12 +52,7 @@
       <strong>US Stocks</strong>
       <!-- 📸 SCREENSHOT: US 주식 탭. 시장지수 카드 + 모멘텀 랭킹 테이블 + DRY-RUN 포지션이 보이게 캡처. 1280x720 -->
     </td>
-    <td align="center" width="50%">
-      <img src="docs/images/dashboard-agents.png" alt="AI Agents" width="100%" />
-      <br />
-      <strong>AI Agents</strong>
-      <!-- 📸 SCREENSHOT: Agents 탭. AI 에이전트 결정 이력 타임라인 + 최근 판단 카드가 보이게 캡처. 1280x720 -->
-    </td>
+    <td align="center" width="50%"></td>
   </tr>
 </table>
 
@@ -179,7 +174,6 @@ The dashboard stack exposes market-specific views and operating telemetry:
 - BTC dashboard: candles, composite score, positions, sentiment context
 - KR dashboard: holdings, portfolio mix, ranking tables, market summary
 - US dashboard: major index cards, momentum ranking, dry-run positions
-- Agents dashboard: recent decisions, timelines, and reporting artifacts
 
 Alerting and reporting currently include:
 
