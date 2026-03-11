@@ -30,7 +30,7 @@ export default function Layout() {
   const { data: health, updatedAt } = usePolling(getHealth, 30000);
   const { data: composite } = usePolling(getBtcComposite, 30000);
 
-  const btcAsset = (btc?.summary?.krw_balance || 0) + (btc?.summary?.total_eval || 0);
+  const btcAsset = btc?.summary?.estimated_asset || 0;
   const krAsset = kr?.estimated_asset || 0;
   const usAsset = us?.summary?.total_current || 0;
   const totalAsset = btcAsset + krAsset + usAsset;

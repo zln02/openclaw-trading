@@ -27,10 +27,10 @@ export default function PortfolioBanner() {
   const { data: kr }  = usePolling(getStockPortfolio, 30000);
   const { data: us }  = usePolling(getUsPositions, 60000);
 
-  // BTC: krw_balance (현금) + total_eval (포지션 현재가)
+  // BTC: estimated_asset uses live Upbit KRW + live BTC valuation
   const btcCash  = btc?.summary?.krw_balance ?? 0;
   const btcPos   = btc?.summary?.total_eval  ?? 0;
-  const btcEval  = btcCash + btcPos;
+  const btcEval  = btc?.summary?.estimated_asset ?? (btcCash + btcPos);
   const btcPnl   = btc?.summary?.unrealized_pnl ?? null;
   const btcPnlPct = btc?.summary?.unrealized_pnl_pct ?? null;
   const btcHasPos = (btc?.summary?.open_count ?? 0) > 0;
