@@ -10,10 +10,13 @@
 #   scripts/run_top_tier_cron.sh phase18-weekly
 #   scripts/run_top_tier_cron.sh all
 
-set -u
+set -euo pipefail
 
 source "$(dirname "$0")/load_env.sh"
 load_openclaw_env
+require_openclaw_workspace
+
+cd "$WORKSPACE"
 export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}$WORKSPACE"
 
 MODE="${1:-all}"

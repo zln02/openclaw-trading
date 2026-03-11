@@ -12,9 +12,11 @@ secretary/.venv/
 
 # Environment / secrets
 .env
+.env.runtime
 .env.local
 .env.production
 .env.*.local
+.docker-secrets/
 skills/**/.env
 *.log
 **/kiwoom_token.json

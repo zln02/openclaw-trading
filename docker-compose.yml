@@ -3,14 +3,26 @@ services:
     build: .
     ports:
       - "127.0.0.1:18080:8080"
-    env_file: .env
+    env_file: .env.runtime
     environment:
+      - OPENCLAW_CONFIG_DIR=/app
+      - OPENCLAW_WORKSPACE_DIR=/app
+      - OPENCLAW_LOG_DIR=/app/logs
       - PYTHONPATH=/app
     volumes:
       - ./brain:/app/brain
       - ./certs:/app/certs:ro
       - ./logs:/app/logs
+      - ./.docker-secrets:/run/local-secrets:ro
     restart: unless-stopped
+    read_only: true
+    user: "0:0"
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 60s
@@ -20,34 +32,70 @@ services:
   btc-agent:
     build: .
     command: ["python", "btc/btc_trading_agent.py"]
-    env_file: .env
+    env_file: .env.runtime
     environment:
+      - OPENCLAW_CONFIG_DIR=/app
+      - OPENCLAW_WORKSPACE_DIR=/app
+      - OPENCLAW_LOG_DIR=/app/logs
       - PYTHONPATH=/app
     volumes:
       - ./brain:/app/brain
       - ./logs:/app/logs
+      - ./.docker-secrets:/run/local-secrets:ro
     restart: unless-stopped
+    read_only: true
+    user: "0:0"
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     depends_on:
       - dashboard
 
   kr-agent:
     build: .
     command: ["python", "stocks/stock_trading_agent.py"]
-    env_file: .env
+    env_file: .env.runtime
     environment:
+      - OPENCLAW_CONFIG_DIR=/app
+      - OPENCLAW_WORKSPACE_DIR=/app
+      - OPENCLAW_LOG_DIR=/app/logs
       - PYTHONPATH=/app
     volumes:
       - ./brain:/app/brain
       - ./logs:/app/logs
-    restart: unless-stopped
+      - ./.docker-secrets:/run/local-secrets:ro
+    restart: "no"
+    read_only: true
+    user: "0:0"
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
 
   us-agent:
     build: .
     command: ["python", "stocks/us_stock_trading_agent.py"]
-    env_file: .env
+    env_file: .env.runtime
     environment:
+      - OPENCLAW_CONFIG_DIR=/app
+      - OPENCLAW_WORKSPACE_DIR=/app
+      - OPENCLAW_LOG_DIR=/app/logs
       - PYTHONPATH=/app
     volumes:
       - ./brain:/app/brain
       - ./logs:/app/logs
+      - ./.docker-secrets:/run/local-secrets:ro
     restart: unless-stopped
+    read_only: true
+    user: "0:0"
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL

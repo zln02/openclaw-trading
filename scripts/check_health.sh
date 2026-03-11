@@ -13,7 +13,10 @@ load_openclaw_env
 
 mkdir -p "$LOG_DIR"
 HEALTH_STATUS_FILE="$LOG_DIR/health_status.json"
-DASHBOARD_URL="${DASHBOARD_HEALTH_URL:-http://localhost:${DASHBOARD_PORT:-8080}/stocks}"
+DASHBOARD_URL="${DASHBOARD_HEALTH_URL:-http://localhost:${DASHBOARD_PORT:-8080}/health}"
+CACHE_DIR="$LOG_DIR/.health_alert_cache"
+mkdir -p "$CACHE_DIR"
+chmod 700 "$CACHE_DIR" 2>/dev/null || true
 
 # 임계치 (분)
 STALE_MINUTES=30
@@ -48,7 +51,7 @@ send_tg() {
     
     # 중복 알림 방지: 같은 메시지는 10분에 한번만
     local msg_hash=$(echo "$msg" | md5sum | cut -d' ' -f1)
-    local cache_file="/tmp/health_alert_cache_$msg_hash"
+    local cache_file="$CACHE_DIR/$msg_hash"
     local current_time=$(date +%s)
     
     if [ -f "$cache_file" ]; then
@@ -67,6 +70,7 @@ send_tg() {
         --data-urlencode "chat_id=${CHAT_ID}" \
         --data-urlencode "text=${msg}" \
         -d "parse_mode=HTML" > /dev/null; then
+        umask 077
         echo "$current_time" > "$cache_file"
         echo "✅ Telegram 알림 전송: ${msg:0:50}..."
     else

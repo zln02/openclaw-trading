@@ -200,11 +200,13 @@ class NewsAnalyst:
         model: str = "gpt-4o-mini",
         daily_budget_usd: float = 2.0,
         batch_minutes: int = 5,
+        state_dir: Optional[Path] = None,
     ):
         # claude-haiku / claude-sonnet 단축명 → 실제 ID 해석
         self.model = _resolve_claude_id(model) if _is_claude_model(model) else model
         self.daily_budget_usd = max(daily_budget_usd, 0.0)
         self.batch_minutes = max(batch_minutes, 1)
+        self.state_dir = Path(state_dir) if state_dir is not None else STATE_DIR
 
     def _budget_key(self, now: Optional[datetime] = None) -> str:
         return f"news_analyst:budget:{_today_key(now)}"
@@ -213,10 +215,10 @@ class NewsAnalyst:
         return f"news_analyst:seen:{_today_key(now)}"
 
     def _budget_state_path(self, now: Optional[datetime] = None) -> Path:
-        return STATE_DIR / f"budget-{_today_key(now)}.json"
+        return self.state_dir / f"budget-{_today_key(now)}.json"
 
     def _seen_ids_path(self, now: Optional[datetime] = None) -> Path:
-        return STATE_DIR / f"seen-{_today_key(now)}.json"
+        return self.state_dir / f"seen-{_today_key(now)}.json"
 
     def get_budget_state(self, now: Optional[datetime] = None) -> dict:
         key = self._budget_key(now)
@@ -484,7 +486,11 @@ time: {item.get('timestamp','')}
     def _load_seen_ids(self) -> set[str]:
         seen = get_cached(self._seen_key())
         if seen is None:
-            seen = _read_json_file(self._seen_ids_path(), [])
+            # Tests should not inherit prior run state from the shared workspace.
+            if os.environ.get("PYTEST_CURRENT_TEST"):
+                seen = []
+            else:
+                seen = _read_json_file(self._seen_ids_path(), [])
             set_cached(self._seen_key(), seen, ttl=86400)
         if not seen:
             return set()

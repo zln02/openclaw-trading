@@ -27,30 +27,19 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
+from common.env_loader import load_env
+from common.supabase_client import create_supabase_client_from_env
 
-
-def _load_env():
-    p = Path('/home/wlsdud5035/.openclaw/openclaw.json')
-    if p.exists():
-        d = json.loads(p.read_text())
-        for k, v in (d.get('env') or {}).items():
-            if isinstance(v, str):
-                os.environ.setdefault(k, v)
-
-
-_load_env()
+load_env()
 
 # ml_model은 같은 디렉토리(stocks/)에 있으므로 sys.path에 추가
 _STOCKS_DIR = str(Path(__file__).parent)
 if _STOCKS_DIR not in sys.path:
     sys.path.insert(0, _STOCKS_DIR)
 
-from supabase import create_client  # noqa: E402
 from ml_model import _load_model, extract_features  # noqa: E402
 
-SUPABASE_URL = os.environ.get('SUPABASE_URL', '')
-SUPABASE_KEY = os.environ.get('SUPABASE_SECRET_KEY', '')
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
+supabase = create_supabase_client_from_env()
 
 
 # 전략 파라미터 — stock_trading_agent.py와 동일 값 사용
@@ -308,4 +297,3 @@ if __name__ == '__main__':
     result = run_ml_backtest(days)
     if result:
         print('\n요약:', json.dumps(result, indent=2, ensure_ascii=False))
-

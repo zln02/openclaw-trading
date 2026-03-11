@@ -1,8 +1,39 @@
-"""Supabase 클라이언트 싱글턴."""
+"""Supabase client helpers with lazy, failure-tolerant initialization."""
+from __future__ import annotations
+
 import os
-from typing import Optional
 
 _client = None
+
+
+def create_supabase_client(url: str, key: str):
+    """Create a Supabase client without propagating SDK import/init failures."""
+    if not url or not key:
+        return None
+
+    try:
+        from supabase import create_client
+    except Exception:
+        return None
+
+    try:
+        return create_client(url, key)
+    except Exception:
+        return None
+
+
+def create_supabase_client_from_env() -> object | None:
+    """Create a Supabase client from env, accepting both secret-role key names."""
+    try:
+        from common.env_loader import load_env
+
+        load_env()
+    except Exception:
+        pass
+
+    url = os.environ.get("SUPABASE_URL", "")
+    key = os.environ.get("SUPABASE_SECRET_KEY", "") or os.environ.get("SUPABASE_KEY", "")
+    return create_supabase_client(url, key)
 
 
 def get_supabase():
@@ -19,11 +50,5 @@ def get_supabase():
     except Exception:
         pass
 
-    url = os.environ.get("SUPABASE_URL", "")
-    key = os.environ.get("SUPABASE_SECRET_KEY", "")
-    if not url or not key:
-        return None
-
-    from supabase import create_client
-    _client = create_client(url, key)
+    _client = create_supabase_client_from_env()
     return _client

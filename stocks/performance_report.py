@@ -15,29 +15,17 @@ import os
 import json
 import math
 from datetime import datetime, timedelta
-from pathlib import Path
 
 import requests
+from common.env_loader import load_env
+from common.supabase_client import create_supabase_client_from_env
 
-def _load_env():
-    p = Path('/home/wlsdud5035/.openclaw/openclaw.json')
-    if p.exists():
-        d = json.loads(p.read_text())
-        for k, v in (d.get('env') or {}).items():
-            if isinstance(v, str):
-                os.environ.setdefault(k, v)
+load_env()
 
-
-_load_env()
-
-from supabase import create_client
-
-SUPABASE_URL = os.environ.get('SUPABASE_URL', '')
-SUPABASE_KEY = os.environ.get('SUPABASE_SECRET_KEY', '')
 TG_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
 TG_CHAT = os.environ.get('TELEGRAM_CHAT_ID', '')
 
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
+supabase = create_supabase_client_from_env()
 
 
 def send_telegram(msg: str):
@@ -236,4 +224,3 @@ if __name__ == '__main__':
     import sys
     mkt = sys.argv[1] if len(sys.argv) > 1 else "kr"
     generate_report(market=mkt)
-

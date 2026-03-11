@@ -31,13 +31,21 @@ COPY quant/ quant/
 COPY memory/ memory/
 COPY scripts/ scripts/
 COPY --from=dashboard-builder /dashboard/dist/ dashboard/dist/
+RUN chmod +x scripts/docker_entrypoint.sh
 
 # 환경변수
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
+# 비루트 사용자로 실행
+RUN useradd --create-home --shell /usr/sbin/nologin openclaw && \
+    chown -R openclaw:openclaw /app
+USER openclaw
 
 # 대시보드 포트
 EXPOSE 8080
 
 # 기본 진입점: 대시보드
+ENTRYPOINT ["scripts/docker_entrypoint.sh"]
 CMD ["python", "btc/btc_dashboard.py"]

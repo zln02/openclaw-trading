@@ -19,24 +19,11 @@ import sys
 from pathlib import Path
 
 import numpy as np
+from common.env_loader import load_env
+from common.supabase_client import create_supabase_client_from_env
 
-
-def _load_env():
-    p = Path('/home/wlsdud5035/.openclaw/openclaw.json')
-    if p.exists():
-        d = json.loads(p.read_text())
-        for k, v in (d.get('env') or {}).items():
-            if isinstance(v, str):
-                os.environ.setdefault(k, v)
-
-
-_load_env()
-
-from supabase import create_client  # noqa: E402
-
-SUPABASE_URL = os.environ.get('SUPABASE_URL', '')
-SUPABASE_KEY = os.environ.get('SUPABASE_SECRET_KEY', '')
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
+load_env()
+supabase = create_supabase_client_from_env()
 
 MODEL_PATH = Path(__file__).parent / 'xgb_model.ubj'  # XGBoost 네이티브 바이너리 (pickle 대체)
 FEATURE_NAMES = [
@@ -738,4 +725,3 @@ if __name__ == '__main__':
         print('  python3 ml_model.py predict 005930     # 특정 종목 예측')
         print('  python3 ml_model.py shap 005930        # 특정 종목 SHAP 분석')
         print('  python3 ml_model.py predict_all        # 전체 종목 예측')
-

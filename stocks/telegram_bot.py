@@ -20,9 +20,9 @@ from datetime import datetime
 import requests
 
 from kiwoom_client import KiwoomClient
-from supabase import create_client
 from common.config import WORKSPACE
 from common.env_loader import load_env
+from common.supabase_client import create_supabase_client_from_env
 
 
 def _load_env():
@@ -34,9 +34,7 @@ _load_env()
 TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TG_CHAT = os.environ.get("TELEGRAM_CHAT_ID", "")
 
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
-SUPABASE_KEY = os.environ.get("SUPABASE_SECRET_KEY", "")
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
+supabase = create_supabase_client_from_env()
 
 
 def send_message(text: str, chat_id: str | None = None, reply_markup: dict | None = None):
