@@ -16,6 +16,8 @@ XGBoost 분류 모델:
 import os
 import json
 import sys
+import pickle
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -38,7 +40,9 @@ SUPABASE_URL = os.environ.get('SUPABASE_URL', '')
 SUPABASE_KEY = os.environ.get('SUPABASE_SECRET_KEY', '')
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
 
-MODEL_PATH = Path(__file__).parent / 'xgb_model.ubj'  # XGBoost 네이티브 바이너리 (pickle 대체)
+ROOT_DIR = Path(__file__).resolve().parents[1]
+MODEL_DIR = ROOT_DIR / 'brain' / 'ml'
+MODEL_DIR.mkdir(parents=True, exist_ok=True)
 FEATURE_NAMES = [
     'rsi_14',
     'rsi_7',
@@ -61,6 +65,74 @@ FEATURE_NAMES = [
     'atr_14',
     'volume_trend',
 ]
+
+FACTOR_FEATURES = [
+    'momentum_12m',
+    'momentum_1m',
+    'pe_ratio',
+    'pb_ratio',
+    'roe',
+    'debt_ratio',
+    'revenue_growth',
+    'earnings_surprise',
+    'volume_ratio_20d',
+    'orderbook_imbalance',
+]
+
+MARKET_FEATURES = [
+    'kospi_rsi_14',
+    'kospi_return_5d',
+    'vix_level',
+    'fg_index',
+    'regime_encoded',
+]
+
+SUPPLY_FEATURES = [
+    'foreign_net_buy_5d',
+    'inst_net_buy_5d',
+    'short_interest_ratio',
+    'days_to_earnings',
+    'sector_momentum_rank',
+    'relative_strength_vs_kospi',
+    'avg_spread_bps',
+    'turnover_ratio',
+    '52w_high_proximity',
+    'market_cap_log',
+]
+
+FEATURE_NAMES.extend(FACTOR_FEATURES + MARKET_FEATURES + SUPPLY_FEATURES)
+
+HORIZON_CONFIGS = {
+    '1d': {'target_days': 1, 'target_return': 0.01, 'label': 'short'},
+    '3d': {'target_days': 3, 'target_return': 0.02, 'label': 'mid'},
+    '10d': {'target_days': 10, 'target_return': 0.05, 'label': 'swing'},
+}
+
+
+def _horizon_dir(horizon_key: str) -> Path:
+    hk = str(horizon_key).lower().replace('horizon_', '').replace('d', '') + 'd'
+    if hk == '3d':
+        MODEL_DIR.mkdir(parents=True, exist_ok=True)
+        return MODEL_DIR
+    path = MODEL_DIR / f'horizon_{hk}'
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _horizon_paths(horizon_key: str) -> dict:
+    base = _horizon_dir(horizon_key)
+    return {
+        'dir': base,
+        'xgb': base / 'xgb_model.ubj',
+        'lgbm': base / 'lgbm_model.txt',
+        'catboost': base / 'catboost_model.cbm',
+        'meta_model': base / 'meta_model.pkl',
+        'meta_json': base / 'ensemble_meta.json',
+    }
+
+
+def _utc_now_iso() -> str:
+    return datetime.utcnow().isoformat() + 'Z'
 
 
 # ─────────────────────────────────────────────
@@ -105,7 +177,317 @@ def calc_atr(highs, lows, closes, period=14):
     return sum(trs) / period
 
 
-def extract_features(closes, volumes, highs, lows, idx):
+def _safe_float(value, default: float = 0.0) -> float:
+    try:
+        if value is None:
+            return default
+        return float(value)
+    except Exception:
+        return default
+
+
+def _tick_size_kr(price: float) -> float:
+    px = _safe_float(price, 0.0)
+    if px <= 0:
+        return 0.0
+    if px < 2000:
+        return 1.0
+    if px < 5000:
+        return 5.0
+    if px < 20000:
+        return 10.0
+    if px < 50000:
+        return 50.0
+    if px < 200000:
+        return 100.0
+    if px < 500000:
+        return 500.0
+    return 1000.0
+
+
+class MLFeatureContext:
+    def __init__(self):
+        self.factor_ctx = None
+        self.market_cache = {}
+        self.symbol_info_cache = {}
+        self.flow_cache = {}
+        self.sector_rank_cache = {}
+        self.market_history = None
+        self.earnings_cache = {}
+
+    def _get_factor_ctx(self):
+        if self.factor_ctx is None:
+            workspace_root = str(Path(__file__).resolve().parents[1])
+            if workspace_root not in sys.path:
+                sys.path.insert(0, workspace_root)
+            from quant.factors.registry import FactorContext
+            self.factor_ctx = FactorContext()
+        return self.factor_ctx
+
+    def get_factor_features(self, stock_code: str, as_of_date: str) -> dict:
+        workspace_root = str(Path(__file__).resolve().parents[1])
+        if workspace_root not in sys.path:
+            sys.path.insert(0, workspace_root)
+        from quant.factors.registry import calc_all
+
+        return calc_all(
+            as_of=as_of_date,
+            symbol=stock_code,
+            market='kr',
+            factor_names=FACTOR_FEATURES + ['fg_index'],
+            context=self._get_factor_ctx(),
+        )
+
+    def get_market_features(self, as_of_date: str) -> dict:
+        key = str(as_of_date)
+        cached = self.market_cache.get(key)
+        if cached is not None:
+            return cached
+
+        out = self._market_features_from_history(key)
+
+        self.market_cache[key] = out
+        return out
+
+    def _load_market_history(self):
+        if self.market_history is not None:
+            return self.market_history
+
+        history = {'kospi': {}, 'vix': {}, 'fg_index': 50.0, 'regime_encoded': 2.0}
+        try:
+            import yfinance as yf
+            kospi = yf.Ticker('^KS11').history(period='10y')
+            if kospi is not None and not kospi.empty and 'Close' in kospi:
+                closes = [float(v) for v in kospi['Close']]
+                dates = [str(idx.date()) for idx in kospi.index]
+                for i, day in enumerate(dates):
+                    window = closes[: i + 1]
+                    rsi = calc_rsi(window, 14) if len(window) >= 15 else 50.0
+                    ret5 = (window[-1] / window[-6] - 1.0) * 100.0 if len(window) >= 6 and window[-6] > 0 else 0.0
+                    history['kospi'][day] = {'kospi_rsi_14': rsi, 'kospi_return_5d': ret5}
+            vix = yf.Ticker('^VIX').history(period='10y')
+            if vix is not None and not vix.empty and 'Close' in vix:
+                for idx, val in vix['Close'].items():
+                    history['vix'][str(idx.date())] = float(val)
+        except Exception:
+            pass
+
+        try:
+            workspace_root = str(Path(__file__).resolve().parents[1])
+            if workspace_root not in sys.path:
+                sys.path.insert(0, workspace_root)
+            from quant.factors.registry import calc
+            history['fg_index'] = calc('fg_index', as_of=datetime.now().date().isoformat(), symbol='005930', market='kr', context=self._get_factor_ctx())
+        except Exception:
+            pass
+
+        try:
+            workspace_root = str(Path(__file__).resolve().parents[1])
+            if workspace_root not in sys.path:
+                sys.path.insert(0, workspace_root)
+            from agents.regime_classifier import RegimeClassifier
+            regime = RegimeClassifier().classify().get('regime', 'TRANSITION')
+            history['regime_encoded'] = {
+                'CRISIS': 0.0,
+                'RISK_OFF': 1.0,
+                'TRANSITION': 2.0,
+                'RISK_ON': 3.0,
+            }.get(regime, 2.0)
+        except Exception:
+            pass
+
+        self.market_history = history
+        return history
+
+    def _market_features_from_history(self, as_of_date: str) -> dict:
+        history = self._load_market_history()
+        out = {
+            'kospi_rsi_14': 50.0,
+            'kospi_return_5d': 0.0,
+            'vix_level': 20.0,
+            'fg_index': _safe_float(history.get('fg_index'), 50.0),
+            'regime_encoded': _safe_float(history.get('regime_encoded'), 2.0),
+        }
+        kospi_hist = history.get('kospi') or {}
+        if as_of_date in kospi_hist:
+            out.update(kospi_hist[as_of_date])
+        elif kospi_hist:
+            eligible = [d for d in kospi_hist.keys() if d <= as_of_date]
+            if eligible:
+                out.update(kospi_hist[max(eligible)])
+        vix_hist = history.get('vix') or {}
+        if as_of_date in vix_hist:
+            out['vix_level'] = _safe_float(vix_hist[as_of_date], 20.0)
+        elif vix_hist:
+            eligible = [d for d in vix_hist.keys() if d <= as_of_date]
+            if eligible:
+                out['vix_level'] = _safe_float(vix_hist[max(eligible)], 20.0)
+        return out
+
+    def get_symbol_info(self, stock_code: str) -> dict:
+        code = str(stock_code).strip()
+        cached = self.symbol_info_cache.get(code)
+        if cached is not None:
+            return cached
+        info = {}
+        try:
+            import yfinance as yf
+            info = yf.Ticker(f'{code}.KS').info or {}
+        except Exception:
+            info = {}
+        self.symbol_info_cache[code] = info
+        return info
+
+    def get_flow_5d(self, stock_code: str) -> dict:
+        code = str(stock_code).strip()
+        cached = self.flow_cache.get(code)
+        if cached is not None:
+            return cached
+        out = {'foreign_net_buy_5d': 0.0, 'inst_net_buy_5d': 0.0}
+        try:
+            rows = (
+                supabase.table('investor_flows')
+                .select('date,foreign_net,inst_net,institution_net,stock_code')
+                .eq('stock_code', code)
+                .order('date', desc=False)
+                .limit(30)
+                .execute()
+                .data
+                or []
+            )
+            recent = rows[-5:]
+            out['foreign_net_buy_5d'] = sum(_safe_float(r.get('foreign_net'), 0.0) for r in recent)
+            out['inst_net_buy_5d'] = sum(_safe_float(r.get('inst_net', r.get('institution_net')), 0.0) for r in recent)
+        except Exception:
+            pass
+        self.flow_cache[code] = out
+        return out
+
+    def get_sector_momentum_rank(self, stock_code: str, return_20d: float) -> float:
+        code = str(stock_code).strip()
+        info = self.get_symbol_info(code)
+        sector = str(info.get('sector') or '')
+        if not sector:
+            return 0.5
+        cached = self.sector_rank_cache.get(sector)
+        if cached is not None and code in cached:
+            return cached[code]
+
+        ranks = {}
+        try:
+            stocks = (
+                supabase.table('top50_stocks')
+                .select('stock_code')
+                .execute()
+                .data
+                or []
+            )
+            pairs = []
+            for row in stocks:
+                peer_code = str(row.get('stock_code') or '').strip()
+                if not peer_code:
+                    continue
+                peer_info = self.get_symbol_info(peer_code)
+                if str(peer_info.get('sector') or '') != sector:
+                    continue
+                peer_rows = (
+                    supabase.table('daily_ohlcv')
+                    .select('close_price,date')
+                    .eq('stock_code', peer_code)
+                    .order('date', desc=False)
+                    .limit(40)
+                    .execute()
+                    .data
+                    or []
+                )
+                if len(peer_rows) < 21:
+                    continue
+                closes = [float(r['close_price']) for r in peer_rows]
+                ret20 = (closes[-1] / closes[-21] - 1.0) if closes[-21] > 0 else 0.0
+                pairs.append((peer_code, ret20))
+            if pairs:
+                pairs.sort(key=lambda x: x[1])
+                n = max(len(pairs) - 1, 1)
+                for idx, (peer_code, _) in enumerate(pairs):
+                    ranks[peer_code] = idx / n
+        except Exception:
+            pass
+        self.sector_rank_cache[sector] = ranks
+        return ranks.get(code, 0.5)
+
+
+_ML_FEATURE_CTX = MLFeatureContext()
+
+
+def _compute_extra_features(stock_code: str, as_of_date: str, closes, volumes, highs, lows, idx):
+    price = closes[idx]
+    factor_vals = _ML_FEATURE_CTX.get_factor_features(stock_code, as_of_date)
+    market_vals = _ML_FEATURE_CTX.get_market_features(as_of_date)
+    flow_vals = _ML_FEATURE_CTX.get_flow_5d(stock_code)
+    info = _ML_FEATURE_CTX.get_symbol_info(stock_code)
+
+    ret_20d = (closes[idx] / closes[idx - 20] - 1.0) * 100.0 if idx >= 20 and closes[idx - 20] > 0 else 0.0
+    kospi_ret_5d = _safe_float(market_vals.get('kospi_return_5d'), 0.0)
+    relative_strength = ret_20d - kospi_ret_5d
+    high_252 = max(closes[max(0, idx - 251): idx + 1]) if idx >= 1 else price
+    proximity_52w = (price / high_252) if high_252 > 0 else 0.0
+    market_cap = _safe_float(info.get('marketCap'), 0.0)
+    turnover_ratio = (volumes[idx] * price / market_cap) if market_cap > 0 else 0.0
+    avg_spread_bps = (_tick_size_kr(price) / price * 10000.0) if price > 0 else 0.0
+    short_interest = _safe_float(info.get('sharesShortPriorMonth') or info.get('sharesShort'), 0.0)
+    shares_float = _safe_float(info.get('floatShares') or info.get('sharesOutstanding'), 0.0)
+    short_interest_ratio = (short_interest / shares_float * 100.0) if shares_float > 0 else 0.0
+    market_cap_log = np.log1p(max(market_cap, 0.0)) if market_cap > 0 else 0.0
+
+    days_to_earnings = _ML_FEATURE_CTX.earnings_cache.get(stock_code)
+    if days_to_earnings is None:
+        days_to_earnings = 30.0
+        try:
+            workspace_root = str(Path(__file__).resolve().parents[1])
+            if workspace_root not in sys.path:
+                sys.path.insert(0, workspace_root)
+            from common.market_data import check_earnings_proximity
+            earnings = check_earnings_proximity(f'{stock_code}.KS', days=30)
+            dte = earnings.get('days_to_earnings')
+            if dte is not None:
+                days_to_earnings = float(max(0, min(int(dte), 30)))
+        except Exception:
+            pass
+        _ML_FEATURE_CTX.earnings_cache[stock_code] = days_to_earnings
+
+    sector_rank = _ML_FEATURE_CTX.get_sector_momentum_rank(stock_code, ret_20d)
+
+    extras = {
+        'momentum_12m': _safe_float(factor_vals.get('momentum_12m'), 0.0),
+        'momentum_1m': _safe_float(factor_vals.get('momentum_1m'), 0.0),
+        'pe_ratio': _safe_float(factor_vals.get('pe_ratio'), 0.0),
+        'pb_ratio': _safe_float(factor_vals.get('pb_ratio'), 0.0),
+        'roe': _safe_float(factor_vals.get('roe'), 0.0),
+        'debt_ratio': _safe_float(factor_vals.get('debt_ratio'), 0.0),
+        'revenue_growth': _safe_float(factor_vals.get('revenue_growth'), 0.0),
+        'earnings_surprise': _safe_float(factor_vals.get('earnings_surprise'), 0.0),
+        'volume_ratio_20d': _safe_float(factor_vals.get('volume_ratio_20d'), 1.0),
+        'orderbook_imbalance': _safe_float(factor_vals.get('orderbook_imbalance'), 0.0),
+        'kospi_rsi_14': _safe_float(market_vals.get('kospi_rsi_14'), 50.0),
+        'kospi_return_5d': _safe_float(market_vals.get('kospi_return_5d'), 0.0),
+        'vix_level': _safe_float(market_vals.get('vix_level'), 20.0),
+        'fg_index': _safe_float(market_vals.get('fg_index'), 50.0),
+        'regime_encoded': _safe_float(market_vals.get('regime_encoded'), 2.0),
+        'foreign_net_buy_5d': _safe_float(flow_vals.get('foreign_net_buy_5d'), 0.0),
+        'inst_net_buy_5d': _safe_float(flow_vals.get('inst_net_buy_5d'), 0.0),
+        'short_interest_ratio': short_interest_ratio,
+        'days_to_earnings': days_to_earnings,
+        'sector_momentum_rank': sector_rank,
+        'relative_strength_vs_kospi': relative_strength,
+        'avg_spread_bps': avg_spread_bps,
+        'turnover_ratio': turnover_ratio * 100.0,
+        '52w_high_proximity': proximity_52w,
+        'market_cap_log': market_cap_log,
+    }
+    return [extras[name] for name in FACTOR_FEATURES + MARKET_FEATURES + SUPPLY_FEATURES]
+
+
+def extract_features(closes, volumes, highs, lows, idx, stock_code: str | None = None, as_of_date: str | None = None):
     """특정 시점(idx)에서 피처 벡터 추출"""
     if idx < 60:  # 최소 60일 필요
         return None
@@ -176,7 +558,7 @@ def extract_features(closes, volumes, highs, lows, idx):
     vol_trend = avg_vol_5 / max(avg_vol_20, 1)
 
     # 일부 피처는 가격으로 정규화
-    return [
+    features = [
         rsi_14,
         rsi_7,
         macd / price * 100,
@@ -198,6 +580,23 @@ def extract_features(closes, volumes, highs, lows, idx):
         atr_pct,
         vol_trend,
     ]
+
+    if stock_code and as_of_date:
+        features.extend(
+            _compute_extra_features(
+                stock_code=stock_code,
+                as_of_date=as_of_date,
+                closes=closes,
+                volumes=volumes,
+                highs=highs,
+                lows=lows,
+                idx=idx,
+            )
+        )
+    else:
+        features.extend([0.0] * (len(FACTOR_FEATURES) + len(MARKET_FEATURES) + len(SUPPLY_FEATURES)))
+
+    return features
 
 
 # ─────────────────────────────────────────────
@@ -248,7 +647,11 @@ def load_training_data(target_days=3, target_return=0.02):
         for i in range(60, len(rows)):
             if i + target_days >= len(closes):
                 break  # 미래 데이터 부족 시 중단 (데이터 누출 방지)
-            features = extract_features(closes, volumes, highs, lows, i)
+            features = extract_features(
+                closes, volumes, highs, lows, i,
+                stock_code=code,
+                as_of_date=rows[i]['date'],
+            )
             if features is None:
                 continue
 
@@ -289,6 +692,105 @@ def _build_model(scale_pos_weight: float = 1.0):
         random_state=42,
         use_label_encoder=False,
     )
+
+
+def _build_lgbm_model(scale_pos_weight: float = 1.0):
+    try:
+        from lightgbm import LGBMClassifier
+    except ImportError:
+        return None
+    return LGBMClassifier(
+        n_estimators=300,
+        num_leaves=31,
+        learning_rate=0.03,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        random_state=42,
+        class_weight={0: 1.0, 1: max(scale_pos_weight, 1.0)},
+        verbose=-1,
+    )
+
+
+def _build_catboost_model(scale_pos_weight: float = 1.0):
+    try:
+        from catboost import CatBoostClassifier
+    except ImportError:
+        return None
+    return CatBoostClassifier(
+        iterations=300,
+        depth=6,
+        learning_rate=0.03,
+        loss_function='Logloss',
+        eval_metric='AUC',
+        random_seed=42,
+        verbose=False,
+        class_weights=[1.0, max(scale_pos_weight, 1.0)],
+    )
+
+
+def _fit_model(model, X_train, y_train, X_valid=None, y_valid=None):
+    if model is None:
+        return None
+    model_name = model.__class__.__name__.lower()
+    if 'catboost' in model_name:
+        if X_valid is not None and y_valid is not None and len(X_valid) > 0:
+            model.fit(X_train, y_train, eval_set=(X_valid, y_valid), verbose=False)
+        else:
+            model.fit(X_train, y_train, verbose=False)
+        return model
+    if 'lgbm' in model_name:
+        if X_valid is not None and y_valid is not None and len(X_valid) > 0:
+            model.fit(X_train, y_train, eval_set=[(X_valid, y_valid)])
+        else:
+            model.fit(X_train, y_train)
+        return model
+    if X_valid is not None and y_valid is not None and len(X_valid) > 0:
+        model.fit(X_train, y_train, eval_set=[(X_valid, y_valid)], verbose=False)
+    else:
+        model.fit(X_train, y_train, verbose=False)
+    return model
+
+
+def _predict_proba(model, X):
+    if model is None:
+        return None
+    return model.predict_proba(X)[:, 1]
+
+
+def _save_meta_model(meta_model, horizon_key: str = '3d') -> None:
+    with open(_horizon_paths(horizon_key)['meta_model'], 'wb') as fp:
+        pickle.dump(meta_model, fp)
+
+
+def _load_meta_model(horizon_key: str = '3d'):
+    meta_path = _horizon_paths(horizon_key)['meta_model']
+    if not meta_path.exists():
+        return None
+    try:
+        with open(meta_path, 'rb') as fp:
+            return pickle.load(fp)
+    except Exception:
+        return None
+
+
+def _available_base_model_names() -> list[str]:
+    names = ['xgb']
+    if _build_lgbm_model() is not None:
+        names.append('lgbm')
+    if _build_catboost_model() is not None:
+        names.append('catboost')
+    return names
+
+
+def _build_base_models(scale_pos_weight: float = 1.0) -> dict:
+    models = {'xgb': _build_model(scale_pos_weight=scale_pos_weight)}
+    lgbm = _build_lgbm_model(scale_pos_weight=scale_pos_weight)
+    cat = _build_catboost_model(scale_pos_weight=scale_pos_weight)
+    if lgbm is not None:
+        models['lgbm'] = lgbm
+    if cat is not None:
+        models['catboost'] = cat
+    return models
 
 
 def walk_forward_validate(X: np.ndarray, y: np.ndarray, n_splits: int = 5) -> dict:
@@ -399,91 +901,181 @@ def compute_shap_values(model, X_sample: np.ndarray) -> dict:
     return {name: round(val, 6) for name, val in ranking}
 
 
-def train_model():
-    """XGBoost 모델 학습 (Walk-forward + SHAP + AUC 포함)."""
-    try:
-        from xgboost import XGBClassifier
-    except ImportError:
-        print('xgboost 미설치. pip install xgboost')
-        return
-
+def train_model(horizon_key: str = '3d'):
+    """앙상블 스태킹 학습. LightGBM/CatBoost 없으면 XGBoost 폴백."""
+    from sklearn.linear_model import LogisticRegression
     from sklearn.metrics import (
         classification_report, accuracy_score,
         roc_auc_score, average_precision_score,
     )
+    from sklearn.model_selection import TimeSeriesSplit
 
-    X, y = load_training_data(target_days=3, target_return=0.02)
+    cfg = HORIZON_CONFIGS[horizon_key]
+    paths = _horizon_paths(horizon_key)
+    X, y = load_training_data(target_days=cfg['target_days'], target_return=cfg['target_return'])
     if X is None or len(X) < 100:
         print('데이터 부족 (최소 100개 필요)')
         return
 
-    # ── Walk-forward 교차검증 ──
     wf = walk_forward_validate(X, y, n_splits=5)
 
-    # ── 최종 모델: 앞 80% 학습 / 뒤 20% OOS 테스트 ──
     split_idx = int(len(X) * 0.8)
     X_train, X_test = X[:split_idx], X[split_idx:]
     y_train, y_test = y[:split_idx], y[split_idx:]
-
-    print(f'\n최종 모델 학습: {len(X_train)}개 / OOS 테스트: {len(X_test)}개')
-
     pos = max(int(y_train.sum()), 1)
     neg = max(len(y_train) - pos, 1)
-    model = _build_model(scale_pos_weight=neg / pos)
-    model.fit(X_train, y_train, eval_set=[(X_test, y_test)], verbose=False)
+    scale_pos_weight = neg / pos
 
-    y_pred = model.predict(X_test)
-    y_prob = model.predict_proba(X_test)[:, 1]
+    base_model_names = _available_base_model_names()
+    use_ensemble = len(base_model_names) >= 2
+    print(f'\n기본 모델: {", ".join(base_model_names)}')
+    print(f'최종 모델 학습: {len(X_train)}개 / OOS 테스트: {len(X_test)}개')
+
+    final_models = {}
+    ensemble_prob = None
+    meta_model = None
+    training_mode = 'xgb_only'
+    base_auc = {}
+
+    if use_ensemble:
+        tscv = TimeSeriesSplit(n_splits=5)
+        oof_preds = {name: np.full(len(X_train), np.nan, dtype=float) for name in base_model_names}
+
+        for fold, (tr_idx, val_idx) in enumerate(tscv.split(X_train), 1):
+            X_tr, X_val = X_train[tr_idx], X_train[val_idx]
+            y_tr, y_val = y_train[tr_idx], y_train[val_idx]
+            if len(np.unique(y_val)) < 2:
+                continue
+            fold_models = _build_base_models(scale_pos_weight=scale_pos_weight)
+            print(f'  stacking fold {fold}: train={len(X_tr)} test={len(X_val)}')
+            for name, model in fold_models.items():
+                try:
+                    _fit_model(model, X_tr, y_tr, X_val, y_val)
+                    oof_preds[name][val_idx] = _predict_proba(model, X_val)
+                except Exception as e:
+                    print(f'    {name} 학습 실패: {e}')
+
+        valid_cols = [name for name in base_model_names if not np.isnan(oof_preds[name]).all()]
+        valid_mask = np.ones(len(X_train), dtype=bool)
+        for name in valid_cols:
+            valid_mask &= ~np.isnan(oof_preds[name])
+
+        if len(valid_cols) >= 2 and valid_mask.sum() >= 50:
+            meta_X = np.column_stack([oof_preds[name][valid_mask] for name in valid_cols])
+            meta_y = y_train[valid_mask]
+            meta_model = LogisticRegression(C=1.0, max_iter=1000, random_state=42)
+            meta_model.fit(meta_X, meta_y)
+
+            for name, model in _build_base_models(scale_pos_weight=scale_pos_weight).items():
+                try:
+                    _fit_model(model, X_train, y_train, X_test, y_test)
+                    final_models[name] = model
+                    probs = _predict_proba(model, X_test)
+                    if probs is not None and len(np.unique(y_test)) > 1:
+                        base_auc[name] = round(float(roc_auc_score(y_test, probs)), 4)
+                except Exception as e:
+                    print(f'최종 {name} 학습 실패: {e}')
+
+            test_cols = [name for name in valid_cols if name in final_models]
+            if len(test_cols) >= 2:
+                meta_test_X = np.column_stack([_predict_proba(final_models[name], X_test) for name in test_cols])
+                ensemble_prob = meta_model.predict_proba(meta_test_X)[:, 1]
+                training_mode = 'stacking'
+
+        if ensemble_prob is None:
+            print('앙상블 스태킹 실패 → XGBoost 단독으로 폴백')
+
+    if ensemble_prob is None:
+        model = _build_model(scale_pos_weight=scale_pos_weight)
+        _fit_model(model, X_train, y_train, X_test, y_test)
+        final_models = {'xgb': model}
+        ensemble_prob = _predict_proba(model, X_test)
+
+    primary_model = final_models['xgb']
+    y_pred = (ensemble_prob >= 0.65).astype(int)
 
     print('\n=== OOS 모델 성과 ===')
     print(f'  정확도:     {accuracy_score(y_test, y_pred) * 100:.1f}%')
+    auc = 0.0
+    ap = 0.0
     if len(np.unique(y_test)) > 1:
-        print(f'  AUC-ROC:    {roc_auc_score(y_test, y_prob):.3f}')
-        print(f'  AP (PR):    {average_precision_score(y_test, y_prob):.3f}')
+        auc = float(roc_auc_score(y_test, ensemble_prob))
+        ap = float(average_precision_score(y_test, ensemble_prob))
+        print(f'  AUC-ROC:    {auc:.3f}')
+        print(f'  AP (PR):    {ap:.3f}')
     print(classification_report(y_test, y_pred, target_names=['관망', '매수']))
 
-    # ── XGBoost 피처 중요도 ──
     importances = sorted(
-        zip(FEATURE_NAMES, model.feature_importances_),
+        zip(FEATURE_NAMES, primary_model.feature_importances_),
         key=lambda x: x[1], reverse=True,
     )
     print('\n=== XGBoost 피처 중요도 TOP 10 ===')
     for name, imp in importances[:10]:
         print(f'  {name}: {imp:.4f}')
 
-    # ── SHAP 분석 ──
-    shap_ranking = compute_shap_values(model, X_test)
+    shap_ranking = compute_shap_values(primary_model, X_test)
 
-    # ── 확률 임계값별 승률 ──
     thresholds = [0.5, 0.6, 0.65, 0.7, 0.8]
     print('\n=== 확률 임계값별 Precision ===')
     for thresh in thresholds:
-        mask = y_prob >= thresh
+        mask = ensemble_prob >= thresh
         if mask.sum() == 0:
             continue
         prec = y_test[mask].sum() / mask.sum() * 100
         print(f'  ≥{thresh:.2f}: {int(mask.sum())}건 → Precision {prec:.1f}%')
 
-    # ── 모델 메타데이터와 함께 저장 ──
+    primary_model.save_model(str(paths['xgb']))
+    os.chmod(paths['xgb'], 0o644)
+
+    if 'lgbm' in final_models:
+        final_models['lgbm'].booster_.save_model(str(paths['lgbm']))
+    elif paths['lgbm'].exists():
+        paths['lgbm'].unlink()
+
+    if 'catboost' in final_models:
+        final_models['catboost'].save_model(str(paths['catboost']))
+    elif paths['catboost'].exists():
+        paths['catboost'].unlink()
+
+    if meta_model is not None and training_mode == 'stacking':
+        _save_meta_model(meta_model, horizon_key=horizon_key)
+    elif paths['meta_model'].exists():
+        paths['meta_model'].unlink()
+
     meta = {
-        'walk_forward': wf,
-        'shap_ranking': list(shap_ranking.items())[:10] if shap_ranking else [],
-        'trained_at': str(Path(__file__).stat().st_mtime),
+        'mode': training_mode,
+        'horizon': horizon_key,
+        'target_days': cfg['target_days'],
+        'target_return': cfg['target_return'],
+        'base_models': sorted(final_models.keys()),
+        'feature_names': FEATURE_NAMES,
+        'thresholds': {'buy': 0.65, 'high_confidence': 0.78},
+        'trained_at': _utc_now_iso(),
         'n_samples': len(X),
+        'train_samples': len(X_train),
+        'test_samples': len(X_test),
+        'walk_forward': wf,
+        'auc': round(float(auc), 4),
+        'average_precision': round(float(ap), 4),
+        'base_auc': base_auc,
         'feature_importance': [(n, round(float(v), 6)) for n, v in importances],
+        'shap_ranking': list(shap_ranking.items())[:10] if shap_ranking else [],
     }
-    META_PATH = MODEL_PATH.with_suffix('.meta.json')
-    META_PATH.write_text(json.dumps(meta, ensure_ascii=False, indent=2))
+    paths['meta_json'].write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding='utf-8')
 
-    model.save_model(str(MODEL_PATH))  # XGBoost 네이티브 저장 (pickle 불사용)
-    os.chmod(MODEL_PATH, 0o644)
-    print(f'\n모델 저장: {MODEL_PATH}')
-    print(f'메타 저장: {META_PATH}')
+    print(f'\n모델 저장: {paths["xgb"]}')
+    if 'lgbm' in final_models:
+        print(f'LightGBM 저장: {paths["lgbm"]}')
+    if 'catboost' in final_models:
+        print(f'CatBoost 저장: {paths["catboost"]}')
+    if meta_model is not None and training_mode == 'stacking':
+        print(f'메타모델 저장: {paths["meta_model"]}')
+    print(f'메타 저장: {paths["meta_json"]}')
 
-    return model
+    return primary_model
 
 
-def retrain_from_live_trades(min_samples: int = 30) -> bool:
+def retrain_from_live_trades(min_samples: int = 30, horizon_key: str = '3d') -> bool:
     """
     실제 매매 결과(trade_executions)로 모델 재학습 (온라인 학습).
 
@@ -522,7 +1114,7 @@ def retrain_from_live_trades(min_samples: int = 30) -> bool:
     live_X, live_y = [], []
     for r in rows:
         code = r.get('stock_code', '')
-        pred = predict_stock(code)
+        pred = predict_stock(code, horizon_key=horizon_key)
         if 'error' in pred:
             continue
         features = list(pred['features'].values())
@@ -536,7 +1128,9 @@ def retrain_from_live_trades(min_samples: int = 30) -> bool:
         return False
 
     # 히스토리컬 데이터와 병합
-    X_hist, y_hist = load_training_data()
+    cfg = HORIZON_CONFIGS[horizon_key]
+    paths = _horizon_paths(horizon_key)
+    X_hist, y_hist = load_training_data(target_days=cfg['target_days'], target_return=cfg['target_return'])
     if X_hist is not None and len(X_hist) > 0:
         X_all = np.vstack([X_hist, np.array(live_X, dtype=float)])
         y_all = np.concatenate([y_hist, np.array(live_y, dtype=int)])
@@ -559,25 +1153,37 @@ def retrain_from_live_trades(min_samples: int = 30) -> bool:
         verbose=False,
     )
 
-    model.save_model(str(MODEL_PATH))  # XGBoost 네이티브 저장 (pickle 불사용)
-    os.chmod(MODEL_PATH, 0o644)
-    print(f'실매매 반영 모델 저장: {MODEL_PATH}')
+    model.save_model(str(paths['xgb']))  # XGBoost 네이티브 저장 (pickle 불사용)
+    os.chmod(paths['xgb'], 0o644)
+    paths['meta_json'].write_text(json.dumps({
+        'mode': 'xgb_only',
+        'horizon': horizon_key,
+        'target_days': cfg['target_days'],
+        'target_return': cfg['target_return'],
+        'base_models': ['xgb'],
+        'feature_names': FEATURE_NAMES,
+        'trained_at': _utc_now_iso(),
+        'n_samples': len(X_all),
+        'source': 'live_retrain',
+    }, ensure_ascii=False, indent=2), encoding='utf-8')
+    print(f'실매매 반영 모델 저장: {paths["xgb"]}')
     return True
 
 
 # ─────────────────────────────────────────────
 # 예측
 # ─────────────────────────────────────────────
-def _load_model():
-    if not MODEL_PATH.exists():
+def _load_model(horizon_key: str = '3d'):
+    paths = _horizon_paths(horizon_key)
+    if not paths['xgb'].exists():
         # 구버전 .pkl 파일 하위호환: 존재하면 XGBoost 네이티브 포맷으로 마이그레이션
-        old_path = MODEL_PATH.with_suffix('.pkl')
+        old_path = paths['xgb'].with_suffix('.pkl')
         if old_path.exists():
             try:
                 import joblib
                 model = joblib.load(str(old_path))
-                model.save_model(str(MODEL_PATH))
-                os.chmod(MODEL_PATH, 0o644)
+                model.save_model(str(paths['xgb']))
+                os.chmod(paths['xgb'], 0o644)
                 old_path.unlink()
                 print(f'[ml_model] 구버전 .pkl → .ubj 마이그레이션 완료')
                 return model
@@ -586,16 +1192,78 @@ def _load_model():
         return None
     from xgboost import XGBClassifier
     model = XGBClassifier()
-    model.load_model(str(MODEL_PATH))
+    model.load_model(str(paths['xgb']))
     return model
 
 
-def predict_stock(stock_code: str) -> dict:
+def _load_model_bundle(horizon_key: str = '3d') -> dict:
+    paths = _horizon_paths(horizon_key)
+    bundle = {'xgb': None, 'lgbm': None, 'catboost': None, 'meta': None, 'meta_info': {}}
+    bundle['xgb'] = _load_model(horizon_key=horizon_key)
+
+    if paths['lgbm'].exists():
+        try:
+            import lightgbm as lgb
+            bundle['lgbm'] = lgb.Booster(model_file=str(paths['lgbm']))
+        except Exception:
+            bundle['lgbm'] = None
+
+    if paths['catboost'].exists():
+        try:
+            from catboost import CatBoostClassifier
+            model = CatBoostClassifier()
+            model.load_model(str(paths['catboost']))
+            bundle['catboost'] = model
+        except Exception:
+            bundle['catboost'] = None
+
+    bundle['meta'] = _load_meta_model(horizon_key=horizon_key)
+    if paths['meta_json'].exists():
+        try:
+            bundle['meta_info'] = json.loads(paths['meta_json'].read_text(encoding='utf-8'))
+        except Exception:
+            bundle['meta_info'] = {}
+    return bundle
+
+
+def _bundle_predict_probability(bundle: dict, X: np.ndarray) -> tuple[float, dict]:
+    probs = {}
+    for name in ('xgb', 'lgbm', 'catboost'):
+        model = bundle.get(name)
+        if model is None:
+            continue
+        try:
+            if name == 'lgbm':
+                prob = float(model.predict(X)[0])
+            else:
+                prob = float(_predict_proba(model, X)[0])
+            probs[name] = prob
+        except Exception:
+            continue
+
+    if not probs:
+        return 0.0, {}
+
+    meta = bundle.get('meta')
+    base_order = [name for name in bundle.get('meta_info', {}).get('base_models', []) if name in probs]
+    if meta is not None and len(base_order) >= 2:
+        meta_X = np.array([[probs[name] for name in base_order]], dtype=float)
+        try:
+            ensemble_prob = float(meta.predict_proba(meta_X)[0][1])
+            return ensemble_prob, probs
+        except Exception:
+            pass
+
+    ensemble_prob = float(sum(probs.values()) / len(probs))
+    return ensemble_prob, probs
+
+
+def predict_stock(stock_code: str, horizon_key: str = '3d') -> dict:
     """특정 종목 매수 확률 예측"""
     if not supabase:
         return {'error': 'Supabase 미연결'}
-    model = _load_model()
-    if model is None:
+    bundle = _load_model_bundle(horizon_key=horizon_key)
+    if bundle.get('xgb') is None:
         return {'error': '모델 없음. train 먼저 실행'}
 
     rows = (
@@ -617,30 +1285,37 @@ def predict_stock(stock_code: str) -> dict:
     highs = [float(r.get('high_price', r['close_price'])) for r in rows]
     lows = [float(r.get('low_price', r['close_price'])) for r in rows]
 
-    features = extract_features(closes, volumes, highs, lows, len(rows) - 1)
+    features = extract_features(
+        closes, volumes, highs, lows, len(rows) - 1,
+        stock_code=stock_code,
+        as_of_date=rows[-1]['date'],
+    )
     if features is None:
         return {'error': '피처 추출 실패'}
 
     X = np.array([features], dtype=float)
-    prob = float(model.predict_proba(X)[0][1])
+    prob, base_probs = _bundle_predict_probability(bundle, X)
     action = 'BUY' if prob >= 0.65 else 'HOLD'
 
     return {
         'stock_code': stock_code,
+        'horizon': horizon_key,
         'buy_probability': round(prob * 100, 1),
         'action': action,
+        'model_type': 'ensemble' if len(base_probs) >= 2 else 'xgboost',
+        'base_probabilities': {k: round(v * 100, 2) for k, v in base_probs.items()},
         'features': {
             name: round(val, 4) for name, val in zip(FEATURE_NAMES, features)
         },
     }
 
 
-def predict_all() -> list:
+def predict_all(horizon_key: str = '3d') -> list:
     """전 종목 매수 확률 예측 → 상위 종목 반환"""
     if not supabase:
         print('Supabase 미연결')
         return []
-    model = _load_model()
+    model = _load_model(horizon_key=horizon_key)
     if model is None:
         print('모델 없음')
         return []
@@ -655,7 +1330,7 @@ def predict_all() -> list:
     results = []
 
     for s in stocks:
-        pred = predict_stock(s['stock_code'])
+        pred = predict_stock(s['stock_code'], horizon_key=horizon_key)
         if 'error' in pred:
             continue
         pred['name'] = s.get('stock_name', s['stock_code'])
@@ -675,6 +1350,44 @@ def predict_all() -> list:
 # ─────────────────────────────────────────────
 # trading_agent 연동용 함수
 # ─────────────────────────────────────────────
+def predict_multi_horizon(stock_code: str) -> dict:
+    probs = {}
+    details = {}
+    for hk in ('1d', '3d', '10d'):
+        pred = predict_stock(stock_code, horizon_key=hk)
+        if 'error' in pred:
+            continue
+        probs[hk] = float(pred.get('buy_probability', 0.0))
+        details[hk] = pred
+    if not probs:
+        return {'error': '모델 없음. train 먼저 실행'}
+
+    short_prob = probs.get('1d', 0.0)
+    mid_prob = probs.get('3d', 0.0)
+    swing_prob = probs.get('10d', 0.0)
+
+    if short_prob >= 70 and mid_prob >= 60:
+        action = 'STRONG_BUY'
+        confidence = max(short_prob, mid_prob)
+    elif mid_prob >= 65:
+        action = 'BUY'
+        confidence = mid_prob
+    elif swing_prob >= 70 and mid_prob >= 50:
+        action = 'SWING_BUY'
+        confidence = swing_prob
+    else:
+        action = 'HOLD'
+        confidence = max(probs.values())
+
+    return {
+        'stock_code': stock_code,
+        'action': action,
+        'confidence': round(confidence, 1),
+        'horizon_probabilities': probs,
+        'details': details,
+    }
+
+
 def get_ml_signal(stock_code: str) -> dict:
     """
     trading_agent에서 호출하는 인터페이스
@@ -687,14 +1400,15 @@ def get_ml_signal(stock_code: str) -> dict:
         }
     """
     try:
-        pred = predict_stock(stock_code)
+        pred = predict_multi_horizon(stock_code)
         if 'error' in pred:
             return {'action': 'HOLD', 'confidence': 0, 'source': 'ML_ERROR'}
 
         return {
             'action': pred['action'],
-            'confidence': pred['buy_probability'],
-            'source': 'ML_XGBOOST',
+            'confidence': pred['confidence'],
+            'source': 'ML_MULTI_HORIZON',
+            'horizon_probabilities': pred.get('horizon_probabilities', {}),
         }
     except Exception as e:
         return {'action': 'HOLD', 'confidence': 0, 'source': f'ML_ERROR: {e}'}
@@ -702,40 +1416,47 @@ def get_ml_signal(stock_code: str) -> dict:
 
 if __name__ == '__main__':
     cmd = sys.argv[1] if len(sys.argv) > 1 else 'train'
+    horizon_arg = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] in HORIZON_CONFIGS else '3d'
 
     if cmd == 'train':
-        train_model()
+        train_model(horizon_key=horizon_arg)
+    elif cmd == 'train_all':
+        for hk in ('1d', '3d', '10d'):
+            print(f'\n===== horizon {hk} 학습 시작 =====')
+            train_model(horizon_key=hk)
     elif cmd == 'predict' and len(sys.argv) > 2:
-        result = predict_stock(sys.argv[2])
+        result = predict_multi_horizon(sys.argv[2])
         print(json.dumps(result, indent=2, ensure_ascii=False))
     elif cmd == 'predict_all':
-        predict_all()
+        predict_all(horizon_key=horizon_arg)
     elif cmd == 'evaluate':
-        train_model()
+        train_model(horizon_key=horizon_arg)
     elif cmd == 'retrain':
         # 실매매 결과로 재학습
-        min_s = int(sys.argv[2]) if len(sys.argv) > 2 else 30
-        ok = retrain_from_live_trades(min_samples=min_s)
+        min_idx = 3 if horizon_arg in HORIZON_CONFIGS else 2
+        min_s = int(sys.argv[min_idx]) if len(sys.argv) > min_idx else 30
+        ok = retrain_from_live_trades(min_samples=min_s, horizon_key=horizon_arg)
         print('재학습 성공' if ok else '재학습 실패')
     elif cmd == 'validate':
         # Walk-forward 검증만 실행
-        X, y = load_training_data()
+        cfg = HORIZON_CONFIGS[horizon_arg]
+        X, y = load_training_data(target_days=cfg['target_days'], target_return=cfg['target_return'])
         if X is not None:
             walk_forward_validate(X, y)
     elif cmd == 'shap' and len(sys.argv) > 2:
         # 특정 종목 SHAP 분석
-        res = predict_stock(sys.argv[2])
+        res = predict_stock(sys.argv[2], horizon_key=horizon_arg)
         if 'error' not in res:
-            model = _load_model()
+            model = _load_model(horizon_key=horizon_arg)
             if model:
                 feats = np.array([list(res['features'].values())], dtype=float)
                 compute_shap_values(model, feats)
     else:
         print('사용법:')
-        print('  python3 ml_model.py train              # 전체 학습 + Walk-forward + SHAP')
-        print('  python3 ml_model.py validate           # Walk-forward 검증만')
-        print('  python3 ml_model.py retrain [n]        # 실매매 결과 반영 재학습')
-        print('  python3 ml_model.py predict 005930     # 특정 종목 예측')
-        print('  python3 ml_model.py shap 005930        # 특정 종목 SHAP 분석')
-        print('  python3 ml_model.py predict_all        # 전체 종목 예측')
-
+        print('  python3 ml_model.py train [1d|3d|10d]      # 단일 호라이즌 학습')
+        print('  python3 ml_model.py train_all              # 1d/3d/10d 전체 학습')
+        print('  python3 ml_model.py validate [1d|3d|10d]   # Walk-forward 검증')
+        print('  python3 ml_model.py retrain [1d|3d|10d] [n]# 실매매 결과 반영 재학습')
+        print('  python3 ml_model.py predict 005930         # 멀티 호라이즌 예측')
+        print('  python3 ml_model.py shap 005930 [1d|3d|10d]# 특정 호라이즌 SHAP')
+        print('  python3 ml_model.py predict_all [1d|3d|10d]# 단일 호라이즌 전체 예측')

@@ -196,7 +196,7 @@ def _fetch_close(
             return []
         return [float(v) for v in list(hist["Close"]) if _safe_float(v, 0.0) > 0]
     except Exception as exc:
-        log.warning("fetch close failed", symbol=symbol, error=exc)
+        log.warning("fetch close failed", symbol=symbol, error=str(exc))
         return []
 
 
@@ -330,7 +330,7 @@ class RegimeClassifier:
             self._model = model
             return model
         except Exception as exc:
-            log.warning("regime model load failed", path=str(self.model_path), error=exc)
+            log.warning("regime model load failed", path=str(self.model_path), error=str(exc))
             return None
 
     def classify(self, as_of: str | date | datetime | None = None, use_model: bool = True) -> dict:
@@ -359,7 +359,7 @@ class RegimeClassifier:
                         preset=REGIME_PRESETS.get(regime, {}),
                     ).to_dict()
                 except Exception as exc:
-                    log.warning("regime model predict failed; fallback rule", error=exc)
+                    log.warning("regime model predict failed; fallback rule", error=str(exc))
 
         return self.classify_rule(features).to_dict()
 

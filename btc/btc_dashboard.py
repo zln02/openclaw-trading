@@ -85,16 +85,24 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_CORS_ORIGINS,
     allow_methods=["GET", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "Accept"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "X-API-Key"],
 )
 
 from btc.routes.btc_api import router as btc_router
 from btc.routes.stock_api import router as stock_router
 from btc.routes.us_api import router as us_router
+from api.signal_api import router as public_signal_router
+from api.ws_stream import router as public_ws_router
+from api.webhook_manager import router as public_webhook_router
+from api.push_notifier import router as public_push_router
 
 app.include_router(btc_router,   dependencies=[Depends(_require_auth)])
 app.include_router(stock_router, dependencies=[Depends(_require_auth)])
 app.include_router(us_router,    dependencies=[Depends(_require_auth)])
+app.include_router(public_signal_router)
+app.include_router(public_ws_router)
+app.include_router(public_webhook_router)
+app.include_router(public_push_router)
 
 
 @app.get("/favicon.ico")

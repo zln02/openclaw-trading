@@ -120,6 +120,10 @@ US_RISK_DEFAULTS: dict = {
 # 신호 IC 최소 임계값 (이 이하면 신호 비활성 권고)
 SIGNAL_IC_MIN: float = 0.02
 SIGNAL_IC_IR_MIN: float = 0.3
+MAX_PORTFOLIO_VAR: float = 0.05
+MIN_ARB_PROFIT_USD: float = 50.0
+MAX_GAS_GWEI: float = 30.0
+MAX_ARB_SLIPPAGE_BPS: float = 30.0
 
 # ── Alpha Researcher 파라미터 공간 (None이면 alpha_researcher.py 내 기본값 사용) ──
 ALPHA_PARAM_SPACE: dict | None = {

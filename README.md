@@ -114,6 +114,19 @@ Operational conventions currently used in the repository:
 </details>
 
 <details>
+<summary><strong>Recent Platform Extensions</strong></summary>
+
+Recent additions in this repository include:
+
+- Cross-market allocation and rebalance automation for BTC, KR, US, and cash budgets.
+- KR long-short planning and neutrality monitoring for market-neutral dry-run workflows.
+- DEX/CEX arbitrage monitoring and dry-run execution scaffolding.
+- Public Signal API, WebSocket stream, webhook delivery, and Expo push notification registration.
+- Expo Router based mobile dashboard skeleton backed by the public API layer.
+
+</details>
+
+<details>
 <summary><strong>Strategy Layer</strong></summary>
 
 The system combines multiple signal families rather than a single indicator:
@@ -310,15 +323,18 @@ ORC --> BTC
 ```text
 .
 ├── agents/              # AI agent team, alerts, daily reports, weekly reviews
+├── api/                 # Public signal API, websocket stream, webhooks, push notifier
 ├── btc/                 # BTC live trading logic, dashboard entrypoints, BTC APIs
 ├── common/              # Shared config, env loading, logging, retry, Telegram, Supabase
 ├── dashboard/           # Frontend assets for dashboard/web UI
 ├── docs/                # Documentation, deployment notes, screenshot guide, audit docs
 ├── execution/           # Execution quality, router, TWAP/VWAP, slippage tracking
+├── mobile/              # Expo Router mobile dashboard client
 ├── quant/               # Research loop, factor analysis, risk, portfolio, backtesting
 ├── schema/              # SQL schema definitions
 ├── scripts/             # Cron wrappers, health checks, dashboard runners, packaging helpers
 ├── secretary/           # Autonomous helper utilities and local memory tooling
+├── skills/              # OpenClaw skills for portfolio, risk, signal, and backtest tasks
 ├── stocks/              # KR/US trading agents, ML models, broker integration, collectors
 ├── supabase/            # Supabase-related schema files
 ├── test/                # TypeScript-side tests
@@ -335,10 +351,10 @@ ORC --> BTC
 - [x] Level 3: Adaptive Composite Signals
 - [x] Level 4: Factor Model Operations (IC/IR → Weights)
 - [x] Level 5: Research-to-Production Loop
-- [ ] Level 6: Multi-Strategy Portfolio (Long-Short + Market Neutral)
-- [ ] Level 7: On-chain DEX Arbitrage
-- [ ] Public API for external trader integration
-- [ ] Mobile Dashboard (React Native)
+- [x] Level 6: Multi-Strategy Portfolio (Long-Short + Market Neutral scaffolding)
+- [x] Level 7: On-chain DEX Arbitrage dry-run scaffolding
+- [x] Public API for external trader integration
+- [x] Mobile Dashboard (React Native skeleton)
 
 ## Contributing
 

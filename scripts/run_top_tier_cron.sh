@@ -59,7 +59,9 @@ run_phase16() {
 }
 
 run_phase18_alert() {
+  run_py common/risk_snapshot.py
   run_py agents/alert_manager.py \
+    --snapshot-file "$WORKSPACE/brain/risk/latest_snapshot.json" \
     --drawdown "${ALERT_DRAWDOWN:-0}" \
     --var95 "${ALERT_VAR95:-0}" \
     --corr-shift "${ALERT_CORR_SHIFT:-0}" \

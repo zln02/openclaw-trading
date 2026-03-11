@@ -26,6 +26,17 @@ from common.supabase_client import get_supabase
 from common.logger import get_logger
 from common.retry import retry, retry_call
 from common.config import STOCK_TRADING_LOG
+from common.equity_loader import (
+    append_equity_snapshot,
+    get_effective_market_weight,
+    load_drawdown_state,
+    load_equity_curve,
+    load_recent_trades,
+    save_drawdown_state,
+)
+from execution.smart_router import SmartRouter
+from quant.risk.drawdown_guard import DrawdownGuard, DrawdownGuardState
+from quant.risk.position_sizer import KellyPositionSizer
 
 try:
     from common.sheets_logger import append_trade as _sheets_append
@@ -45,6 +56,7 @@ OPENAI_KEY = os.environ.get('OPENAI_API_KEY', '')
 
 supabase = get_supabase()
 kiwoom = KiwoomClient()
+_kr_drift_cache: dict = {}
 
 RISK = {
     "invest_ratio": 0.25,
@@ -102,6 +114,59 @@ def send_telegram(msg: str):
     _tg_send(msg)
 
 
+def _load_kr_ml_drift_report(force: bool = False) -> dict:
+    global _kr_drift_cache
+    if _kr_drift_cache and not force:
+        return _kr_drift_cache
+    path = Path(__file__).resolve().parents[1] / 'brain' / 'ml' / 'drift_report.json'
+    if not path.exists():
+        _kr_drift_cache = {}
+        return _kr_drift_cache
+    try:
+        _kr_drift_cache = json.loads(path.read_text(encoding='utf-8'))
+    except Exception:
+        _kr_drift_cache = {}
+    return _kr_drift_cache
+
+
+def _apply_kr_drift_gate(signal: dict) -> dict:
+    report = _load_kr_ml_drift_report()
+    if not report:
+        return signal
+
+    status = str(report.get('status', 'UNKNOWN')).upper()
+    max_psi = float(report.get('max_psi', 0.0) or 0.0)
+    high_psi_count = int(report.get('high_psi_count', 0) or 0)
+    adjusted = dict(signal)
+    base_conf = float(adjusted.get('confidence', 0.0) or 0.0)
+    reason = str(adjusted.get('reason', ''))
+
+    if status == 'WARNING':
+        adjusted['confidence'] = max(0.0, round(base_conf - 8.0, 1))
+        adjusted['reason'] = (reason + f' [KR_ML_DRIFT:WARNING psi={max_psi:.2f}]').strip()
+        adjusted['drift_status'] = status
+        adjusted['drift_penalty'] = 8.0
+        return adjusted
+
+    if status == 'DANGER':
+        if max_psi >= 1.0 or high_psi_count >= 12:
+            adjusted['action'] = 'HOLD'
+            adjusted['confidence'] = 0.0
+            adjusted['reason'] = (reason + f' [KR_ML_DRIFT_BLOCK psi={max_psi:.2f}]').strip()
+            adjusted['drift_status'] = status
+            adjusted['drift_penalty'] = 100.0
+            return adjusted
+        adjusted['confidence'] = max(0.0, round(base_conf - 15.0, 1))
+        adjusted['reason'] = (reason + f' [KR_ML_DRIFT:DANGER psi={max_psi:.2f}]').strip()
+        adjusted['drift_status'] = status
+        adjusted['drift_penalty'] = 15.0
+        return adjusted
+
+    adjusted['drift_status'] = status
+    adjusted['drift_penalty'] = 0.0
+    return adjusted
+
+
 def is_market_open() -> bool:
     now = datetime.now()
     if now.weekday() >= 5:
@@ -114,6 +179,7 @@ def is_market_open() -> bool:
 # 시장/지표 데이터
 # ─────────────────────────────────────────────
 _cache = {}  # 간단한 메모리 캐시 (사이클 단위 리셋)
+_kr_buy_blocked = False
 
 
 def _calc_rsi(closes: list, period: int = 14) -> float:
@@ -509,6 +575,92 @@ def get_open_positions() -> list:
         return []
 
 
+def _get_kr_market_weight(account_equity: float) -> float:
+    if account_equity <= 0:
+        return 0.0
+    total_value = 0.0
+    for pos in get_open_positions():
+        total_value += float(pos.get('quantity', 0) or 0) * float(pos.get('price', 0) or 0)
+    return total_value / account_equity if account_equity > 0 else 0.0
+
+
+def _estimate_atr_pct_kr(code: str, price: float) -> float:
+    try:
+        data = _fetch_live_candles(code, period='1mo', interval='1d') or _fetch_daily_from_db(code)
+        closes = data.get('closes', []) if data else []
+        if len(closes) < 14 or price <= 0:
+            return 0.0
+        diffs = [abs(float(closes[i] - closes[i - 1])) for i in range(1, len(closes))]
+        atr = sum(diffs[-14:]) / min(len(diffs), 14) if diffs else 0.0
+        return atr / price if price > 0 else 0.0
+    except Exception:
+        return 0.0
+
+
+def _apply_drawdown_guard_kr() -> bool:
+    global _kr_buy_blocked
+    equity_curve = load_equity_curve('kr')
+    if not equity_curve:
+        _kr_buy_blocked = False
+        return False
+
+    guard = DrawdownGuard()
+    returns = guard.returns_from_equity_curve(equity_curve)
+    prev_state = DrawdownGuardState(**load_drawdown_state('kr'))
+    decision = guard.evaluate(
+        daily_return=returns.get('daily_return', 0.0),
+        weekly_return=returns.get('weekly_return', 0.0),
+        monthly_return=returns.get('monthly_return', 0.0),
+        state=prev_state,
+    )
+    save_drawdown_state('kr', decision['state'].__dict__)
+    _kr_buy_blocked = not decision.get('allow_new_buys', True)
+
+    triggers = set(decision.get('triggered_rules') or [])
+    if 'MONTHLY_STOP' in triggers:
+        log('DrawdownGuard: 월간 손실 한도 초과 — 전량 청산 + 쿨다운', 'WARN')
+        positions = get_open_positions()
+        seen_codes = []
+        for pos in positions:
+            code = pos.get('stock_code')
+            if code and code not in seen_codes:
+                seen_codes.append(code)
+                execute_sell({'code': code, 'name': pos.get('stock_name', code)}, {'reason': 'DrawdownGuard FULL_STOP'}, {'price': get_current_price(code)}, reason_prefix='DrawdownGuard FULL_STOP ')
+        return True
+
+    if 'WEEKLY_DELEVERAGE' in triggers:
+        log('DrawdownGuard: 주간 손실 한도 초과 — 신규 매수 차단 + 디레버리징', 'WARN')
+        positions = get_open_positions()
+        ranked = sorted(
+            positions,
+            key=lambda p: float(p.get('quantity', 0) or 0) * float(p.get('price', 0) or 0),
+            reverse=True,
+        )
+        total_value = sum(float(p.get('quantity', 0) or 0) * float(p.get('price', 0) or 0) for p in ranked)
+        reduced = 0.0
+        seen_codes = set()
+        for pos in ranked:
+            code = pos.get('stock_code')
+            if not code or code in seen_codes:
+                continue
+            seen_codes.add(code)
+            position_value = float(pos.get('quantity', 0) or 0) * float(pos.get('price', 0) or 0)
+            execute_sell(
+                {'code': code, 'name': pos.get('stock_name', code)},
+                {'reason': 'DrawdownGuard DELEVERAGE'},
+                {'price': get_current_price(code)},
+                reason_prefix='DrawdownGuard DELEVERAGE ',
+            )
+            reduced += position_value
+            if total_value > 0 and reduced / total_value >= 0.5:
+                break
+
+    if 'DAILY_BUY_BLOCK' in triggers or 'COOLDOWN_ACTIVE' in triggers:
+        log('DrawdownGuard: 신규 매수 차단', 'WARN')
+
+    return False
+
+
 def get_position_for_stock(code: str) -> list:
     """특정 종목의 열린 포지션"""
     try:
@@ -882,7 +1034,7 @@ def get_trading_signal(
     """
     매매 신호 결정 (우선순위):
     1. ML 모델 (XGBoost) — 고확률 직접 BUY
-    2. AI (GPT) or 룰 기반 → ML 블렌딩 (0.6/0.4)
+    2. AI (GPT) or 룰 기반 → ML 블렌딩 (0.5/0.5)
     3. 룰 기반 — AI도 실패 시
     반환 dict에 'ml_score', 'ml_confidence' 항상 포함
     """
@@ -897,19 +1049,20 @@ def get_trading_signal(
             ml_confidence = float(ml.get('confidence', 0))
             ml_source = ml.get('source', 'ML_XGBOOST')
             # 고확률 ML → 즉시 BUY
-            if ml.get('action') == 'BUY' and ml_confidence >= 78:
+            ml_action = ml.get('action')
+            if ml_action in ('BUY', 'STRONG_BUY', 'SWING_BUY') and ml_confidence >= 78:
                 log(
-                    f"  ML 고확률 BUY: {ml_confidence:.1f}% [{ml_source}]",
+                    f"  ML 고확률 {ml_action}: {ml_confidence:.1f}% [{ml_source}]",
                     'INFO',
                 )
-                return {
+                return _apply_kr_drift_gate({
                     'action': 'BUY',
                     'confidence': ml_confidence,
-                    'reason': f"ML 모델 매수확률 {ml_confidence:.1f}%",
-                    'source': 'ML_XGBOOST',
+                    'reason': f"ML 모델 {ml_action} 확률 {ml_confidence:.1f}%",
+                    'source': 'ML_MULTI_HORIZON',
                     'ml_score': ml_confidence,
                     'ml_confidence': ml_confidence,
-                }
+                })
             if ml_confidence >= 65:
                 log(f"  ML 보조신호: {ml_confidence:.1f}% → 룰/AI 블렌딩", 'INFO')
     except Exception as e:
@@ -932,10 +1085,10 @@ def get_trading_signal(
         dart = _get_dart_score(stock['code'])
         base_signal = rule_based_signal(indicators, kospi, weekly, has_position, supply, momentum, dart)
 
-    # ML 블렌딩: BUY 신호일 때만 confidence 조정 (momentum 0.6 / ml 0.4)
+    # ML 블렌딩: BUY 신호일 때만 confidence 조정 (rule 0.5 / ml 0.5)
     if base_signal.get('action') == 'BUY' and ml_confidence > 0:
         base_conf = float(base_signal.get('confidence', 0))
-        blended = round(base_conf * 0.6 + ml_confidence * 0.4, 1)
+        blended = round(base_conf * 0.5 + ml_confidence * 0.5, 1)
         base_signal['confidence'] = blended
         base_signal['reason'] = (
             base_signal.get('reason', '') + f" [ML블렌딩:{ml_confidence:.0f}%→{blended:.0f}%]"
@@ -943,7 +1096,7 @@ def get_trading_signal(
 
     base_signal['ml_score'] = round(ml_confidence, 2)
     base_signal['ml_confidence'] = round(ml_confidence, 2)
-    return base_signal
+    return _apply_kr_drift_gate(base_signal)
 
 
 # ─────────────────────────────────────────────
@@ -1026,12 +1179,16 @@ def execute_buy(
     weekly: dict = None,
 ) -> dict:
     """매수 실행 (모든 검증 포함)"""
+    global _kr_buy_blocked
     code = stock['code']
     name = stock['name']
     price = indicators.get('price', 0)
 
     if not price:
         return {'result': 'NO_PRICE'}
+
+    if _kr_buy_blocked:
+        return {'result': 'BLOCKED_DRAWDOWN'}
 
     # 신뢰도 체크
     if signal.get('confidence', 0) < RISK['min_confidence']:
@@ -1115,14 +1272,48 @@ def execute_buy(
             or summary.get('estimated_asset', 0)
             or 0
         )
+        account_equity = float(
+            summary.get('estimated_asset', 0)
+            or summary.get('total_asset', 0)
+            or summary.get('deposit', 0)
+            or krw_balance
+        )
     except Exception as e:
         log(f'잔고 조회 실패: {e}', 'ERROR')
         return {'result': 'BALANCE_ERROR'}
 
-    # invest_ratio로 종목당 총 투자금 계산 → 분할매수 비율 적용
+    target_market_weight = get_effective_market_weight('KR')
+    if target_market_weight is not None:
+        current_market_weight = _get_kr_market_weight(account_equity)
+        if current_market_weight >= target_market_weight + 0.02:
+            log(f'{name}: KR 비중 과대 ({current_market_weight:.1%} >= {target_market_weight:.1%})', 'WARN')
+            return {'result': 'OVERWEIGHT_MARKET'}
+
     total_invest = krw_balance * RISK['invest_ratio']
     stage_ratio = RISK['split_ratios'][split_stage - 1]
     invest_krw = total_invest * stage_ratio
+
+    recent_trades = load_recent_trades('kr', limit=100)
+    if len(recent_trades) >= 50:
+        wins = [t['pnl_pct'] for t in recent_trades if t.get('pnl_pct', 0) > 0]
+        losses = [abs(t['pnl_pct']) for t in recent_trades if t.get('pnl_pct', 0) < 0]
+        win_rate = len(wins) / len(recent_trades) if recent_trades else 0.0
+        avg_win = sum(wins) / len(wins) if wins else 0.02
+        avg_loss = sum(losses) / len(losses) if losses else 0.03
+        atr_pct = _estimate_atr_pct_kr(code, price)
+        current_exposure = _get_kr_market_weight(account_equity)
+        sizing = KellyPositionSizer().size_position(
+            account_equity=account_equity,
+            price=price,
+            win_rate=win_rate,
+            payoff_ratio=avg_win / max(avg_loss, 0.001),
+            current_total_exposure=current_exposure,
+            atr_pct=atr_pct,
+            conviction=max(0.0, min(1.0, signal.get('confidence', 0) / 100.0)),
+        )
+        kelly_invest = account_equity * float(sizing.get('capped_fraction', 0.0)) * stage_ratio
+        if kelly_invest > 0:
+            invest_krw = min(invest_krw, kelly_invest) if split_stage > 1 else kelly_invest
 
     # v3: ATR 기반 변동성 포지션 사이징
     if RISK.get('volatility_sizing'):
@@ -1156,13 +1347,20 @@ def execute_buy(
 
     # ── 실제 주문 ──
     try:
-        order_result = kiwoom.place_order(
-            stock_code=code,
-            order_type='buy',
-            quantity=quantity,
-            price=0,  # 시장가
+        router_result = SmartRouter().route_order(
+            symbol=code,
+            side='buy',
+            total_qty=quantity,
+            market='kr',
+            price_hint=price,
+            kiwoom_client=kiwoom,
+            simulate=False,
         )
+        order_result = router_result.get('execution', {}).get('fills', [{}])[0].get('response', {})
         log(f'{name} 매수 주문 응답: {order_result}', 'TRADE')
+        decision = router_result.get('decision', {})
+        slippage = router_result.get('slippage', {})
+        log(f"{name} SmartRouter: {decision.get('route', 'MARKET')} / 슬리피지 {slippage.get('avg_abs_slippage_bps', 0):.1f}bps")
     except Exception as e:
         log(f'{name} 매수 주문 실패: {e}', 'ERROR')
         send_telegram(f'❌ <b>{name} 매수 주문 실패</b>\n{e}')
@@ -1183,6 +1381,9 @@ def execute_buy(
         'ml_score': signal.get('ml_score', 0.0),
         'ml_confidence': signal.get('ml_confidence', 0.0),
         'composite_score': signal.get('confidence', 0.0),
+        'source': signal.get('source', 'AI'),
+        'drift_status': signal.get('drift_status', ''),
+        'drift_penalty': signal.get('drift_penalty', 0.0),
         'rsi': indicators.get('rsi', 0.0),
     }
 
@@ -1266,17 +1467,45 @@ def execute_sell(stock: dict, signal: dict, indicators: dict, reason_prefix: str
 
     # ── 실제 주문 ──
     try:
-        order_result = kiwoom.place_order(
-            stock_code=code,
-            order_type='sell',
-            quantity=total_qty,
-            price=0,
+        router_result = SmartRouter().route_order(
+            symbol=code,
+            side='sell',
+            total_qty=total_qty,
+            market='kr',
+            price_hint=price,
+            kiwoom_client=kiwoom,
+            simulate=False,
         )
+        order_result = router_result.get('execution', {}).get('fills', [{}])[0].get('response', {})
         log(f'{name} 매도 주문 응답: {order_result}', 'TRADE')
+        decision = router_result.get('decision', {})
+        slippage = router_result.get('slippage', {})
+        log(f"{name} SmartRouter: {decision.get('route', 'MARKET')} / 슬리피지 {slippage.get('avg_abs_slippage_bps', 0):.1f}bps")
     except Exception as e:
         log(f'{name} 매도 주문 실패: {e}', 'ERROR')
+        err_str = str(e)
+        # 800033: 모의투자 매도가능수량 부족 → 키움 계좌와 DB 불일치
+        # 계속 재시도해봐야 의미 없으므로 DB 포지션을 SYNC_ERROR로 닫음
+        if '800033' in err_str:
+            log(f'{name} 키움 계좌에 수량 없음 (800033) → DB 포지션 SYNC_ERROR 처리', 'WARNING')
+            for p in positions:
+                pid = p.get('trade_id')
+                if pid is not None:
+                    try:
+                        supabase.table('trade_executions').update({
+                            'result': 'SYNC_ERROR',
+                            'reason': (p.get('reason') or '') + ' [매도가능수량 없음-자동정리]',
+                        }).eq('trade_id', pid).execute()
+                    except Exception as db_e:
+                        log(f'SYNC_ERROR 업데이트 실패 (trade_id={pid}): {db_e}', 'ERROR')
+            send_telegram(
+                f'⚠️ <b>{name} 매도 불가 (수량 없음)</b>\n'
+                f'키움 모의계좌에 {total_qty}주 없음 → DB 포지션 자동 정리\n'
+                f'종목코드: {code}'
+            )
+            return {'result': 'SYNC_ERROR', 'error': err_str}
         send_telegram(f'❌ <b>{name} 매도 주문 실패</b>\n{e}')
-        return {'result': 'ORDER_FAILED', 'error': str(e)}
+        return {'result': 'ORDER_FAILED', 'error': err_str}
 
     # ── DB 업데이트 (주문 성공 후에만) ──
     for p in positions:
@@ -1286,6 +1515,9 @@ def execute_sell(stock: dict, signal: dict, indicators: dict, reason_prefix: str
                 supabase.table('trade_executions').update({
                     'result': 'CLOSED',
                     'entry_price': avg_entry,  # 평균 진입가 기록
+                    'price': price,
+                    'pnl_pct': pnl_pct,
+                    'reason': f'{reason_prefix}{signal.get("reason", "")}' if isinstance(signal, dict) else reason_prefix,
                 }).eq('trade_id', pid).execute()
             except Exception as e:
                 log(f'DB 업데이트 실패 (trade_id={pid}): {e}', 'ERROR')
@@ -1302,6 +1534,11 @@ def execute_sell(stock: dict, signal: dict, indicators: dict, reason_prefix: str
             'strategy': 'SELL',
             'reason': f'{reason_prefix}{signal.get("reason", "")}' if isinstance(signal, dict) else reason_prefix,
             'result': 'CLOSED',
+            'pnl_pct': pnl_pct,
+            'composite_score': signal.get('confidence', 0.0) if isinstance(signal, dict) else 0.0,
+            'source': signal.get('source', 'SELL') if isinstance(signal, dict) else 'SELL',
+            'drift_status': signal.get('drift_status', '') if isinstance(signal, dict) else '',
+            'drift_penalty': signal.get('drift_penalty', 0.0) if isinstance(signal, dict) else 0.0,
         }).execute()
     except Exception as e:
         log(f'{name} 매도 기록 저장 실패: {e}', 'ERROR')
@@ -1550,9 +1787,11 @@ _regime_adj_cache: dict = {}
 
 
 def run_trading_cycle():
-    global _cache, _dart_cache, _regime_adj_cache
+    global _cache, _dart_cache, _regime_adj_cache, _kr_buy_blocked, _kr_drift_cache
     _cache = {}
     _dart_cache = {}
+    _kr_drift_cache = {}
+    _kr_buy_blocked = False
     _regime_adj_cache = _get_regime_factor_adj()  # 레짐별 팩터 가중치 사이클 초기 로드
 
     # STOP 플래그 체크 (텔레그램 /stop 명령으로 생성)
@@ -1568,6 +1807,33 @@ def run_trading_cycle():
 
     log('=' * 50)
     log('주식 매매 사이클 시작')
+
+    try:
+        account = kiwoom.get_account_evaluation()
+        summary = account.get('summary', {})
+        account_equity = float(
+            summary.get('estimated_asset', 0)
+            or summary.get('total_asset', 0)
+            or summary.get('deposit', 0)
+            or 0
+        )
+        if account_equity > 0:
+            append_equity_snapshot('kr', account_equity, {"source": "kiwoom_summary"})
+            tw = get_effective_market_weight('KR')
+            if tw is not None:
+                log(f'리밸런싱 목표 비중(KR): {tw:.1%}')
+            drift = _load_kr_ml_drift_report(force=True)
+            if drift:
+                log(
+                    f"KR ML Drift: {drift.get('status', 'UNKNOWN')} "
+                    f"(max_psi={float(drift.get('max_psi', 0.0) or 0.0):.3f})"
+                )
+    except Exception as e:
+        log(f'KR 자산 스냅샷 저장 실패: {e}', 'WARN')
+
+    if _apply_drawdown_guard_kr():
+        log('DrawdownGuard FULL_STOP 실행 완료 — 사이클 종료', 'WARN')
+        return
 
     # 일일 손실 한도 체크
     if check_daily_loss():

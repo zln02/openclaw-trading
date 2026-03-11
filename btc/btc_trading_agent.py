@@ -18,6 +18,16 @@ from common.supabase_client import get_supabase
 from common.logger import get_logger
 from common.retry import retry, retry_call
 from common.config import BTC_LOG
+from common.equity_loader import (
+    append_equity_snapshot,
+    get_effective_market_weight,
+    load_drawdown_state,
+    load_equity_curve,
+    load_recent_trades,
+    save_drawdown_state,
+)
+from quant.risk.drawdown_guard import DrawdownGuard, DrawdownGuardState
+from quant.risk.position_sizer import KellyPositionSizer
 
 try:
     from common.sheets_logger import append_trade as _sheets_append
@@ -118,6 +128,7 @@ if not all([UPBIT_ACCESS, UPBIT_SECRET, OPENAI_KEY]):
 upbit   = pyupbit.Upbit(UPBIT_ACCESS, UPBIT_SECRET)
 supabase = get_supabase()
 client  = OpenAI(api_key=OPENAI_KEY)
+_btc_buy_blocked = False
 
 # ── 리스크 설정 (v6 — Top-tier Quant) ─────────────
 RISK = {
@@ -809,9 +820,12 @@ def execute_trade(
     vol_ratio_d=None,
     trend=None,
 ) -> dict:
+    global _btc_buy_blocked
 
     # ── 코드 레벨 안전 필터 (복합 스코어 기반) ──
     if signal["action"] == "BUY":
+        if _btc_buy_blocked:
+            return {"result": "BLOCKED_DRAWDOWN"}
         if fg and fg["value"] > 75:
             log.warning(f"F&G {fg['value']} > 75 (극도 탐욕) — BUY 차단")
             return {"result": "BLOCKED_FG"}
@@ -961,6 +975,35 @@ def execute_trade(
         stage      = get_split_stage(comp_total)
         invest_krw = krw_balance * RISK["split_ratios"][stage - 1]
 
+        target_market_weight = get_effective_market_weight('BTC')
+        if target_market_weight is not None:
+            current_btc_weight = (btc_balance * price) / max((btc_balance * price) + krw_balance, 1)
+            if current_btc_weight >= target_market_weight + 0.02:
+                return {"result": "OVERWEIGHT_MARKET"}
+
+        recent_trades = load_recent_trades('btc', limit=100)
+        if len(recent_trades) >= 50:
+            wins = [t['pnl_pct'] for t in recent_trades if t.get('pnl_pct', 0) > 0]
+            losses = [abs(t['pnl_pct']) for t in recent_trades if t.get('pnl_pct', 0) < 0]
+            win_rate = len(wins) / len(recent_trades) if recent_trades else 0.0
+            avg_win = sum(wins) / len(wins) if wins else 0.02
+            avg_loss = sum(losses) / len(losses) if losses else 0.03
+            account_equity = krw_balance + btc_balance * price
+            current_exposure = (btc_balance * price) / max(account_equity, 1)
+            atr_pct = float(indicators.get("atr", 0) or 0) / price if price > 0 else 0.0
+            sizing = KellyPositionSizer().size_position(
+                account_equity=account_equity,
+                price=price,
+                win_rate=win_rate,
+                payoff_ratio=avg_win / max(avg_loss, 0.001),
+                current_total_exposure=current_exposure,
+                atr_pct=atr_pct,
+                conviction=max(0.0, min(1.0, comp_total / 100.0)),
+            )
+            kelly_invest = account_equity * float(sizing.get("capped_fraction", 0.0)) * RISK["split_ratios"][stage - 1]
+            if kelly_invest > 0:
+                invest_krw = kelly_invest
+
         if invest_krw < 5000:
             return {"result": "INSUFFICIENT_KRW"}
 
@@ -1104,6 +1147,60 @@ def save_log(indicators, signal, result, *, fg=None, volume=None, comp=None, fun
 
 # ── 메인 사이클 ───────────────────────────────────
 def run_trading_cycle():
+    global _btc_buy_blocked
+    _btc_buy_blocked = False
+
+    try:
+        krw_balance = upbit.get_balance("KRW") or 0
+        btc_balance = upbit.get_balance("BTC") or 0
+        spot_price = float(pyupbit.get_current_price("KRW-BTC") or 0)
+        account_equity = float(krw_balance) + float(btc_balance) * spot_price
+        if account_equity > 0:
+            append_equity_snapshot('btc', account_equity, {"source": "upbit_balances", "price": spot_price})
+            tw = get_effective_market_weight('BTC')
+            if tw is not None:
+                log.info(f"리밸런싱 목표 비중(BTC): {tw:.1%}")
+    except Exception as e:
+        log.warning(f"BTC 자산 스냅샷 저장 실패: {e}")
+
+    equity_curve = load_equity_curve('btc')
+    if equity_curve:
+        guard = DrawdownGuard()
+        returns = guard.returns_from_equity_curve(equity_curve)
+        decision = guard.evaluate(
+            daily_return=returns.get("daily_return", 0.0),
+            weekly_return=returns.get("weekly_return", 0.0),
+            monthly_return=returns.get("monthly_return", 0.0),
+            state=DrawdownGuardState(**load_drawdown_state('btc')),
+        )
+        save_drawdown_state('btc', decision['state'].__dict__)
+        _btc_buy_blocked = not decision.get("allow_new_buys", True)
+        triggers = set(decision.get("triggered_rules") or [])
+        if "WEEKLY_DELEVERAGE" in triggers:
+            pos = get_open_position()
+            btc_balance = upbit.get_balance("BTC") or 0
+            price = get_market_data()["close"].iloc[-1]
+            if pos and btc_balance > 0.00001 and not DRY_RUN:
+                sell_qty = btc_balance * 0.5 * 0.9995
+                upbit.sell_market_order("KRW-BTC", sell_qty)
+                try:
+                    remaining_qty = max(float(pos.get("quantity", 0) or 0) - sell_qty, 0.0)
+                    remaining_krw = max(float(pos.get("entry_krw", 0) or 0) * 0.5, 0.0)
+                    supabase.table("btc_position").update({
+                        "quantity": remaining_qty,
+                        "entry_krw": remaining_krw,
+                        "highest_price": price,
+                    }).eq("id", pos["id"]).execute()
+                except Exception:
+                    pass
+        if decision.get("force_liquidate"):
+            pos = get_open_position()
+            btc_balance = upbit.get_balance("BTC") or 0
+            price = get_market_data()["close"].iloc[-1]
+            if pos and btc_balance > 0.00001 and not DRY_RUN:
+                upbit.sell_market_order("KRW-BTC", btc_balance * 0.9995)
+                close_all_positions(price)
+            return {"result": "FULL_STOP"}
 
     # 일일 손실 한도 체크
     if check_daily_loss():

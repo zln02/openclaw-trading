@@ -25,6 +25,8 @@ log = get_logger("daily_report")
 
 _WORKSPACE = Path(__file__).resolve().parents[1]
 _BRAIN_MARKET = _WORKSPACE / "brain" / "market"
+_KR_DRIFT_PATH = _WORKSPACE / "brain" / "ml" / "drift_report.json"
+_US_DRIFT_PATH = _WORKSPACE / "brain" / "ml" / "us" / "drift_report.json"
 
 
 _FG_LABEL_KO = {
@@ -67,6 +69,10 @@ class DailyReportContext:
     us_mode: str = "DRY-RUN"
     us_buys: int = 0
     us_sells: int = 0
+    kr_drift_status: str = "N/A"
+    kr_drift_psi: float = 0.0
+    us_drift_status: str = "N/A"
+    us_drift_psi: float = 0.0
     # Overall
     total_asset: float = 0.0
     total_pnl: float = 0.0
@@ -142,6 +148,15 @@ class DailyReportGenerator:
             return krw + btc * price
         except Exception:
             return 0.0
+
+    def _load_drift_summary(self, path: Path) -> tuple[str, float]:
+        if not path.exists():
+            return "N/A", 0.0
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            return str(payload.get("status", "N/A")).upper(), _safe_float(payload.get("max_psi"), 0.0)
+        except Exception:
+            return "N/A", 0.0
 
     def collect_context(self) -> DailyReportContext:
         today = self._get_today_start()
@@ -219,6 +234,8 @@ class DailyReportGenerator:
         # ── 총자산 (업비트 잔고 + BTC 평가액) ──
         ctx.total_asset = self._get_total_asset_krw()
         ctx.total_pnl = ctx.btc_pnl + ctx.kr_pnl
+        ctx.kr_drift_status, ctx.kr_drift_psi = self._load_drift_summary(_KR_DRIFT_PATH)
+        ctx.us_drift_status, ctx.us_drift_psi = self._load_drift_summary(_US_DRIFT_PATH)
 
         # ── 시장 상태 ─────────────────────────────────
         btc_state = self._load_btc_state()
@@ -265,6 +282,10 @@ class DailyReportGenerator:
         asset_str = f"₩{ctx.total_asset:,.0f}" if ctx.total_asset > 0 else "조회 불가"
         total_pnl_s = _signed(ctx.total_pnl)
         asset_line = f"총자산: {asset_str} ({total_pnl_s}₩{ctx.total_pnl:,.0f})"
+        drift_line = (
+            f"ML Drift: KR {ctx.kr_drift_status} ({ctx.kr_drift_psi:.2f})"
+            f" | US {ctx.us_drift_status} ({ctx.us_drift_psi:.2f})"
+        )
 
         # 오늘 거래
         total_buys = ctx.btc_buys + ctx.kr_buys + ctx.us_buys
@@ -299,6 +320,7 @@ class DailyReportGenerator:
             f"{us_line}\n"
             f"{SEP}\n"
             f"{asset_line}\n"
+            f"{drift_line}\n"
             f"{trade_line}\n"
             f"{comp_line}\n"
             f"{SEP}\n"
@@ -359,7 +381,11 @@ class DailyReportGenerator:
                 "btc_buys": ctx.btc_buys,
                 "btc_sells": ctx.btc_sells,
                 "kr_mode": ctx.kr_mode,
+                "kr_drift_status": ctx.kr_drift_status,
+                "kr_drift_psi": ctx.kr_drift_psi,
                 "us_mode": ctx.us_mode,
+                "us_drift_status": ctx.us_drift_status,
+                "us_drift_psi": ctx.us_drift_psi,
                 "total_asset": ctx.total_asset,
                 "fg_value": ctx.fg_value,
                 "composite_score": ctx.composite_score,

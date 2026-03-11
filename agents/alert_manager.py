@@ -14,6 +14,7 @@ from common.env_loader import load_env
 from common.logger import get_logger
 from common.telegram import send_telegram
 from common.utils import safe_float as _safe_float
+from quant.risk.var_model import compute_var_metrics
 
 # 파일 기반 쿨다운 디렉토리 — cron 재시작 간 TTL 유지
 _COOLDOWN_DIR = Path("/tmp/openclaw_alert_cooldown")
@@ -86,6 +87,10 @@ class AlertManager:
         var_95 = _pct_to_decimal(_safe_float(snapshot.get("var_95"), 0.0))
         corr_shift = abs(_safe_float(snapshot.get("corr_shift"), 0.0))
         volume_spike = _safe_float(snapshot.get("volume_spike_ratio"), 1.0)
+
+        if var_95 <= 0 and snapshot.get("positions") and snapshot.get("returns_252d"):
+            metrics = compute_var_metrics(snapshot.get("positions") or [], snapshot.get("returns_252d"))
+            var_95 = _pct_to_decimal(_safe_float(metrics.get("var_99") or metrics.get("var_95"), 0.0))
 
         out: list[dict] = []
 
@@ -203,18 +208,29 @@ def _cli() -> int:
     parser.add_argument("--var95", type=float, default=0.0, help="VaR95 (0.02 or 2)")
     parser.add_argument("--corr-shift", type=float, default=0.0)
     parser.add_argument("--volume-spike", type=float, default=1.0)
+    parser.add_argument("--snapshot-file", default="", help="JSON snapshot file with positions/returns_252d/var_95/drawdown")
     parser.add_argument("--no-telegram", action="store_true")
     args = parser.parse_args()
 
-    out = AlertManager().process(
-        {
-            "drawdown": args.drawdown,
-            "var_95": args.var95,
-            "corr_shift": args.corr_shift,
-            "volume_spike_ratio": args.volume_spike,
-        },
-        send_telegram_alert=not args.no_telegram,
-    )
+    snapshot = {
+        "drawdown": args.drawdown,
+        "var_95": args.var95,
+        "corr_shift": args.corr_shift,
+        "volume_spike_ratio": args.volume_spike,
+    }
+    if args.snapshot_file:
+        try:
+            file_snapshot = json.loads(Path(args.snapshot_file).read_text(encoding="utf-8"))
+            if isinstance(file_snapshot, dict):
+                snapshot = {**file_snapshot, **snapshot}
+                if _safe_float(args.drawdown, 0.0) == 0.0:
+                    snapshot["drawdown"] = file_snapshot.get("drawdown", 0.0)
+                if _safe_float(args.var95, 0.0) == 0.0:
+                    snapshot["var_95"] = file_snapshot.get("var_95", 0.0)
+        except Exception as exc:
+            log.warning("snapshot file load failed", error=str(exc), path=args.snapshot_file)
+
+    out = AlertManager().process(snapshot, send_telegram_alert=not args.no_telegram)
     print(json.dumps(out, ensure_ascii=False, indent=2))
     return 0
 

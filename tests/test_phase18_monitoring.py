@@ -7,12 +7,20 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import agents.alert_manager as alert_manager_mod
 from agents.alert_manager import AlertManager
 from agents.daily_report import DailyReportContext, DailyReportGenerator
 from agents.weekly_report import WeeklyReportGenerator
 
 
 class AlertManagerTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmpdir = tempfile.TemporaryDirectory()
+        alert_manager_mod._COOLDOWN_DIR = Path(self._tmpdir.name)
+
+    def tearDown(self) -> None:
+        self._tmpdir.cleanup()
+
     def test_alert_generation_and_cooldown(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             with patch("agents.alert_manager._COOLDOWN_DIR", Path(td)):
@@ -31,24 +39,50 @@ class AlertManagerTests(unittest.TestCase):
                 self.assertGreater(first["emitted_count"], 0)
                 self.assertEqual(second["emitted_count"], 0)  # dedupe cooldown
 
+    def test_snapshot_file_merged(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            snap = Path(td) / "snapshot.json"
+            snap.write_text(
+                json.dumps(
+                    {
+                        "drawdown": -0.05,
+                        "var_95": 0.04,
+                        "positions": [{"symbol": "AAPL", "market_value": 1000}],
+                        "returns_252d": {"AAPL": [-0.01, 0.02, -0.03, 0.01, -0.02] * 60},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            mgr = AlertManager()
+            payload = json.loads(snap.read_text(encoding="utf-8"))
+            out = mgr.process(payload, send_telegram_alert=False)
+            self.assertGreaterEqual(out["candidate_count"], 2)
+
 
 class DailyReportTests(unittest.TestCase):
     def test_markdown_format(self) -> None:
         gen = DailyReportGenerator(supabase_client=None)
-        text = gen.build_markdown(
+        text = gen.build_message(
             DailyReportContext(
-                today_pnl_pct=1.2,
-                today_pnl_abs=120000,
-                trade_count=8,
-                wins=5,
-                losses=3,
-                tomorrow_strategy="Reduce high-beta exposure.",
-                risk_status="STABLE",
-            ),
-            report_date="2026-02-27",
+                date_str="02/27",
+                btc_pnl=120000,
+                btc_pnl_pct=1.2,
+                kr_pnl=30000,
+                kr_pnl_pct=0.8,
+                kr_mode="LIVE",
+                us_pnl_usd=250.0,
+                us_mode="LIVE",
+                total_asset=12000000,
+                total_pnl=150000,
+                fg_value=55,
+                fg_label="중립",
+                composite_score=67,
+                trend="UPTREND",
+                info_snippets=["risk stable", "tomorrow reduce beta"],
+            )
         )
-        self.assertIn("Daily Trading Report", text)
-        self.assertIn("Tomorrow Strategy", text)
+        self.assertIn("일일 리포트", text)
+        self.assertIn("BTC", text)
 
 
 class WeeklyReportTests(unittest.TestCase):

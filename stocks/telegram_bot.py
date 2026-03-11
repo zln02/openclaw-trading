@@ -19,7 +19,10 @@ from datetime import datetime
 
 import requests
 
-from kiwoom_client import KiwoomClient
+try:
+    from kiwoom_client import KiwoomClient
+except Exception:
+    from stocks.kiwoom_client import KiwoomClient
 from supabase import create_client
 from common.config import WORKSPACE
 from common.env_loader import load_env
@@ -37,6 +40,7 @@ TG_CHAT = os.environ.get("TELEGRAM_CHAT_ID", "")
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_KEY = os.environ.get("SUPABASE_SECRET_KEY", "")
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
+WORKSPACE = Path("/home/wlsdud5035/.openclaw/workspace")
 
 
 def send_message(text: str, chat_id: str | None = None, reply_markup: dict | None = None):
@@ -135,6 +139,163 @@ def group_by_code(positions: list) -> dict:
     return by_code
 
 
+def _load_json(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return payload if isinstance(payload, dict) else {}
+    except Exception:
+        return {}
+
+
+def _load_json_list(path: Path) -> list:
+    if not path.exists():
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return payload if isinstance(payload, list) else []
+    except Exception:
+        return []
+
+
+def get_regime_text() -> str:
+    try:
+        from agents.regime_classifier import RegimeClassifier
+
+        row = RegimeClassifier().classify()
+        regime = row.get("regime", "TRANSITION")
+        confidence = float(row.get("confidence", 0.0) or 0.0)
+        factors = row.get("features", {}) or {}
+        top_items = list(factors.items())[:5]
+        lines = [
+            "🌦 <b>현재 레짐</b>",
+            f"Regime: <b>{regime}</b>",
+            f"Confidence: {confidence:.2f}",
+        ]
+        if top_items:
+            lines.append("")
+            lines.append("주요 팩터:")
+            for key, value in top_items:
+                try:
+                    rendered = f"{float(value):.4f}"
+                except Exception:
+                    rendered = str(value)
+                lines.append(f"  {key}: {rendered}")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"⚠️ 레짐 조회 실패: {e}"
+
+
+def get_allocation_text() -> str:
+    payload = _load_json(WORKSPACE / "brain/portfolio/market_allocation.json")
+    allocation = payload.get("allocation") or {}
+    if not allocation:
+        return "⚠️ market_allocation.json이 없습니다."
+    lines = [
+        "🧭 <b>시장별 배분</b>",
+        f"BTC: {float(allocation.get('btc', 0.0)) * 100:.1f}%",
+        f"KR: {float(allocation.get('kr', 0.0)) * 100:.1f}%",
+        f"US: {float(allocation.get('us', 0.0)) * 100:.1f}%",
+        f"CASH: {float(allocation.get('cash', 0.0)) * 100:.1f}%",
+        f"Updated: {payload.get('updated_at', '-')}",
+        f"Regime: {payload.get('regime', '-')}",
+    ]
+    return "\n".join(lines)
+
+
+def get_var_text() -> str:
+    payload = _load_json(WORKSPACE / "brain/risk/latest_snapshot.json")
+    if not payload:
+        return "⚠️ latest_snapshot.json이 없습니다."
+    lines = [
+        "🛡 <b>리스크 스냅샷</b>",
+        f"VaR 99: {float(payload.get('var_99', 0.0) or 0.0):.4f}",
+        f"CVaR 95: {float(payload.get('cvar_95', 0.0) or 0.0):.4f}",
+        f"Drawdown: {float(payload.get('drawdown', 0.0) or 0.0):.4f}",
+        f"Positions: {len(payload.get('positions') or [])}",
+        f"Updated: {payload.get('generated_at', '-')}",
+    ]
+    return "\n".join(lines)
+
+
+def get_ml_status_text() -> str:
+    kr_drift = _load_json(WORKSPACE / "brain/ml/drift_report.json")
+    us_drift = _load_json(WORKSPACE / "brain/ml/us/drift_report.json")
+    kr_meta = _load_json(WORKSPACE / "brain/ml/ensemble_meta.json")
+    us_meta = _load_json(WORKSPACE / "brain/ml/us/ensemble_meta.json")
+    lines = [
+        "🤖 <b>ML 상태</b>",
+        f"KR drift: {kr_drift.get('status', 'UNKNOWN')} (PSI {float(kr_drift.get('max_psi', 0.0) or 0.0):.3f})",
+        f"US drift: {us_drift.get('status', 'UNKNOWN')} (PSI {float(us_drift.get('max_psi', 0.0) or 0.0):.3f})",
+        f"KR OOS AUC: {float(kr_meta.get('oos_auc', 0.0) or 0.0):.3f}",
+        f"US OOS AUC: {float(us_meta.get('oos_auc', 0.0) or 0.0):.3f}",
+    ]
+    return "\n".join(lines)
+
+
+def get_arb_text() -> str:
+    monitor = _load_json(WORKSPACE / "brain/arb/dex_monitor.json")
+    execution = _load_json(WORKSPACE / "brain/arb/arb_execution.json")
+    if not monitor:
+        return "⚠️ dex_monitor.json이 없습니다."
+    lines = [
+        "🔁 <b>차익거래 상태</b>",
+        f"Status: {monitor.get('status', 'UNKNOWN')}",
+        f"Direction: {monitor.get('direction', 'unknown')}",
+        f"Net Profit USD: {float(monitor.get('net_profit_usd', 0.0) or 0.0):.2f}",
+        f"Gas USD: {float(monitor.get('gas_cost_usd', 0.0) or 0.0):.2f}",
+        f"Executor Trigger: {execution.get('trigger', False)}",
+        f"Reason: {execution.get('reason', '-')}",
+    ]
+    return "\n".join(lines)
+
+
+def get_longshort_text() -> str:
+    plan = _load_json(WORKSPACE / "brain/portfolio/long_short_plan.json")
+    neutral = _load_json(WORKSPACE / "brain/portfolio/neutrality_report.json")
+    if not plan:
+        return "⚠️ long_short_plan.json이 없습니다."
+    lines = [
+        "⚖️ <b>롱숏 상태</b>",
+        f"Regime: {plan.get('regime', '-')}",
+        f"Long candidates: {len(plan.get('long_candidates') or [])}",
+        f"Short candidates: {len(plan.get('short_candidates') or [])}",
+        f"Net beta: {float(neutral.get('net_beta', 0.0) or 0.0):.3f}",
+        f"Alert: {neutral.get('alert_level', 'UNKNOWN')}",
+        f"Action: {neutral.get('recommendation', '-')}",
+    ]
+    return "\n".join(lines)
+
+
+def get_api_usage_text() -> str:
+    api_keys = []
+    if supabase:
+        try:
+            api_keys = supabase.table("api_keys").select("id,tier,last_used_at").execute().data or []
+        except Exception:
+            api_keys = []
+    webhooks = _load_json_list(WORKSPACE / "brain/webhooks/registry.json")
+    push_devices = _load_json_list(WORKSPACE / "brain/push/devices.json")
+    lines = [
+        "📡 <b>Public API 상태</b>",
+        f"API keys: {len(api_keys)}",
+        f"Webhooks: {len(webhooks)}",
+        f"Push devices: {len(push_devices)}",
+    ]
+    if api_keys:
+        last_used = max((row.get("last_used_at") or "-" for row in api_keys), default="-")
+        tiers = {}
+        for row in api_keys:
+            tier = row.get("tier") or "free"
+            tiers[tier] = tiers.get(tier, 0) + 1
+        lines.append(f"Last used: {last_used}")
+        lines.append("Tiers: " + ", ".join(f"{k}={v}" for k, v in sorted(tiers.items())))
+    else:
+        lines.append("Last used: unavailable")
+    return "\n".join(lines)
+
+
 def build_keyboard():
     return {
         "inline_keyboard": [
@@ -144,6 +305,11 @@ def build_keyboard():
             ],
             [
                 {"text": "📊 상태 확인(/status)", "callback_data": "status"},
+                {"text": "🌦 레짐(/regime)", "callback_data": "regime"},
+            ],
+            [
+                {"text": "🧭 배분(/allocation)", "callback_data": "allocation"},
+                {"text": "🛡 리스크(/var)", "callback_data": "var"},
             ],
         ]
     }
@@ -256,6 +422,20 @@ def handle_command(cmd: str, chat_id: str):
         )
     elif cmd.startswith("/sell_all"):
         handle_sell_all(chat_id)
+    elif cmd.startswith("/regime"):
+        send_message(get_regime_text(), chat_id, reply_markup=build_keyboard())
+    elif cmd.startswith("/allocation"):
+        send_message(get_allocation_text(), chat_id, reply_markup=build_keyboard())
+    elif cmd.startswith("/var"):
+        send_message(get_var_text(), chat_id, reply_markup=build_keyboard())
+    elif cmd.startswith("/ml_status"):
+        send_message(get_ml_status_text(), chat_id, reply_markup=build_keyboard())
+    elif cmd.startswith("/arb"):
+        send_message(get_arb_text(), chat_id, reply_markup=build_keyboard())
+    elif cmd.startswith("/longshort"):
+        send_message(get_longshort_text(), chat_id, reply_markup=build_keyboard())
+    elif cmd.startswith("/api_usage"):
+        send_message(get_api_usage_text(), chat_id, reply_markup=build_keyboard())
     elif cmd.startswith("/CONFIRM_SELL_ALL"):
         handle_sell_all_confirm(chat_id)
     elif cmd.startswith("/CANCEL_SELL_ALL"):
@@ -266,7 +446,14 @@ def handle_command(cmd: str, chat_id: str):
             "/status - 계좌 및 보유종목 상태\n"
             "/stop - 자동매매 중지 플래그 설정\n"
             "/resume - 자동매매 중지 플래그 해제\n"
-            "/sell_all - (예정) 전량 매도\n",
+            "/sell_all - (예정) 전량 매도\n"
+            "/regime - 현재 시장 레짐\n"
+            "/allocation - BTC/KR/US 배분\n"
+            "/var - 포트폴리오 VaR/CVaR\n"
+            "/ml_status - KR/US ML 드리프트 상태\n"
+            "/arb - DEX 차익거래 상태\n"
+            "/longshort - 롱숏/넷베타 상태\n"
+            "/api_usage - Public API 등록 상태\n",
             chat_id,
             reply_markup=build_keyboard(),
         )

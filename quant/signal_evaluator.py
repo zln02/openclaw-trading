@@ -46,6 +46,7 @@ _SIGNAL_SOURCES: Dict[str, Tuple[str, str, str, bool]] = {
     "composite_score": ("trade_executions",    "composite_score", "pnl_pct",   True),
     "rsi_signal":      ("trade_executions",    "rsi",             "pnl_pct",   True),
     "news_sentiment":  ("trade_executions",    "news_sentiment",  "pnl_pct",   True),
+    "agent_team_confidence": ("agent_decisions", "confidence",    "pnl_pct",   True),
     "btc_composite":   ("btc_position",        "composite_score", "pnl",       False),
     "fg_index":        ("btc_position",        "fg_value",        "pnl",       False),
     "funding_rate":    ("btc_position",        "funding_rate",    "pnl",       False),
@@ -134,6 +135,9 @@ class SignalEvaluator:
         if not self.supabase:
             return [], []
 
+        if signal_name == "agent_team_confidence":
+            return self._load_agent_team_pairs(start_iso)
+
         try:
             # btc_position uses entry_price/entry_time, while trade tables use price/created_at.
             if table == "btc_position":
@@ -183,6 +187,66 @@ class SignalEvaluator:
             pnl_vals.append(p)
 
         return signal_vals, pnl_vals
+
+    def _load_agent_team_pairs(self, start_iso: str) -> Tuple[List[float], List[float]]:
+        try:
+            decisions = (
+                self.supabase.table("agent_decisions")
+                .select("market,confidence,created_at")
+                .gte("created_at", start_iso)
+                .not_.is_("confidence", "null")
+                .execute()
+                .data
+                or []
+            )
+            trades = (
+                self.supabase.table("trade_executions")
+                .select("created_at,pnl_pct")
+                .gte("created_at", start_iso)
+                .eq("trade_type", "SELL")
+                .not_.is_("pnl_pct", "null")
+                .execute()
+                .data
+                or []
+            )
+        except Exception as exc:
+            log.warning("agent_team_confidence load failed", error=str(exc))
+            return [], []
+
+        trade_points: List[tuple[datetime, float]] = []
+        for row in trades:
+            created_at = str(row.get("created_at") or "").replace("Z", "+00:00")
+            try:
+                trade_points.append((datetime.fromisoformat(created_at), _safe_float(row.get("pnl_pct"), 0.0)))
+            except Exception:
+                continue
+
+        signals: List[float] = []
+        pnls: List[float] = []
+        for row in decisions:
+            created_at = str(row.get("created_at") or "").replace("Z", "+00:00")
+            try:
+                decision_ts = datetime.fromisoformat(created_at)
+            except Exception:
+                continue
+
+            nearest_pnl = None
+            nearest_gap = None
+            for trade_ts, trade_pnl in trade_points:
+                gap = abs((trade_ts - decision_ts).total_seconds())
+                if gap > 1800:
+                    continue
+                if nearest_gap is None or gap < nearest_gap:
+                    nearest_gap = gap
+                    nearest_pnl = trade_pnl
+
+            if nearest_pnl is None:
+                continue
+
+            signals.append(_safe_float(row.get("confidence"), 0.0))
+            pnls.append(nearest_pnl)
+
+        return signals, pnls
 
     def _rolling_ic_series(
         self, signal_vals: List[float], pnl_vals: List[float]

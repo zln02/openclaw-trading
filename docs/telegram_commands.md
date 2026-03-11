@@ -14,6 +14,13 @@
 | `/sell_all` | ✅ 구현됨 | 전량 매도 (2단계 확인) |
 | `/CONFIRM_SELL_ALL` | ✅ 구현됨 | 전량 매도 확인 |
 | `/CANCEL_SELL_ALL` | ✅ 구현됨 | 전량 매도 취소 |
+| `/regime` | ✅ 구현됨 | 현재 시장 레짐 + confidence |
+| `/allocation` | ✅ 구현됨 | BTC/KR/US/CASH 배분 비율 |
+| `/var` | ✅ 구현됨 | VaR / CVaR / drawdown 요약 |
+| `/ml_status` | ✅ 구현됨 | KR/US 드리프트 + OOS AUC |
+| `/arb` | ✅ 구현됨 | DEX/CEX 차익 모니터 상태 |
+| `/longshort` | ✅ 구현됨 | 롱숏 후보 수 + net beta |
+| `/api_usage` | ✅ 구현됨 | API key / webhook / push 등록 상태 |
 
 ---
 
