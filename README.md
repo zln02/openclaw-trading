@@ -356,6 +356,13 @@ ORC --> BTC
 - [x] Public API for external trader integration
 - [x] Mobile Dashboard (React Native skeleton)
 
+## Documentation
+
+- [docs/OPS_STABILIZATION_ROADMAP.md](docs/OPS_STABILIZATION_ROADMAP.md)
+- [docs/top-tier-phases.md](docs/top-tier-phases.md)
+- [docs/telegram_commands.md](docs/telegram_commands.md)
+- [docs/GOOGLE_SHEETS_DASHBOARD.md](docs/GOOGLE_SHEETS_DASHBOARD.md)
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).
