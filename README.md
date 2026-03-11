@@ -1,10 +1,5 @@
 # OpenClaw Trading System
 
-<p align="center">
-  <img src="docs/images/banner.png" alt="OpenClaw Trading System banner" width="100%" />
-</p>
-<!-- 📸 SCREENSHOT: 배너 이미지 (1200x400). Figma/Canva로 제작. 보라+블루 그라디언트 배경에 로고 + 시스템 개요 텍스트 -->
-
 <p align="center"><strong>BTC · KR Stocks · US Stocks — Fully Automated Trading Platform with Research-to-Production Loop</strong></p>
 
 <p align="center">
@@ -15,13 +10,11 @@
   <img src="https://img.shields.io/badge/US-DRY--RUN-lightgrey?style=for-the-badge" alt="US DRY-RUN" />
   <img src="https://img.shields.io/badge/Level%205-Research%20Loop-purple?style=for-the-badge" alt="Level 5 Research Loop" />
   <a href="https://github.com/zln02/openclaw-trading/stargazers"><img src="https://img.shields.io/github/stars/zln02/openclaw-trading?style=for-the-badge&logo=github&label=Stars" alt="GitHub Stars" /></a>
-  <a href="https://github.com/zln02/openclaw-trading/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/zln02/openclaw-trading/ci.yml?branch=main&style=for-the-badge&label=CI" alt="CI Passing" /></a>
 </p>
 
 <p align="center">
   <a href="README.ko.md">Korean README</a> ·
-  <a href="docs/SCREENSHOT_GUIDE.md">Screenshot Guide</a> ·
-  <a href="CONTRIBUTING.md">Contributing</a>
+  <a href="docs/SCREENSHOT_GUIDE.md">Screenshot Guide</a>
 </p>
 
 - **3-Market Coverage:** BTC (live) + KR Stocks (paper) + US Stocks (dry-run)
