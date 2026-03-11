@@ -13,10 +13,13 @@ load_openclaw_env
 
 mkdir -p "$LOG_DIR"
 HEALTH_STATUS_FILE="$LOG_DIR/health_status.json"
-DASHBOARD_URL="${DASHBOARD_HEALTH_URL:-http://localhost:${DASHBOARD_PORT:-8080}/stocks}"
+DASHBOARD_URL="${DASHBOARD_HEALTH_URL:-http://localhost:${DASHBOARD_PORT:-8080}/health}"
+WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-$OPENCLAW_ROOT/workspace}"
 
 # 임계치 (분)
 STALE_MINUTES=30
+SNAPSHOT_STALE_MINUTES="${HEALTH_SNAPSHOT_STALE_MINUTES:-180}"
+ALLOCATION_STALE_MINUTES="${HEALTH_ALLOCATION_STALE_MINUTES:-10080}"
 
 # openclaw.json에서 텔레그램 자격증명 추출
 BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-$(python3 -c "
@@ -120,6 +123,42 @@ check_agent_health() {
     fi
 }
 
+check_file_freshness() {
+    local file_path="$1"
+    local stale_minutes="$2"
+
+    if [ ! -f "$file_path" ]; then
+        echo "NO_FILE"
+        return
+    fi
+
+    local last_mod diff
+    last_mod=$(stat -c %Y "$file_path" 2>/dev/null || echo 0)
+    diff=$(( (NOW - last_mod) / 60 ))
+
+    if [ "$diff" -gt "$stale_minutes" ]; then
+        echo "${diff}"
+    else
+        echo "ok"
+    fi
+}
+
+check_supabase_health() {
+    python3 - <<'PY'
+from common.supabase_client import get_supabase
+
+try:
+    supabase = get_supabase()
+    if not supabase:
+        print("NO_CLIENT")
+    else:
+        supabase.table("trade_executions").select("trade_id").limit(1).execute()
+        print("ok")
+except Exception as exc:
+    print(f"ERROR:{exc}")
+PY
+}
+
 # ── 1. BTC 에이전트 체크 (24/7) ───────────────────────────────────────────
 BTC_LOG="$LOG_DIR/btc_trading.log"
 BTC_RESULT=$(check_agent_health "BTC" "$BTC_LOG" "btc_trading_agent.py" "cron")
@@ -192,14 +231,69 @@ fi
 
 # ── 4. 대시보드 HTTP 체크 ─────────────────────────────────────────────────
 HTTP_CODE=$(curl -sS --max-time 5 -o /dev/null -w "%{http_code}" "$DASHBOARD_URL" 2>/dev/null || echo "000")
-if [ "$HTTP_CODE" != "200" ]; then
+if [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "401" ]; then
     send_tg "🚨 <b>[헬스체크] 대시보드 응답 없음</b>%0AHTTP ${HTTP_CODE}%0A%0A💬 제이한테 <b>'대시보드 고쳐줘'</b> 라고 해봐!"
 else
-    echo "대시보드 상태: 정상 (HTTP 200)"
+    echo "대시보드 상태: 정상 (HTTP ${HTTP_CODE})"
 fi
 
-# ── 5. 상태 스냅샷 기록 ───────────────────────────────────────────────────────
-python3 - "$HEALTH_STATUS_FILE" "$NOW_ISO" "$STALE_MINUTES" "$BTC_RESULT" "$KR_RESULT" "$US_RESULT" "$HTTP_CODE" "$DASHBOARD_URL" <<'PY'
+# ── 5. Supabase / 산출물 신선도 체크 ───────────────────────────────────────
+SUPABASE_RESULT=$(check_supabase_health)
+RISK_SNAPSHOT_PATH="$WORKSPACE_DIR/brain/risk/latest_snapshot.json"
+KR_DRIFT_PATH="$WORKSPACE_DIR/brain/ml/drift_report.json"
+US_DRIFT_PATH="$WORKSPACE_DIR/brain/ml/us/drift_report.json"
+ALLOCATION_PATH="$WORKSPACE_DIR/brain/portfolio/market_allocation.json"
+TARGET_WEIGHTS_PATH="$WORKSPACE_DIR/brain/portfolio/target_weights.json"
+
+RISK_SNAPSHOT_RESULT=$(check_file_freshness "$RISK_SNAPSHOT_PATH" "$SNAPSHOT_STALE_MINUTES")
+KR_DRIFT_RESULT=$(check_file_freshness "$KR_DRIFT_PATH" "$SNAPSHOT_STALE_MINUTES")
+US_DRIFT_RESULT=$(check_file_freshness "$US_DRIFT_PATH" "$SNAPSHOT_STALE_MINUTES")
+ALLOCATION_RESULT=$(check_file_freshness "$ALLOCATION_PATH" "$ALLOCATION_STALE_MINUTES")
+TARGET_WEIGHTS_RESULT=$(check_file_freshness "$TARGET_WEIGHTS_PATH" "$ALLOCATION_STALE_MINUTES")
+
+echo "Supabase 상태: $SUPABASE_RESULT"
+echo "Risk snapshot 상태: $RISK_SNAPSHOT_RESULT"
+echo "KR drift 상태: $KR_DRIFT_RESULT"
+echo "US drift 상태: $US_DRIFT_RESULT"
+echo "Allocation 상태: $ALLOCATION_RESULT"
+echo "Target weights 상태: $TARGET_WEIGHTS_RESULT"
+
+if [ "$SUPABASE_RESULT" != "ok" ]; then
+    send_tg "🚨 <b>[헬스체크] Supabase 연결 이상</b>%0A상태: $SUPABASE_RESULT%0A%0A💬 제이한테 <b>'Supabase 왜 그런지 보고 해결해'</b> 라고 해봐!"
+fi
+
+if [ "$RISK_SNAPSHOT_RESULT" = "NO_FILE" ]; then
+    send_tg "🚨 <b>[헬스체크] risk snapshot 없음</b>%0A파일: $RISK_SNAPSHOT_PATH"
+elif [ "$RISK_SNAPSHOT_RESULT" != "ok" ]; then
+    send_tg "🚨 <b>[헬스체크] risk snapshot stale</b>%0A${RISK_SNAPSHOT_RESULT}분째 미갱신"
+fi
+
+if [ "$KR_DRIFT_RESULT" = "NO_FILE" ]; then
+    send_tg "🚨 <b>[헬스체크] KR drift report 없음</b>%0A파일: $KR_DRIFT_PATH"
+elif [ "$KR_DRIFT_RESULT" != "ok" ]; then
+    send_tg "🚨 <b>[헬스체크] KR drift report stale</b>%0A${KR_DRIFT_RESULT}분째 미갱신"
+fi
+
+if [ "$US_DRIFT_RESULT" = "NO_FILE" ]; then
+    send_tg "🚨 <b>[헬스체크] US drift report 없음</b>%0A파일: $US_DRIFT_PATH"
+elif [ "$US_DRIFT_RESULT" != "ok" ]; then
+    send_tg "🚨 <b>[헬스체크] US drift report stale</b>%0A${US_DRIFT_RESULT}분째 미갱신"
+fi
+
+if [ "$ALLOCATION_RESULT" = "NO_FILE" ]; then
+    send_tg "🚨 <b>[헬스체크] market allocation 없음</b>%0A파일: $ALLOCATION_PATH"
+elif [ "$ALLOCATION_RESULT" != "ok" ]; then
+    send_tg "🚨 <b>[헬스체크] market allocation stale</b>%0A${ALLOCATION_RESULT}분째 미갱신"
+fi
+
+if [ "$TARGET_WEIGHTS_RESULT" = "NO_FILE" ]; then
+    send_tg "🚨 <b>[헬스체크] target weights 없음</b>%0A파일: $TARGET_WEIGHTS_PATH"
+elif [ "$TARGET_WEIGHTS_RESULT" != "ok" ]; then
+    send_tg "🚨 <b>[헬스체크] target weights stale</b>%0A${TARGET_WEIGHTS_RESULT}분째 미갱신"
+fi
+
+# ── 6. 상태 스냅샷 기록 ───────────────────────────────────────────────────────
+python3 - "$HEALTH_STATUS_FILE" "$NOW_ISO" "$STALE_MINUTES" "$BTC_RESULT" "$KR_RESULT" "$US_RESULT" "$HTTP_CODE" "$DASHBOARD_URL" "$SUPABASE_RESULT" "$RISK_SNAPSHOT_RESULT" "$KR_DRIFT_RESULT" "$US_DRIFT_RESULT" "$ALLOCATION_RESULT" "$TARGET_WEIGHTS_RESULT" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -215,11 +309,22 @@ payload = {
     "dashboard": {
         "url": sys.argv[8],
         "http_code": sys.argv[7],
-        "ok": sys.argv[7] == "200",
+        "ok": sys.argv[7] in {"200", "401"},
+    },
+    "supabase": {
+        "status": sys.argv[9],
+        "ok": sys.argv[9] == "ok",
+    },
+    "artifacts": {
+        "risk_snapshot": sys.argv[10],
+        "kr_drift": sys.argv[11],
+        "us_drift": sys.argv[12],
+        "market_allocation": sys.argv[13],
+        "target_weights": sys.argv[14],
     },
 }
 Path(sys.argv[1]).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 PY
 
-# ── 5. 요약 로그 기록 ───────────────────────────────────────────────────────
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] 헬스체크 완료 - BTC:$BTC_RESULT, KR:$KR_RESULT, US:$US_RESULT, 대시보드:$HTTP_CODE" >> "$LOG_DIR/health_check.log"
+# ── 7. 요약 로그 기록 ───────────────────────────────────────────────────────
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] 헬스체크 완료 - BTC:$BTC_RESULT, KR:$KR_RESULT, US:$US_RESULT, 대시보드:$HTTP_CODE, Supabase:$SUPABASE_RESULT, Risk:$RISK_SNAPSHOT_RESULT, KR_Drift:$KR_DRIFT_RESULT, US_Drift:$US_DRIFT_RESULT, Allocation:$ALLOCATION_RESULT, Target:$TARGET_WEIGHTS_RESULT" >> "$LOG_DIR/health_check.log"
