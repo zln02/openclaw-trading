@@ -123,7 +123,7 @@ if client is None:
 
 # ── 리스크 설정 (v6 — Top-tier Quant) ─────────────
 RISK = {
-    "split_ratios":     [0.15, 0.25, 0.40],     # 스코어 높을수록 큰 비중
+    "split_ratios":     [0.10, 0.15, 0.20],     # 스코어 높을수록 큰 비중
     "split_rsi":        [55,   45,   35  ],
     "invest_ratio":      0.30,
     "stop_loss":        -0.03,
@@ -196,6 +196,14 @@ def send_telegram(msg: str, priority: "_TgPriority" = _TgPriority.URGENT) -> Non
 def get_market_data():
     return pyupbit.get_ohlcv("KRW-BTC", interval="minute5", count=200)
 
+
+def has_valid_market_data(df) -> bool:
+    try:
+        required = {"open", "high", "low", "close", "volume"}
+        return df is not None and not df.empty and required.issubset(set(df.columns))
+    except Exception:
+        return False
+
 # ── 기술적 지표 ───────────────────────────────────
 def calculate_indicators(df) -> dict:
     from ta.trend import EMAIndicator, MACD
@@ -259,6 +267,59 @@ def get_volume_analysis(df) -> dict:
                 "ratio": ratio, "label": label}
     except Exception:
         return {"ratio": 1.0, "label": "거래량 분석 실패"}
+
+
+def get_candle_confirmation(df) -> dict:
+    """Use the latest closed 5m candle to confirm breakout-style buying.
+
+    A confirmed breakout requires:
+    - bullish close
+    - close near the candle high
+    - close above the previous candle high
+    """
+    try:
+        if df is None or len(df) < 3:
+            return {
+                "confirmed_breakout": False,
+                "bullish_close": False,
+                "close_near_high": False,
+                "broke_prev_high": False,
+                "label": "캔들 데이터 부족",
+            }
+
+        closed = df.iloc[-2]
+        prev = df.iloc[-3]
+        candle_range = float(closed["high"] - closed["low"])
+        bullish_close = float(closed["close"]) > float(closed["open"])
+        close_near_high = (
+            candle_range > 0
+            and (float(closed["high"]) - float(closed["close"])) / candle_range <= 0.25
+        )
+        broke_prev_high = float(closed["close"]) > float(prev["high"])
+        confirmed = bullish_close and close_near_high and broke_prev_high
+
+        if confirmed:
+            label = "최근 5분봉 돌파 마감 확인"
+        elif bullish_close and close_near_high:
+            label = "양봉 마감이나 이전 고점 돌파 미확인"
+        else:
+            label = "돌파 마감 미확인"
+
+        return {
+            "confirmed_breakout": confirmed,
+            "bullish_close": bullish_close,
+            "close_near_high": close_near_high,
+            "broke_prev_high": broke_prev_high,
+            "label": label,
+        }
+    except Exception:
+        return {
+            "confirmed_breakout": False,
+            "bullish_close": False,
+            "close_near_high": False,
+            "broke_prev_high": False,
+            "label": "캔들 확인 실패",
+        }
 
 # ── Fear & Greed ──────────────────────────────────
 def get_fear_greed() -> dict:
@@ -642,28 +703,34 @@ def open_position_with_context(
     except Exception:
         return open_position(entry_price, quantity, entry_krw)
 
-def close_all_positions(exit_price):
+def close_all_positions(exit_price, *, exit_reason=None):
     try:
         res = supabase.table("btc_position")\
                       .select("*").eq("status", "OPEN").execute()
         for pos in res.data:
             pnl     = (exit_price - pos["entry_price"]) * pos["quantity"]
             pnl_pct = (exit_price - pos["entry_price"]) / pos["entry_price"] * 100
+            update_row = {
+                "status":     "CLOSED",
+                "exit_price": exit_price,
+                "exit_time":  datetime.now().isoformat(),
+                "pnl":        round(pnl, 2),
+                "pnl_pct":    round(pnl_pct, 2),
+            }
+            if exit_reason:
+                update_row["exit_reason"] = exit_reason
             try:
-                supabase.table("btc_position").update({
-                    "status":     "CLOSED",
-                    "exit_price": exit_price,
-                    "exit_time":  datetime.now().isoformat(),
-                    "pnl":        round(pnl, 2),
-                    "pnl_pct":    round(pnl_pct, 2),
-                }).eq("id", pos["id"]).execute()
+                supabase.table("btc_position").update(update_row).eq("id", pos["id"]).execute()
             except Exception:
                 # pnl/pnl_pct 컬럼 미존재 시 최소 업데이트 (btc_position_schema.sql 실행 전 graceful fallback)
-                supabase.table("btc_position").update({
+                fallback_row = {
                     "status":     "CLOSED",
                     "exit_price": exit_price,
                     "exit_time":  datetime.now().isoformat(),
-                }).eq("id", pos["id"]).execute()
+                }
+                if exit_reason:
+                    fallback_row["exit_reason"] = exit_reason
+                supabase.table("btc_position").update(fallback_row).eq("id", pos["id"]).execute()
     except Exception as e:
         log.error(f"포지션 종료 실패: {e}")
 
@@ -813,9 +880,13 @@ RSI: {rsi_d:.1f} | BB%: {mom.get('bb_pct', 50):.1f}% | 7일수익: {mom.get('ret
 # ── 분할 매수 단계 (복합 스코어 기반) ─────────────
 def get_split_stage(composite_total: float) -> int:
     """복합 스코어가 높을수록 큰 비중으로 매수."""
-    if composite_total >= 70: return 3
-    if composite_total >= 55: return 2
+    if composite_total >= 75: return 3
+    if composite_total >= 65: return 2
     return 1
+
+
+def is_defensive_regime(regime: str | None) -> bool:
+    return str(regime or "").upper() in {"CORRECTION", "BEAR", "RISK_OFF", "CRISIS", "UNKNOWN"}
 
 # ── 주문 실행 ─────────────────────────────────────
 def execute_trade(
@@ -824,6 +895,7 @@ def execute_trade(
     fg=None,
     volume=None,
     comp=None,
+    candle_confirmation=None,
     *,
     funding=None,
     oi=None,
@@ -835,26 +907,73 @@ def execute_trade(
     vol_ratio_d=None,
     trend=None,
 ) -> dict:
+    def _result(code: str, **extra) -> dict:
+        payload = {"result": code}
+        payload.update(extra)
+        return payload
 
     # ── 코드 레벨 안전 필터 (복합 스코어 기반) ──
     if signal["action"] == "BUY":
+        comp_total = comp["total"] if isinstance(comp, dict) else 0
+        defensive_regime = is_defensive_regime(market_regime)
         if fg and fg["value"] > 75:
-            log.warning(f"F&G {fg['value']} > 75 (극도 탐욕) — BUY 차단")
-            return {"result": "BLOCKED_FG"}
+            log.warning(
+                f"F&G {fg['value']} > 75 (극도 탐욕) — BUY 차단",
+                guard="fg_greed_block",
+                result="BLOCKED_FG",
+                fg_value=fg["value"],
+            )
+            return _result("BLOCKED_FG", guard="fg_greed_block")
+        if defensive_regime and comp_total < max(RISK["buy_composite_min"], 60):
+            log.warning(
+                f"방어 레짐({market_regime})에서 복합스코어 {comp_total}점 — BUY 차단",
+                guard="defensive_regime_score_block",
+                result="BLOCKED_DEFENSIVE_REGIME",
+                market_regime=market_regime,
+                composite_score=comp_total,
+            )
+            return _result("BLOCKED_DEFENSIVE_REGIME", guard="defensive_regime_score_block")
         is_extreme_fear = fg and fg["value"] <= 20
         if volume and volume["ratio"] <= 0.15 and not is_extreme_fear:
-            log.warning(f"5분봉 거래량 {volume['ratio']}x 거의 0 — BUY 차단")
-            return {"result": "BLOCKED_VOLUME"}
+            log.warning(
+                f"5분봉 거래량 {volume['ratio']}x 거의 0 — BUY 차단",
+                guard="low_volume_block",
+                result="BLOCKED_VOLUME",
+                vol_ratio_5m=volume["ratio"],
+            )
+            return _result("BLOCKED_VOLUME", guard="low_volume_block")
+        if volume and volume["ratio"] >= 3.0:
+            confirmed = bool((candle_confirmation or {}).get("confirmed_breakout"))
+            if not confirmed:
+                log.warning(
+                    "거래량 급등 구간이지만 최근 5분봉 돌파 마감이 확인되지 않아 BUY 차단",
+                    guard="breakout_confirmation_block",
+                    result="BLOCKED_BREAKOUT_CONFIRMATION",
+                    vol_ratio_5m=volume["ratio"],
+                    breakout_confirmed=False,
+                )
+                return _result("BLOCKED_BREAKOUT_CONFIRMATION", guard="breakout_confirmation_block")
 
     # ── 신뢰도 필터 ──
     if signal["confidence"] < RISK["min_confidence"]:
-        return {"result": "SKIP"}
+        return _result("SKIP", guard="min_confidence")
 
     btc_balance = upbit.get_balance("BTC") or 0
     krw_balance = upbit.get_balance("KRW") or 0
     pos         = get_open_position()
     price       = indicators["price"]
     log.info(f"잔고 스냅샷: KRW={float(krw_balance):,.0f} | BTC={float(btc_balance):.8f}")
+
+    if signal["action"] == "BUY" and (btc_balance > 0.00001 or pos):
+        log.warning(
+            "실제 BTC 잔고 또는 OPEN 포지션이 존재해 중복 BUY 차단 "
+            f"(btc_balance={float(btc_balance):.8f}, has_pos={bool(pos)})",
+            guard="already_long_block",
+            result="ALREADY_LONG",
+            btc_balance=float(btc_balance),
+            has_open_position=bool(pos),
+        )
+        return _result("ALREADY_LONG", guard="already_long_block")
 
     # ── 손절/익절 + 트레일링 스탑 ──
     if btc_balance > 0.00001 and pos:
@@ -890,40 +1009,40 @@ def execute_trade(
             if drop >= trail_pct:
                 if not DRY_RUN:
                     upbit.sell_market_order("KRW-BTC", btc_balance * 0.9995)
-                    close_all_positions(price)
+                    close_all_positions(price, exit_reason="TRAILING_STOP")
                 send_telegram(
                     f"📉 <b>트레일링 스탑</b>\n"
                     f"고점: {highest:,.0f}원 → 현재가: {price:,.0f}원\n"
                     f"하락폭: {drop*100:.1f}% (기준: {trail_pct*100:.1f}%) / 수익: {net_change*100:.2f}%"
                 )
-                return {"result": "TRAILING_STOP"}
+                return _result("TRAILING_STOP")
 
         # ATR 동적 손절 (진입 시 계산된 ATR 기반 손절가)
         atr_stop_price = float(pos.get("atr_stop_price") or 0)
         if atr_stop_price and price < atr_stop_price:
             if not DRY_RUN:
                 upbit.sell_market_order("KRW-BTC", btc_balance * 0.9995)
-                close_all_positions(price)
+                close_all_positions(price, exit_reason="ATR_STOP_LOSS")
             send_telegram(
                 f"🛑 <b>ATR 동적 손절</b>\n"
                 f"진입가: {entry_price:,}원\n"
                 f"ATR 손절가: {atr_stop_price:,.0f}원 → 현재가: {price:,}원\n"
                 f"손실(비용 포함): {net_change*100:.2f}%"
             )
-            return {"result": "ATR_STOP_LOSS"}
+            return _result("ATR_STOP_LOSS")
 
         # 고정 % 손절 (fallback)
         if net_change <= RISK["stop_loss"]:
             if not DRY_RUN:
                 upbit.sell_market_order("KRW-BTC", btc_balance * 0.9995)
-                close_all_positions(price)
+                close_all_positions(price, exit_reason="STOP_LOSS")
             send_telegram(
                 f"🛑 <b>손절 실행</b>\n"
                 f"진입가: {entry_price:,}원\n"
                 f"현재가: {price:,}원\n"
                 f"손실(비용 포함): {net_change*100:.2f}%"
             )
-            return {"result": "STOP_LOSS"}
+            return _result("STOP_LOSS")
 
         # ── 다단계 분할 익절 ──
         partial_1_done = pos.get("partial_1_sold") or pos.get("partial_sold", False)
@@ -947,7 +1066,7 @@ def execute_trade(
                 f"수익: +{net_change*100:.2f}% | 매도량: {sell_qty:.6f} BTC\n"
                 f"잔여분 트레일링 스탑 + 2단계 익절 대기"
             )
-            return {"result": "PARTIAL_TP_1"}
+            return _result("PARTIAL_TP_1")
 
         # 2단계: 12% → 남은 물량의 50% 추가 매도
         if (net_change >= RISK.get("partial_tp_2_pct", 0.12)
@@ -968,19 +1087,19 @@ def execute_trade(
                 f"수익: +{net_change*100:.2f}% | 매도량: {sell_qty:.6f} BTC\n"
                 f"잔여분 트레일링 스탑으로 최종 보호"
             )
-            return {"result": "PARTIAL_TP_2"}
+            return _result("PARTIAL_TP_2")
 
         # 최대 익절 전량 (15%)
         if net_change >= RISK["take_profit"]:
             if not DRY_RUN:
                 upbit.sell_market_order("KRW-BTC", btc_balance * 0.9995)
-                close_all_positions(price)
+                close_all_positions(price, exit_reason="TAKE_PROFIT")
             send_telegram(
                 f"✅ <b>전량 익절</b>\n"
                 f"진입가: {entry_price:,}원 | 현재가: {price:,}원\n"
                 f"수익(비용 포함): +{net_change*100:.2f}%"
             )
-            return {"result": "TAKE_PROFIT"}
+            return _result("TAKE_PROFIT")
 
     # ── 분할 매수 ──
     if signal["action"] == "BUY":
@@ -997,7 +1116,7 @@ def execute_trade(
                 f"매수 실패: INSUFFICIENT_KRW | KRW={float(krw_balance):,.0f} | "
                 f"invest_krw={float(invest_krw):,.0f}"
             )
-            return {"result": "INSUFFICIENT_KRW"}
+            return _result("INSUFFICIENT_KRW")
 
         if not DRY_RUN:
             result = upbit.buy_market_order("KRW-BTC", invest_krw)
@@ -1035,7 +1154,7 @@ def execute_trade(
                     f"⚠️ BTC 매수 성공했으나 DB 저장 실패 (3회 재시도).\n"
                     f"수량: {qty:.8f} BTC\n수동 확인 후 처리하세요.",
                 )
-                return {"result": "POSITION_DB_FAIL"}
+                return _result("POSITION_DB_FAIL")
         else:
             log.info(f"[DRY_RUN] {stage}차 매수 — {invest_krw:,.0f}원")
 
@@ -1071,7 +1190,7 @@ def execute_trade(
                 _sheets_append("btc", "매수", "BTC", price, qty, None, signal.get("reason", ""))
             except Exception:
                 pass
-        return {"result": f"BUY_{stage}차"}
+        return _result(f"BUY_{stage}차", stage=stage)
 
     # ── AI SELL ──
     elif signal["action"] == "SELL" and btc_balance > 0.00001:
@@ -1080,7 +1199,7 @@ def execute_trade(
             pnl_pct = (price - pos["entry_price"]) / pos["entry_price"] * 100
         if not DRY_RUN:
             upbit.sell_market_order("KRW-BTC", btc_balance * 0.9995)
-            close_all_positions(price)
+            close_all_positions(price, exit_reason="SELL_SIGNAL")
         send_telegram(
             f"🔴 <b>BTC 매도</b>\n"
             f"💰 가격: {price:,}원\n"
@@ -1094,13 +1213,15 @@ def execute_trade(
                 _sheets_append("btc", action, "BTC", price, btc_balance, pnl_pct, signal.get("reason", ""))
             except Exception:
                 pass
-        return {"result": "SELL"}
+        return _result("SELL")
 
-    return {"result": "HOLD"}
+    return _result("HOLD")
 
 # ── Supabase 로그 ─────────────────────────────────
 def save_log(indicators, signal, result, *, fg=None, volume=None, comp=None, funding=None, oi=None, ls_ratio=None, kimchi=None, market_regime=None):
     try:
+        result_code = result.get("result", "UNKNOWN") if isinstance(result, dict) else str(result)
+        guard = result.get("guard") if isinstance(result, dict) else None
         row = {
             "timestamp":          datetime.now().isoformat(),
             "action":             signal.get("action", "HOLD"),
@@ -1133,7 +1254,7 @@ def save_log(indicators, signal, result, *, fg=None, volume=None, comp=None, fun
                 "confidence", "reason", "indicator_snapshot", "order_raw",
             ]}
             supabase.table("btc_trades").insert(minimal).execute()
-        log.debug("Supabase 저장 완료")
+        log.debug("Supabase 저장 완료", result_code=result_code, guard=guard)
     except Exception as e:
         log.error(f"Supabase 저장 실패: {e}")
 
@@ -1192,8 +1313,16 @@ def run_trading_cycle():
     log.info("매매 사이클 시작")
 
     df         = get_market_data()
+    if not has_valid_market_data(df):
+        log.warning(
+            "시장 데이터 조회 실패 또는 비정상 응답 — 사이클 스킵",
+            guard="market_data_unavailable",
+            result="MARKET_DATA_UNAVAILABLE",
+        )
+        return {"result": "MARKET_DATA_UNAVAILABLE"}
     indicators = calculate_indicators(df)
     volume     = get_volume_analysis(df)
+    candle_confirmation = get_candle_confirmation(df)
     fg         = get_fear_greed()
     htf        = get_hourly_trend()
     momentum   = get_daily_momentum()
@@ -1306,12 +1435,21 @@ def run_trading_cycle():
              f"Bonus:{comp['bonus']} Regime:{market_regime}[{comp.get('regime_adj',0):+d}])")
     log.info(f"Vol(5m): {volume['label']}({volume['ratio']}x) | "
              f"Pos: {'@ {:,}원'.format(int(pos['entry_price'])) if pos else 'None'}")
+    log.info(
+        f"5분봉 확인: {candle_confirmation['label']}",
+        breakout_confirmed=bool(candle_confirmation.get("confirmed_breakout")),
+        breakout_label=candle_confirmation["label"],
+    )
     if kimchi is not None:
         log.info(f"김치 프리미엄: {kimchi:+.2f}%")
 
     # ── 복합 스코어 기반 매매 결정 ──
     signal = None
     buy_min = RISK["buy_composite_min"]
+    if is_defensive_regime(market_regime):
+        buy_min = max(buy_min, 60)
+    if str(market_regime).upper() in {"BEAR", "CRISIS"}:
+        buy_min = max(buy_min, 65)
 
     # v6: 온체인 안전장치
     funding_blocked = False
@@ -1433,12 +1571,10 @@ def run_trading_cycle():
     vol_r = volume["ratio"]
     if vol_r >= 3.0:
         log.info(f"거래량 폭발 감지 ({vol_r:.1f}x)")
-        if signal["action"] == "BUY":
+        if signal["action"] == "BUY" and candle_confirmation["confirmed_breakout"]:
             signal["confidence"] = max(signal["confidence"], 78)
-        elif signal["action"] == "HOLD" and indicators["macd"] > 0 and rsi_d < 60:
-            signal["action"] = "BUY"
-            signal["confidence"] = 72
-            signal["reason"] += " [거래량 폭발]"
+        elif signal["action"] == "BUY":
+            log.info("거래량 급등은 확인됐지만 돌파 마감이 없어 BUY 신뢰도 보강 생략")
 
     # 김치 프리미엄 저평가
     if kimchi is not None and kimchi <= -2.0 and signal["action"] == "HOLD" and rsi_d < 55:
@@ -1452,6 +1588,7 @@ def run_trading_cycle():
         fg,
         volume,
         comp,
+        candle_confirmation=candle_confirmation,
         funding=funding,
         oi=oi,
         ls_ratio=ls_ratio,
@@ -1475,7 +1612,15 @@ def run_trading_cycle():
         kimchi=kimchi,
         market_regime=market_regime,
     )
-    log.trade(f"신호: {signal['action']} (신뢰도: {signal['confidence']}%) → {result['result']}")
+    log.trade(
+        f"신호: {signal['action']} (신뢰도: {signal['confidence']}%) → {result['result']}",
+        action=signal.get("action"),
+        confidence=signal.get("confidence", 0),
+        result=result.get("result"),
+        guard=result.get("guard"),
+        composite_score=(comp or {}).get("total") if isinstance(comp, dict) else None,
+        vol_ratio_5m=(volume or {}).get("ratio") if volume else None,
+    )
 
     return result
 
