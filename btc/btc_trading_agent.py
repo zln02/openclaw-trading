@@ -121,13 +121,13 @@ UPBIT_ACCESS  = os.environ.get("UPBIT_ACCESS_KEY", "")
 UPBIT_SECRET  = os.environ.get("UPBIT_SECRET_KEY", "")
 OPENAI_KEY    = os.environ.get("OPENAI_API_KEY", "")
 DRY_RUN       = os.environ.get("DRY_RUN", "0") == "1"
+RUNTIME_ENV_READY = all([UPBIT_ACCESS, UPBIT_SECRET, OPENAI_KEY])
 
-if not all([UPBIT_ACCESS, UPBIT_SECRET, OPENAI_KEY]):
-    log.critical("필수 환경변수 없음: UPBIT keys + OPENAI_API_KEY 필요")
-    sys.exit(1)
-upbit   = pyupbit.Upbit(UPBIT_ACCESS, UPBIT_SECRET)
+if not RUNTIME_ENV_READY:
+    log.warning("필수 환경변수 부족: 에이전트 실행은 제한되지만 API helper import는 허용")
+upbit   = pyupbit.Upbit(UPBIT_ACCESS, UPBIT_SECRET) if UPBIT_ACCESS and UPBIT_SECRET else None
 supabase = get_supabase()
-client  = OpenAI(api_key=OPENAI_KEY)
+client  = OpenAI(api_key=OPENAI_KEY) if OPENAI_KEY else None
 _btc_buy_blocked = False
 
 # ── 리스크 설정 (v6 — Top-tier Quant) ─────────────
@@ -1584,6 +1584,9 @@ def send_hourly_report():
 
 if __name__ == "__main__":
     import sys
+    if not RUNTIME_ENV_READY:
+        log.critical("필수 환경변수 없음: UPBIT keys + OPENAI_API_KEY 필요")
+        sys.exit(1)
     if len(sys.argv) > 1 and sys.argv[1] == "check":
         pos = get_open_position()
         if pos:

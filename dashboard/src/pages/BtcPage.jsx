@@ -10,9 +10,9 @@ import {
   getBtcCandles,
   getBtcComposite,
   getBtcFilters,
+  getBtcLiveActivity,
   getBtcNews,
   getBtcPortfolio,
-  getBtcTrades,
 } from "../api";
 import usePolling from "../hooks/usePolling";
 import { compactTime, krw, pct, sparkline } from "../lib/format";
@@ -49,7 +49,7 @@ function sentimentAccent(sentiment) {
 export default function BtcPage() {
   const { data: composite, error: compositeError, loading: compositeLoading } = usePolling(getBtcComposite, 30000);
   const { data: portfolio, loading: portfolioLoading } = usePolling(getBtcPortfolio, 30000);
-  const { data: trades } = usePolling(getBtcTrades, 60000);
+  const { data: trades } = usePolling(getBtcLiveActivity, 10000);
   const { data: candles, loading: candlesLoading } = usePolling(() => getBtcCandles("minute5", 72), 60000);
   const { data: news } = usePolling(getBtcNews, 120000);
   const { data: filters } = usePolling(getBtcFilters, 30000);
@@ -71,7 +71,7 @@ export default function BtcPage() {
   const btcSummary = portfolio?.summary || {};
   const scoreBars = sectionBarData(composite);
   const sentimentValue = Number(composite?.fg_value || 0);
-  const tradeRows = trades?.trades || trades || [];
+  const tradeRows = trades?.rows || trades?.trades || trades || [];
   const newsRows = news?.items || news || [];
   const filterStats = [
     { label: "Funding", value: filters?.funding_rate ?? 0, suffix: "%", tone: (filters?.funding_rate ?? 0) >= 0 ? "profit" : "loss" },
@@ -196,7 +196,7 @@ export default function BtcPage() {
               </div>
               <div style={{ textAlign: "right" }}>
                 <div className="symbol-price">
-                  {krw(Number(portfolio?.summary?.btc_price || portfolio?.summary?.current_price || candleSeries.at(-1)?.value || 0))}
+                  {krw(Number(portfolio?.summary?.btc_price_krw || portfolio?.summary?.btc_price || portfolio?.summary?.current_price || candleSeries.at(-1)?.value || 0))}
                 </div>
                 <div className={Number(currentPosition?.pnl_pct || 0) >= 0 ? "profit" : "loss"} style={{ marginTop: 6, fontWeight: 700 }}>
                   {pct(currentPosition?.pnl_pct || 0)}
@@ -209,7 +209,7 @@ export default function BtcPage() {
           <div className="split-2">
             <GlassCard className="card-pad">
               <div className="panel-title">
-                <h2>Recent Trades</h2>
+                <h2>Recent Activity</h2>
               </div>
               <div className="table-shell">
                 <table>
@@ -217,14 +217,14 @@ export default function BtcPage() {
                     <tr>
                       <th>Time</th>
                       <th>Action</th>
-                      <th>Price</th>
-                      <th>PnL</th>
+                      <th>Result</th>
+                      <th>Confidence</th>
                     </tr>
                   </thead>
                   <tbody>
                     {(tradeRows || []).slice(0, 8).map((trade, index) => (
                       <tr key={trade.id || index}>
-                        <td>{compactTime(trade.created_at || trade.timestamp)}</td>
+                        <td>{compactTime(trade.timestamp_kst || trade.created_at || trade.timestamp)}</td>
                         <td>
                           <span
                             className={`trade-badge ${
@@ -238,9 +238,22 @@ export default function BtcPage() {
                             {trade.action || trade.trade_type || "HOLD"}
                           </span>
                         </td>
-                        <td>{krw(trade.price || trade.entry_price)}</td>
-                        <td className={Number(trade.pnl_pct || 0) >= 0 ? "profit glow-profit mono" : "loss glow-loss mono"}>
-                          {pct(trade.pnl_pct || 0)}
+                        <td>
+                          <span
+                            className={`trade-badge ${
+                              String(trade.result || "").toUpperCase() === "EXECUTED"
+                                ? "badge-buy"
+                                : String(trade.result || "").toUpperCase() === "SKIP"
+                                  ? "badge-hold"
+                                  : "badge-sell"
+                            }`.trim()}
+                            title={trade.message || ""}
+                          >
+                            {trade.result || "UNKNOWN"}
+                          </span>
+                        </td>
+                        <td className="mono">
+                          {typeof trade.confidence === "number" ? `${Math.round(trade.confidence)}%` : "--"}
                         </td>
                       </tr>
                     ))}
@@ -327,7 +340,7 @@ export default function BtcPage() {
             ) : currentPosition ? (
               <div className="tabular-list">
                 <div className="kv-row"><span className="subtle">Entry</span><span className="mono">{krw(currentPosition.entry_price || 0)}</span></div>
-                <div className="kv-row"><span className="subtle">Current</span><span className="mono">{krw(currentPosition.current_price || currentPosition.market_price || 0)}</span></div>
+                <div className="kv-row"><span className="subtle">Current</span><span className="mono">{krw(currentPosition.current_price_krw || currentPosition.current_price || currentPosition.market_price || 0)}</span></div>
                 <div className="kv-row"><span className="subtle">PnL</span><span className={Number(currentPosition.pnl_pct || 0) >= 0 ? "profit mono glow-profit" : "loss mono glow-loss"}>{pct(currentPosition.pnl_pct || 0)}</span></div>
                 <div className="kv-row"><span className="subtle">Size</span><span className="mono">{currentPosition.quantity || currentPosition.size || "--"}</span></div>
                 <div className="kv-row"><span className="subtle">Side</span><span className="mono">{currentPosition.side || currentPosition.position_side || "OPEN"}</span></div>

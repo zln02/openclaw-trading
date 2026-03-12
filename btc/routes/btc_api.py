@@ -1,7 +1,8 @@
 """BTC-related API endpoints."""
-import os, time, json, requests, asyncio
-from datetime import datetime
+import os, time, json, requests, asyncio, re
+from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Query
 from fastapi.responses import HTMLResponse
 import psutil
@@ -9,7 +10,7 @@ import psutil
 import sys as _sys
 _sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from common.supabase_client import get_supabase
-from common.config import BTC_LOG, BRAIN_PATH, MEMORY_PATH
+from common.config import BTC_LOG, BRAIN_PATH, LOG_DIR, MEMORY_PATH
 from common.logger import get_logger
 
 log = get_logger("btc_api")
@@ -33,6 +34,14 @@ _trend_cache = {"value": "SIDEWAYS", "time": 0}
 _fx_cache = {"rate": 1300.0, "time": 0}  # USD to KRW fallback
 NEWS_CACHE_TTL = 300
 FX_CACHE_TTL = 3600
+_AGENT_DECISION_RE = re.compile(
+    r"신호:\s*(BUY|SELL|HOLD|NO_POSITION)\s*\(신뢰도:\s*([0-9.]+)%\)(?:\s*→\s*([A-Z_]+))?"
+)
+_AGENT_STATUS_RE = re.compile(r"\s—\s(BUY|SELL|HOLD|NO_POSITION)\b")
+_TRADE_RESULT_RE = re.compile(
+    r"신호:\s*(BUY|SELL|HOLD|NO_POSITION)\s*\(신뢰도:\s*([0-9.]+)%\)\s*→\s*([A-Z_]+)"
+)
+KST = ZoneInfo("Asia/Seoul")
 
 
 def _refresh_upbit_cache():
@@ -115,6 +124,185 @@ def _get_fx_rate():
         pass
     
     return _fx_cache["rate"]  # Return cached or default (1300)
+
+
+def _tail_text_log(path: Path, limit: int = 80) -> list[str]:
+    if not path.exists():
+        return []
+    raw = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    return [
+        line for line in raw[-limit:]
+        if not line.startswith("declare -x ") and "CRON" not in line[:20]
+    ]
+
+
+def _tail_json_events(name: str, limit: int = 80) -> list[dict]:
+    path = LOG_DIR / "json" / f"{name}.jsonl"
+    if not path.exists():
+        return []
+    rows = []
+    for line in path.read_text(encoding="utf-8", errors="ignore").splitlines()[-limit:]:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return rows
+
+
+def _agent_decisions_from_local_logs(limit: int = 20) -> list[dict]:
+    decisions: list[dict] = []
+    sources = [
+        ("btc", "btc_agent"),
+        ("kr", "stock_agent"),
+        ("us", "us_agent"),
+    ]
+    for market, logger_name in sources:
+        for row in reversed(_tail_json_events(logger_name, limit=400)):
+            event = str(row.get("event") or "").strip()
+            if not event:
+                continue
+            match = _AGENT_DECISION_RE.search(event)
+            if match:
+                decision, confidence, action = match.groups()
+                decisions.append(
+                    {
+                        "id": f"{logger_name}:{row.get('ts')}:{len(decisions)}",
+                        "market": market,
+                        "decision": decision,
+                        "confidence": float(confidence),
+                        "action": (action or "pending").lower(),
+                        "reasoning": event,
+                        "details": event,
+                        "created_at": row.get("ts"),
+                        "source": "local_jsonl",
+                    }
+                )
+                continue
+            if row.get("level") != "TRADE":
+                continue
+            status = _AGENT_STATUS_RE.search(event)
+            if not status:
+                continue
+            decisions.append(
+                {
+                    "id": f"{logger_name}:{row.get('ts')}:{len(decisions)}",
+                    "market": market,
+                    "decision": status.group(1),
+                    "confidence": None,
+                    "action": "pending",
+                    "reasoning": event,
+                    "details": event,
+                    "created_at": row.get("ts"),
+                    "source": "local_jsonl",
+                }
+            )
+    decisions.sort(key=lambda item: item.get("created_at") or "", reverse=True)
+    return decisions[:limit]
+
+
+def _recent_btc_activity_from_logs(limit: int = 20) -> list[dict]:
+    candidate_paths = [
+        Path("/app/external_logs/json/btc_agent.jsonl"),
+        LOG_DIR / "json" / "btc_agent.jsonl",
+    ]
+    path = next((candidate for candidate in candidate_paths if candidate.exists()), None)
+    if path is None:
+        return []
+
+    rows = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    activity: list[dict] = []
+    for line in reversed(rows):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        event = str(payload.get("event") or "").strip()
+        match = _TRADE_RESULT_RE.search(event)
+        if not match:
+            continue
+        action, confidence, result = match.groups()
+        raw_ts = str(payload.get("ts") or "").strip()
+        timestamp_kst = raw_ts
+        timestamp_utc = raw_ts
+        try:
+            utc_dt = datetime.strptime(raw_ts, "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
+            timestamp_utc = utc_dt.isoformat()
+            timestamp_kst = utc_dt.astimezone(KST).isoformat()
+        except Exception:
+            pass
+        activity.append(
+            {
+                "timestamp": raw_ts,
+                "timestamp_utc": timestamp_utc,
+                "timestamp_kst": timestamp_kst,
+                "action": action,
+                "confidence": float(confidence),
+                "result": result,
+                "message": event,
+                "source": "btc_agent_jsonl",
+            }
+        )
+        if len(activity) >= limit:
+            break
+    return activity
+
+
+def _closed_trade_batch_key(row: dict) -> tuple[str, int]:
+    exit_time = str(row.get("exit_time") or "")[:19]
+    exit_price = int(round(float(row.get("exit_price") or 0)))
+    return exit_time, exit_price
+
+
+def _summarize_closed_trade_batches(rows: list[dict]) -> dict:
+    batches: dict[tuple[str, int], dict] = {}
+    for row in rows:
+        key = _closed_trade_batch_key(row)
+        batch = batches.setdefault(
+            key,
+            {
+                "exit_time": key[0],
+                "exit_price": float(row.get("exit_price") or 0),
+                "pnl": 0.0,
+                "entry_krw": 0.0,
+                "count": 0,
+                "exit_reason": "",
+            },
+        )
+        batch["pnl"] += float(row.get("pnl") or 0)
+        batch["entry_krw"] += float(row.get("entry_krw") or 0)
+        batch["count"] += 1
+        if not batch["exit_reason"]:
+            batch["exit_reason"] = row.get("exit_reason") or ""
+
+    items = list(batches.values())
+    wins = len([item for item in items if item["pnl"] > 0])
+    losses = len([item for item in items if item["pnl"] < 0])
+    return {
+        "items": items,
+        "wins": wins,
+        "losses": losses,
+        "closed_count": len(items),
+        "raw_closed_count": len(rows),
+    }
+
+
+def _btc_live_log_lines(limit: int = 80) -> list[str]:
+    text_lines = _tail_text_log(BTC_LOG, limit=limit)
+    if text_lines:
+        return text_lines
+    json_lines = []
+    for row in _tail_json_events("btc_agent", limit=limit):
+        ts = row.get("ts", "")
+        level = row.get("level", "")
+        event = row.get("event", "")
+        json_lines.append(f"[{ts}][openclaw.btc_agent][{level}] {event}".strip())
+    return json_lines[-limit:]
 
 
 def _get_hourly_trend():
@@ -299,17 +487,11 @@ async def api_btc_portfolio():
 
         closed_positions = []
         total_realized_pnl = 0
-        wins = 0
-        losses = 0
         for p in closed_rows:
             pnl = float(p.get("pnl") or 0)
             entry_krw = float(p.get("entry_krw") or 0)
             pnl_pct = (pnl / entry_krw * 100) if entry_krw > 0 else 0
             total_realized_pnl += pnl
-            if pnl > 0:
-                wins += 1
-            elif pnl < 0:
-                losses += 1
             closed_positions.append({
                 "id": p.get("id"),
                 "entry_price": float(p.get("entry_price") or 0),
@@ -324,6 +506,9 @@ async def api_btc_portfolio():
                 "strategy": p.get("strategy") or "",
                 "exit_reason": p.get("exit_reason") or "",
             })
+        closed_summary = _summarize_closed_trade_batches(closed_rows)
+        wins = closed_summary["wins"]
+        losses = closed_summary["losses"]
 
         _refresh_upbit_cache()
         krw_balance = _upbit_cache.get("krw", 0) or 0
@@ -356,7 +541,8 @@ async def api_btc_portfolio():
             "krw_total": krw_total,
             "btc_price_krw": round(cur_price_krw),
             "open_count": len(open_positions),
-            "closed_count": len(closed_rows),
+            "closed_count": closed_summary["closed_count"],
+            "raw_closed_count": closed_summary["raw_closed_count"],
             "total_invested": round(total_invested_open),
             "total_eval": round(total_eval_open),
             "unrealized_pnl": round(unrealized_pnl),
@@ -420,8 +606,14 @@ async def api_btc_filters():
         kimchi = await asyncio.to_thread(get_kimchi_premium)
 
         # 2. 펀딩비 (rate는 이미 % 단위로 반환됨)
-        from common.market_data import get_btc_funding_rate
+        from common.market_data import (
+            get_btc_funding_rate,
+            get_btc_long_short_ratio,
+            get_btc_open_interest,
+        )
         fr = await asyncio.to_thread(get_btc_funding_rate)
+        ls = await asyncio.to_thread(get_btc_long_short_ratio)
+        oi = await asyncio.to_thread(get_btc_open_interest)
         funding_rate = round(float(fr.get("rate", 0)), 4)
         funding_signal = fr.get("signal", "NEUTRAL")
 
@@ -447,6 +639,8 @@ async def api_btc_filters():
             "funding_rate": funding_rate,
             "funding_signal": funding_signal,
             "funding_overheated": funding_signal in ("LONG_CROWDED",),
+            "long_short_ratio": round(float(ls.get("ls_ratio", 1.0) or 1.0), 3),
+            "open_interest": round(float(oi.get("oi_btc", 0) or 0), 2),
             "today_trades": today_count,
             "max_trades_per_day": int(BTC_RISK_DEFAULTS.get("max_trades_per_day", 3)),
             "today_pnl_pct": today_pnl_pct,
@@ -458,6 +652,7 @@ async def api_btc_filters():
         return {
             "kimchi_premium": None, "kimchi_blocked": False,
             "funding_rate": None, "funding_signal": "NEUTRAL", "funding_overheated": False,
+            "long_short_ratio": 1.0, "open_interest": 0,
             "today_trades": 0, "max_trades_per_day": 3,
             "today_pnl_pct": 0, "max_daily_loss": -8.0, "max_drawdown": -15.0,
         }
@@ -474,9 +669,9 @@ async def get_stats():
         buys = [t for t in trades if t.get("action") == "BUY"]
         sells = [t for t in trades if t.get("action") == "SELL"]
         closed = supabase.table("btc_position").select("*").eq("status", "CLOSED").execute().data or []
-
-        wins = len([p for p in closed if (p.get("pnl") or 0) > 0])
-        losses_cnt = len([p for p in closed if (p.get("pnl") or 0) < 0])
+        closed_summary = _summarize_closed_trade_batches(closed)
+        wins = closed_summary["wins"]
+        losses_cnt = closed_summary["losses"]
         total_pnl = sum(float(p.get("pnl") or 0) for p in closed)
         total_krw = sum(float(p.get("entry_krw") or 0) for p in closed)
 
@@ -508,6 +703,8 @@ async def get_stats():
             "winrate": (wins / (wins + losses_cnt) * 100) if (wins + losses_cnt) else 0,
             "wins": wins,
             "losses": losses_cnt,
+            "closed_trade_batches": closed_summary["closed_count"],
+            "raw_closed_positions": closed_summary["raw_closed_count"],
             "total_trades": len(trades),
             "buys": len(buys),
             "sells": len(sells),
@@ -563,13 +760,9 @@ async def get_trades(
 @router.get("/api/logs")
 async def get_logs():
     try:
-        if not BTC_LOG.exists():
+        lines = _btc_live_log_lines(limit=80)
+        if not lines:
             return {"lines": ["로그 파일 없음"]}
-        raw = BTC_LOG.read_text(encoding="utf-8", errors="ignore").splitlines()
-        lines = [
-            l for l in raw[-80:]
-            if not l.startswith("declare -x ") and "CRON" not in l[:20]
-        ]
         return {"lines": lines}
     except Exception as e:
         log.error(f"logs: {e}")
@@ -787,17 +980,53 @@ async def get_brain():
 async def get_agent_decisions(limit: int = 20):
     """최근 에이전트 팀 결정 이력 반환."""
     try:
-        rows = (
-            supabase.table("agent_decisions")
-            .select("*")
-            .order("created_at", desc=True)
-            .limit(limit)
-            .execute()
-        )
-        return {"decisions": rows.data or []}
+        if supabase:
+            rows = (
+                supabase.table("agent_decisions")
+                .select("*")
+                .order("created_at", desc=True)
+                .limit(limit)
+                .execute()
+            )
+            if rows.data:
+                return {"decisions": rows.data}
+        fallback = _agent_decisions_from_local_logs(limit=limit)
+        return {"decisions": fallback, "source": "local_jsonl"}
     except Exception as e:
         log.warning(f"agent_decisions: {e}")
-        return {"decisions": [], "error": str(e)}
+        fallback = _agent_decisions_from_local_logs(limit=limit)
+        return {"decisions": fallback, "error": str(e), "source": "local_jsonl"}
+
+
+@router.get("/api/btc/live-activity")
+async def get_btc_live_activity(limit: int = 20):
+    """최근 BTC 에이전트 활동 로그. 외부 에이전트 jsonl 우선."""
+    try:
+        rows = _recent_btc_activity_from_logs(limit=limit)
+        if rows:
+            return {"rows": rows, "source": "btc_agent_jsonl"}
+
+        fallback = await get_trades(limit=limit)
+        if isinstance(fallback, list):
+            normalized = [
+                {
+                    "timestamp": row.get("timestamp"),
+                    "action": row.get("action"),
+                    "confidence": float(row.get("confidence") or 0),
+                    "result": json.loads(row.get("order_raw") or "{}").get("result", "UNKNOWN")
+                    if isinstance(row.get("order_raw"), str)
+                    else "UNKNOWN",
+                    "message": row.get("reason") or "",
+                    "source": "btc_trades",
+                }
+                for row in fallback
+            ]
+            return {"rows": normalized, "source": "btc_trades"}
+
+        return {"rows": [], "source": "empty"}
+    except Exception as e:
+        log.error(f"btc live activity: {e}")
+        return {"rows": [], "error": str(e)}
 
 
 @router.get("/api/btc/decision-log")

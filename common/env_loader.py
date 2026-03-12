@@ -34,6 +34,23 @@ def _parse_env_file(path: Path) -> dict[str, str]:
     return parsed
 
 
+def _load_secret_dir(path: Path) -> dict[str, str]:
+    parsed: dict[str, str] = {}
+    if not path.exists() or not path.is_dir():
+        return parsed
+    for child in path.iterdir():
+        if not child.is_file():
+            continue
+        key = child.name.strip()
+        if not _ENV_KEY_RE.match(key):
+            continue
+        try:
+            parsed[key] = child.read_text(encoding="utf-8").strip()
+        except Exception:
+            continue
+    return parsed
+
+
 def load_env() -> None:
     """Load openclaw.json env + .env files into os.environ (idempotent)."""
     global _loaded
@@ -63,6 +80,18 @@ def load_env() -> None:
             continue
         try:
             for k, v in _parse_env_file(p).items():
+                os.environ.setdefault(k, v)
+        except Exception:
+            continue
+
+    secret_dirs = [
+        Path("/run/secrets/openclaw"),
+        WORKSPACE / ".docker-secrets",
+        OPENCLAW_ROOT / ".docker-secrets",
+    ]
+    for p in secret_dirs:
+        try:
+            for k, v in _load_secret_dir(p).items():
                 os.environ.setdefault(k, v)
         except Exception:
             continue

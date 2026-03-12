@@ -20,6 +20,7 @@ export const getBtcComposite = () => fetchJSON("/api/btc/composite");
 export const getBtcPortfolio = () => fetchJSON("/api/btc/portfolio");
 export const getBtcStats = () => fetchJSON("/api/stats");
 export const getBtcTrades = () => fetchJSON("/api/trades?limit=20");
+export const getBtcLiveActivity = () => fetchJSONSafe("/api/btc/live-activity?limit=20");
 export const getBtcNews = () => fetchJSON("/api/news");
 export const getBtcSystem = () => fetchJSON("/api/system");
 export const getBtcCandles = (interval = "minute5", count = 100) =>
