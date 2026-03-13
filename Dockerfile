@@ -13,7 +13,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # 소스 코드 복사
 COPY common/ common/
+COPY api/ api/
 COPY btc/ btc/
+COPY dashboard/ dashboard/
 COPY stocks/ stocks/
 COPY agents/ agents/
 COPY quant/ quant/

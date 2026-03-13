@@ -33,7 +33,27 @@ app = FastAPI(title="OpenClaw Trading Dashboard")
 # ── Basic Auth ──────────────────────────────────────────────────────────────
 _security = HTTPBasic(auto_error=False)
 _DASH_USER = os.environ.get("DASHBOARD_USER", "openclaw")
-_DASH_PASS = os.environ.get("DASHBOARD_PASSWORD", "")
+
+
+def _load_dashboard_password() -> str:
+    env_password = os.environ.get("DASHBOARD_PASSWORD", "").strip()
+    if env_password:
+        return env_password
+
+    secret_paths = [
+        Path("/run/secrets/openclaw/DASHBOARD_PASSWORD"),
+        Path(__file__).resolve().parents[1] / ".docker-secrets" / "DASHBOARD_PASSWORD",
+    ]
+    for path in secret_paths:
+        try:
+            if path.exists():
+                return path.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+    return ""
+
+
+_DASH_PASS = _load_dashboard_password()
 
 # 인증 실패 rate limiting: IP당 5분 내 5회 실패 시 잠금
 _AUTH_FAIL: dict = defaultdict(list)
