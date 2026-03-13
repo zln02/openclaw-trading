@@ -199,6 +199,7 @@ class AlertManager:
 
 def _cli() -> int:
     parser = argparse.ArgumentParser(description="Intelligent alert manager")
+    parser.add_argument("--snapshot-file", type=str, default="", help="path to risk snapshot json")
     parser.add_argument("--drawdown", type=float, default=0.0, help="drawdown (-0.03 or -3)")
     parser.add_argument("--var95", type=float, default=0.0, help="VaR95 (0.02 or 2)")
     parser.add_argument("--corr-shift", type=float, default=0.0)
@@ -206,13 +207,23 @@ def _cli() -> int:
     parser.add_argument("--no-telegram", action="store_true")
     args = parser.parse_args()
 
-    out = AlertManager().process(
-        {
+    snapshot = None
+    if args.snapshot_file:
+      try:
+          snapshot = json.loads(Path(args.snapshot_file).read_text(encoding="utf-8"))
+      except Exception as exc:
+          log.warning("snapshot 파일 로드 실패", error=exc, path=args.snapshot_file)
+
+    if snapshot is None:
+        snapshot = {
             "drawdown": args.drawdown,
             "var_95": args.var95,
             "corr_shift": args.corr_shift,
             "volume_spike_ratio": args.volume_spike,
-        },
+        }
+
+    out = AlertManager().process(
+        snapshot,
         send_telegram_alert=not args.no_telegram,
     )
     print(json.dumps(out, ensure_ascii=False, indent=2))

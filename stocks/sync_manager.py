@@ -12,12 +12,14 @@
 - apply 모드에서도 **실제 주문은 절대 내지 않고**, DB 상태만 보수적으로 정리한다.
 """
 
+import os
 import sys
 from datetime import datetime
 
+from supabase import create_client
+
 from kiwoom_client import KiwoomClient
 from common.env_loader import load_env
-from common.supabase_client import create_supabase_client_from_env
 
 
 def _load_env():
@@ -32,10 +34,11 @@ def _log(msg: str, level: str = "INFO"):
 
 
 def get_supabase_client():
-    client = create_supabase_client_from_env()
-    if client is None:
+    url = os.environ.get("SUPABASE_URL", "")
+    key = os.environ.get("SUPABASE_SECRET_KEY", "") or os.environ.get("SUPABASE_KEY", "")
+    if not url or not key:
         raise RuntimeError("SUPABASE_URL / SUPABASE_SECRET_KEY 환경변수가 필요합니다.")
-    return client
+    return create_client(url, key)
 
 
 def fetch_open_positions(sb) -> list:

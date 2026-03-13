@@ -7,14 +7,22 @@
 
 set -u
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CODE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 OPENCLAW_ROOT="${OPENCLAW_CONFIG_DIR:-${OPENCLAW_STATE_DIR:-$HOME/.openclaw}}"
 OPENCLAW_ROOT="${OPENCLAW_ROOT/#\~/$HOME}"
 OPENCLAW_JSON="${OPENCLAW_CONFIG_PATH:-$OPENCLAW_ROOT/openclaw.json}"
 OPENCLAW_ENV="$OPENCLAW_ROOT/.env"
-WORKSPACE="${OPENCLAW_WORKSPACE_DIR:-$OPENCLAW_ROOT/workspace}"
+WORKSPACE="${OPENCLAW_WORKSPACE_DIR:-$CODE_ROOT}"
 WORKSPACE="${WORKSPACE/#\~/$HOME}"
 LOG_DIR="${OPENCLAW_LOG_DIR:-$OPENCLAW_ROOT/logs}"
 LOG_DIR="${LOG_DIR/#\~/$HOME}"
+BRAIN_DIR="${OPENCLAW_BRAIN_PATH:-$OPENCLAW_ROOT/workspace/brain}"
+BRAIN_DIR="${BRAIN_DIR/#\~/$HOME}"
+MEMORY_DIR="${OPENCLAW_MEMORY_PATH:-$OPENCLAW_ROOT/workspace/memory}"
+MEMORY_DIR="${MEMORY_DIR/#\~/$HOME}"
+STRATEGY_JSON="${OPENCLAW_STRATEGY_JSON:-$OPENCLAW_ROOT/workspace/stocks/today_strategy.json}"
+STRATEGY_JSON="${STRATEGY_JSON/#\~/$HOME}"
 
 emit_openclaw_env_pairs() {
     python3 - "$OPENCLAW_JSON" "$OPENCLAW_ENV" "$WORKSPACE" <<'PY'
@@ -31,6 +39,7 @@ env_files = [
 ]
 key_re = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 loaded = {}
+locked_keys = {"OPENCLAW_WORKSPACE_DIR"}
 
 
 def emit(key: str, value: str) -> None:
@@ -46,7 +55,13 @@ if openclaw_json.exists():
     except Exception:
         data = {}
     for key, value in (data.get("env") or {}).items():
-        if key != "shellEnv" and key_re.match(str(key)) and isinstance(value, (str, int, float)) and not isinstance(value, bool):
+        if (
+            key != "shellEnv"
+            and key_re.match(str(key))
+            and key not in locked_keys
+            and isinstance(value, (str, int, float))
+            and not isinstance(value, bool)
+        ):
             loaded.setdefault(str(key), str(value))
     telegram = ((data.get("channels") or {}).get("telegram") or {}).get("botToken")
     if isinstance(telegram, str) and telegram:
@@ -67,7 +82,7 @@ for path in env_files:
             line = line[7:].lstrip()
         key, _, value = line.partition("=")
         key = key.strip()
-        if not key_re.match(key):
+        if not key_re.match(key) or key in locked_keys:
             continue
         value = value.strip()
         if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
@@ -83,7 +98,14 @@ PY
 }
 
 load_openclaw_env() {
-    export OPENCLAW_ROOT OPENCLAW_JSON OPENCLAW_ENV WORKSPACE LOG_DIR
+    export OPENCLAW_CONFIG_DIR="$OPENCLAW_ROOT"
+    export OPENCLAW_STATE_DIR="$OPENCLAW_ROOT"
+    export OPENCLAW_WORKSPACE_DIR="$WORKSPACE"
+    export OPENCLAW_LOG_DIR="$LOG_DIR"
+    export OPENCLAW_BRAIN_PATH="$BRAIN_DIR"
+    export OPENCLAW_MEMORY_PATH="$MEMORY_DIR"
+    export OPENCLAW_STRATEGY_JSON="$STRATEGY_JSON"
+    export OPENCLAW_ROOT OPENCLAW_JSON OPENCLAW_ENV WORKSPACE LOG_DIR BRAIN_DIR MEMORY_DIR STRATEGY_JSON
     while IFS= read -r -d '' key && IFS= read -r -d '' value; do
         export "$key=$value"
     done < <(emit_openclaw_env_pairs)

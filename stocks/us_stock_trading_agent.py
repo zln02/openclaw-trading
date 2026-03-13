@@ -35,6 +35,16 @@ from common.supabase_client import get_supabase
 from common.logger import get_logger
 from common.retry import retry, retry_call
 from common.config import US_TRADING_LOG
+from common.equity_loader import (
+    append_equity_snapshot,
+    get_effective_market_weight,
+    load_drawdown_state,
+    load_equity_curve,
+    load_recent_trades,
+    save_drawdown_state,
+)
+from quant.risk.drawdown_guard import DrawdownGuard, DrawdownGuardState
+from quant.risk.position_sizer import KellyPositionSizer
 
 try:
     from common.sheets_logger import append_trade as _sheets_append
@@ -53,8 +63,8 @@ supabase = get_supabase()
 # 리스크 설정 (미주용)
 # ─────────────────────────────────────────────
 RISK = {
-    "stop_loss": -0.03,
-    "take_profit": 0.06,
+    "stop_loss": -0.035,
+    "take_profit": 0.10,
     "partial_tp_pct": 0.06,
     "partial_tp_ratio": 0.50,
     "trailing_stop": 0.02,
@@ -77,7 +87,6 @@ RISK = {
     "earnings_filter": True,      # 어닝 5일 전 매수 차단
     "max_sector_positions": 2,    # 동일 섹터 최대 2종목
     "volatility_sizing": True,    # ATR 기반 포지션 사이징
-    "dry_run": True,
 }
 
 RULES = {
@@ -93,16 +102,72 @@ STOP_FLAG = Path(__file__).parent / "US_STOP_TRADING"
 
 # 레짐 가중치 사이클 캐시
 _us_regime_adj_cache: Dict = {}
+_us_buy_blocked = False
+_us_drift_cache: Dict = {}
 
 
-def get_us_risk_regime() -> str:
-    """US 신규 진입 차단용 상위 레짐 분류."""
+def _get_us_ml_signal(symbol: str) -> dict:
     try:
-        result = RegimeClassifier().classify()
-        return str(result.get("regime", "TRANSITION")).upper()
+        from us_ml_model import get_ml_signal
+
+        return get_ml_signal(symbol)
     except Exception as e:
-        log(f"US 상위 레짐 조회 실패: {e}", "WARN")
-        return "TRANSITION"
+        return {"action": "HOLD", "confidence": 0.0, "source": f"US_ML_ERROR: {e}"}
+
+
+def _load_us_ml_drift_report(force: bool = False) -> dict:
+    global _us_drift_cache
+    if _us_drift_cache and not force:
+        return _us_drift_cache
+    path = Path(__file__).resolve().parents[1] / "brain" / "ml" / "us" / "drift_report.json"
+    if not path.exists():
+        _us_drift_cache = {}
+        return _us_drift_cache
+    try:
+        import json
+
+        _us_drift_cache = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        _us_drift_cache = {}
+    return _us_drift_cache
+
+
+def _apply_us_drift_gate(signal: dict) -> dict:
+    report = _load_us_ml_drift_report()
+    if not report:
+        return signal
+
+    status = str(report.get("status", "UNKNOWN")).upper()
+    max_psi = float(report.get("max_psi", 0.0) or 0.0)
+    high_psi_count = int(report.get("high_psi_count", 0) or 0)
+    adjusted = dict(signal)
+    base_conf = float(adjusted.get("confidence", 0.0) or 0.0)
+    reason = str(adjusted.get("reason", ""))
+
+    if status == "WARNING":
+        adjusted["confidence"] = max(0.0, round(base_conf - 6.0, 1))
+        adjusted["reason"] = (reason + f" [US_ML_DRIFT:WARNING psi={max_psi:.2f}]").strip()
+        adjusted["drift_status"] = status
+        adjusted["drift_penalty"] = 6.0
+        return adjusted
+
+    if status == "DANGER":
+        if max_psi >= 0.75 or high_psi_count >= 8:
+            adjusted["action"] = "HOLD"
+            adjusted["confidence"] = 0.0
+            adjusted["reason"] = (reason + f" [US_ML_DRIFT_BLOCK psi={max_psi:.2f}]").strip()
+            adjusted["drift_status"] = status
+            adjusted["drift_penalty"] = 100.0
+            return adjusted
+        adjusted["confidence"] = max(0.0, round(base_conf - 12.0, 1))
+        adjusted["reason"] = (reason + f" [US_ML_DRIFT:DANGER psi={max_psi:.2f}]").strip()
+        adjusted["drift_status"] = status
+        adjusted["drift_penalty"] = 12.0
+        return adjusted
+
+    adjusted["drift_status"] = status
+    adjusted["drift_penalty"] = 0.0
+    return adjusted
 
 
 def _get_us_regime_adj() -> Dict:
@@ -112,7 +177,9 @@ def _get_us_regime_adj() -> Dict:
         return _us_regime_adj_cache
     defaults = {"momentum_mult": 1.0, "value_mult": 1.0, "quality_mult": 1.0, "regime": "UNKNOWN"}
     try:
-        regime = get_us_risk_regime()
+        from agents.regime_classifier import RegimeClassifier
+        result = RegimeClassifier().classify()
+        regime = result.get("regime", "TRANSITION")
         _us_regime_adj_cache = {
             "RISK_ON":     {"momentum_mult": 1.25, "value_mult": 0.85, "quality_mult": 1.00},
             "TRANSITION":  {"momentum_mult": 1.00, "value_mult": 1.00, "quality_mult": 1.00},
@@ -157,7 +224,6 @@ def is_us_market_open() -> bool:
 # 시장 레짐 필터 (SPY 200MA + VIX) — common 모듈 위임
 # ─────────────────────────────────────────────
 from common.market_data import get_market_regime  # noqa: E402
-from agents.regime_classifier import RegimeClassifier  # noqa: E402
 
 
 def calc_relative_strength(symbol: str, days: int = 20) -> float:
@@ -272,25 +338,51 @@ def count_today_buys() -> int:
 
 
 def save_trade(trade_type: str, symbol: str, quantity: float, price: float,
-               reason: str = "", score: float = 0, result: str = "OPEN") -> None:
+               reason: str = "", score: float = 0, result: str = "OPEN",
+               ml_score: float = 0.0, ml_confidence: float = 0.0,
+               composite_score: float = 0.0, signal_source: str = "",
+               strategy: str = "", drift_status: str = "",
+               drift_penalty: float = 0.0) -> None:
     if not supabase:
         return
+    payload = {
+        "trade_type": trade_type,
+        "symbol": symbol,
+        "quantity": quantity,
+        "price": price,
+        "reason": reason,
+        "score": score,
+        "result": result,
+        "highest_price": price,
+        "ml_score": ml_score,
+        "ml_confidence": ml_confidence,
+        "composite_score": composite_score,
+        "source": signal_source,
+        "strategy": strategy,
+        "drift_status": drift_status,
+        "drift_penalty": drift_penalty,
+    }
     try:
-        supabase.table(US_TRADE_TABLE).insert({
-            "trade_type": trade_type,
-            "symbol": symbol,
-            "quantity": quantity,
-            "price": price,
-            "reason": reason,
-            "score": score,
-            "result": result,
-            "highest_price": price,
-        }).execute()
+        supabase.table(US_TRADE_TABLE).insert(payload).execute()
     except Exception as e:
-        log(f"DB 저장 실패: {e}", "ERROR")
+        try:
+            basic_payload = {
+                "trade_type": trade_type,
+                "symbol": symbol,
+                "quantity": quantity,
+                "price": price,
+                "reason": reason,
+                "score": score,
+                "result": result,
+                "highest_price": price,
+            }
+            supabase.table(US_TRADE_TABLE).insert(basic_payload).execute()
+            log(f"DB 확장필드 저장 실패, 기본필드로 폴백: {e}", "WARN")
+        except Exception as inner_e:
+            log(f"DB 저장 실패: {inner_e}", "ERROR")
 
 
-def close_position(symbol: str, exit_price: float, reason: str) -> None:
+def close_position(symbol: str, exit_price: float, reason: str, pnl_pct: float | None = None) -> None:
     if not supabase:
         return
     positions = get_position_for_symbol(symbol)
@@ -298,11 +390,14 @@ def close_position(symbol: str, exit_price: float, reason: str) -> None:
         pid = p.get("id")
         if pid:
             try:
-                supabase.table(US_TRADE_TABLE).update({
+                payload = {
                     "result": "CLOSED",
                     "exit_price": exit_price,
                     "exit_reason": reason,
-                }).eq("id", pid).execute()
+                }
+                if pnl_pct is not None:
+                    payload["pnl_pct"] = pnl_pct
+                supabase.table(US_TRADE_TABLE).update(payload).eq("id", pid).execute()
             except Exception as e:
                 log(f"DB 클로즈 실패 (id={pid}): {e}", "ERROR")
 
@@ -339,10 +434,6 @@ def should_buy(symbol: str, score: float, indicators: dict) -> dict:
         return {"action": "HOLD", "reason": f"RSI 극과매수 ({rsi:.0f} > {RULES['buy_rsi_hard_max']})"}
     if vol_ratio < RULES["buy_vol_hard_min"]:
         return {"action": "HOLD", "reason": f"거래량 급감 ({vol_ratio:.2f}x)"}
-
-    risk_regime = get_us_risk_regime()
-    if risk_regime in {"RISK_OFF", "CRISIS"}:
-        return {"action": "HOLD", "reason": f"{risk_regime} 레짐 — 신규 매수 차단"}
 
     # 마켓 레짐 필터
     if RISK.get("market_regime_filter"):
@@ -455,19 +546,36 @@ def should_buy(symbol: str, score: float, indicators: dict) -> dict:
         except Exception:
             pass
 
+    ml = _get_us_ml_signal(symbol)
+    ml_confidence = float(ml.get("confidence", 0) or 0)
+    ml_action = ml.get("action", "HOLD")
+    ml_source = ml.get("source", "US_ML_UNKNOWN")
+
     if cs >= RULES["buy_composite_min"]:
-        return {
+        blended_conf = float(min(95, cs))
+        if ml_confidence > 0:
+            blended_conf = round(blended_conf * 0.6 + ml_confidence * 0.4, 1)
+            reasons.append(f"USML({ml_action}:{ml_confidence:.0f})")
+        return _apply_us_drift_gate({
             "action": "BUY",
-            "confidence": min(95, cs),
+            "confidence": blended_conf,
             "reason": " + ".join(reasons),
-        }
+            "source": "RULE+US_ML" if ml_confidence > 0 else "RULE",
+            "ml_confidence": ml_confidence,
+            "ml_score": ml_confidence,
+            "ml_source": ml_source,
+        })
 
     top_reasons = reasons[:3] if reasons else ["조건미충족"]
-    return {
+    return _apply_us_drift_gate({
         "action": "HOLD",
         "confidence": cs,
         "reason": f"복합스코어 {cs}/{RULES['buy_composite_min']}: {', '.join(top_reasons)}",
-    }
+        "source": "RULE+US_ML" if ml_confidence > 0 else "RULE",
+        "ml_confidence": ml_confidence,
+        "ml_score": ml_confidence,
+        "ml_source": ml_source,
+    })
 
 
 def check_exit(symbol: str, position: dict, indicators: dict) -> Optional[str]:
@@ -521,11 +629,15 @@ def check_exit(symbol: str, position: dict, indicators: dict) -> Optional[str]:
     return None
 
 
-def execute_buy(symbol: str, score: float, indicators: dict) -> dict:
+def execute_buy(symbol: str, score: float, indicators: dict, signal: Optional[dict] = None) -> dict:
     """매수 실행."""
+    global _us_buy_blocked
     price = indicators.get("price", 0)
     if not price:
         return {"result": "NO_PRICE"}
+
+    if _us_buy_blocked:
+        return {"result": "BLOCKED_DRAWDOWN"}
 
     positions = get_open_positions()
     open_symbols = list(set(p.get("symbol") for p in positions))
@@ -558,6 +670,13 @@ def execute_buy(symbol: str, score: float, indicators: dict) -> dict:
     if count_today_buys() >= RISK["max_trades_per_day"]:
         return {"result": "MAX_DAILY_TRADES"}
 
+    target_market_weight = get_effective_market_weight('US')
+    if target_market_weight is not None:
+        open_value = sum(float(p.get("quantity", 0) or 0) * float(p.get("price", 0) or 0) for p in positions)
+        current_weight = open_value / RISK["virtual_capital"] if RISK["virtual_capital"] > 0 else 0.0
+        if current_weight >= target_market_weight + 0.02:
+            return {"result": "OVERWEIGHT_MARKET", "current_weight": current_weight}
+
     # 차등 포지션 사이징: 모멘텀 등급별
     if score >= 75:
         ratio = RISK["invest_ratio_A"]
@@ -566,6 +685,38 @@ def execute_buy(symbol: str, score: float, indicators: dict) -> dict:
     else:
         ratio = RISK["invest_ratio_C"]
     invest_usd = RISK["virtual_capital"] * ratio
+
+    recent_trades = load_recent_trades('us', limit=100)
+    if len(recent_trades) >= 50:
+        wins = [t['pnl_pct'] for t in recent_trades if t.get('pnl_pct', 0) > 0]
+        losses = [abs(t['pnl_pct']) for t in recent_trades if t.get('pnl_pct', 0) < 0]
+        win_rate = len(wins) / len(recent_trades) if recent_trades else 0.0
+        avg_win = sum(wins) / len(wins) if wins else 0.02
+        avg_loss = sum(losses) / len(losses) if losses else 0.03
+        atr_pct = 0.0
+        try:
+            ticker = yf.Ticker(symbol)
+            hist = ticker.history(period="30d")
+            if hist is not None and len(hist) >= 14:
+                close = hist["Close"]
+                diffs = [abs(float(close.iloc[i] - close.iloc[i - 1])) for i in range(1, len(close))]
+                atr = sum(diffs[-14:]) / min(len(diffs), 14)
+                atr_pct = atr / price if price > 0 else 0.0
+        except Exception:
+            pass
+        current_exposure = sum(float(p.get("quantity", 0) or 0) * float(p.get("price", 0) or 0) for p in positions) / max(RISK["virtual_capital"], 1)
+        sizing = KellyPositionSizer().size_position(
+            account_equity=RISK["virtual_capital"],
+            price=price,
+            win_rate=win_rate,
+            payoff_ratio=avg_win / max(avg_loss, 0.001),
+            current_total_exposure=current_exposure,
+            atr_pct=atr_pct,
+            conviction=max(0.0, min(1.0, score / 100.0)),
+        )
+        kelly_invest = RISK["virtual_capital"] * float(sizing.get("capped_fraction", 0.0))
+        if kelly_invest > 0:
+            invest_usd = kelly_invest
 
     # v2: ATR 기반 변동성 사이징
     if RISK.get("volatility_sizing"):
@@ -615,7 +766,29 @@ def execute_buy(symbol: str, score: float, indicators: dict) -> dict:
     except Exception as _fe:
         log(f"  {symbol} 팩터 스냅샷 건너뜀: {_fe}", "WARN")
 
-    save_trade("BUY", symbol, qty, price, reason=f"모멘텀 {score:.0f}", score=score)
+    signal = signal or {}
+    composite_conf = float(signal.get("confidence", score) or score)
+    ml_conf = float(signal.get("ml_confidence", 0.0) or 0.0)
+    source = str(signal.get("source", "RULE"))
+    strategy = "US_ML_BLEND" if ml_conf > 0 else "US_RULE"
+    drift_status = str(signal.get("drift_status", ""))
+    drift_penalty = float(signal.get("drift_penalty", 0.0) or 0.0)
+
+    save_trade(
+        "BUY",
+        symbol,
+        qty,
+        price,
+        reason=signal.get("reason", f"모멘텀 {score:.0f}"),
+        score=score,
+        ml_score=ml_conf,
+        ml_confidence=ml_conf,
+        composite_score=composite_conf,
+        signal_source=source,
+        strategy=strategy,
+        drift_status=drift_status,
+        drift_penalty=drift_penalty,
+    )
 
     # factor_snapshot 컬럼에 별도 저장 (graceful)
     if _factor_snapshot and supabase:
@@ -654,7 +827,7 @@ def execute_sell(symbol: str, position: dict, reason: str, indicators: dict) -> 
     pnl_usd = (price - entry_price) * qty
 
     log(f"🔴 {symbol} 매도: ${price:.2f} × {qty}주 | {pnl_pct:+.2f}% (${pnl_usd:+.1f}) | {reason}", "TRADE")
-    close_position(symbol, price, reason)
+    close_position(symbol, price, reason, pnl_pct=pnl_pct)
 
     send_telegram(
         f"🇺🇸🔴 <b>{symbol} 매도</b>\n"
@@ -708,17 +881,73 @@ def check_stop_loss_take_profit():
 # 메인 사이클
 # ─────────────────────────────────────────────
 def run_trading_cycle():
-    global _us_regime_adj_cache
+    global _us_regime_adj_cache, _us_buy_blocked, _us_drift_cache
+    _us_buy_blocked = False
     _us_regime_adj_cache = {}          # 사이클 시작 시 레짐 캐시 초기화 → _get_us_regime_adj() 재호출
+    _us_drift_cache = {}
     _get_us_regime_adj()               # 사이클 초기에 레짐 로드
 
     log("=" * 50)
-    log("🇺🇸 US 자동매매 사이클 시작 (DRY-RUN)")
+    log("🇺🇸 US 자동매매 사이클 시작")
+
+    try:
+        open_value = sum(float(p.get("quantity", 0) or 0) * float(p.get("price", 0) or 0) for p in get_open_positions())
+        account_equity = max(RISK["virtual_capital"], open_value)
+        append_equity_snapshot('us', account_equity, {"source": "virtual_capital"})
+        tw = get_effective_market_weight('US')
+        if tw is not None:
+            log(f"리밸런싱 목표 비중(US): {tw:.1%}")
+        drift = _load_us_ml_drift_report(force=True)
+        if drift:
+            log(
+                f"US ML Drift: {drift.get('status', 'UNKNOWN')} "
+                f"(max_psi={float(drift.get('max_psi', 0.0) or 0.0):.3f})"
+            )
+    except Exception as e:
+        log(f"US 자산 스냅샷 저장 실패: {e}", "WARN")
 
     if STOP_FLAG.exists():
         log("⛔ US_STOP_TRADING 플래그 감지 — 사이클 스킵")
         send_telegram("🇺🇸⛔ US 자동매매 중지 플래그 감지 — 이번 사이클 스킵")
         return
+
+    equity_curve = load_equity_curve('us')
+    if equity_curve:
+        guard = DrawdownGuard()
+        returns = guard.returns_from_equity_curve(equity_curve)
+        decision = guard.evaluate(
+            daily_return=returns.get('daily_return', 0.0),
+            weekly_return=returns.get('weekly_return', 0.0),
+            monthly_return=returns.get('monthly_return', 0.0),
+            state=DrawdownGuardState(**load_drawdown_state('us')),
+        )
+        save_drawdown_state('us', decision['state'].__dict__)
+        _us_buy_blocked = not decision.get('allow_new_buys', True)
+        triggers = set(decision.get('triggered_rules') or [])
+        if 'WEEKLY_DELEVERAGE' in triggers:
+            ranked = sorted(
+                get_open_positions(),
+                key=lambda p: float(p.get("quantity", 0) or 0) * float(p.get("price", 0) or 0),
+                reverse=True,
+            )
+            total_value = sum(float(p.get("quantity", 0) or 0) * float(p.get("price", 0) or 0) for p in ranked)
+            reduced = 0.0
+            for pos in ranked:
+                symbol = pos.get("symbol", "")
+                if not symbol:
+                    continue
+                indicators = get_us_indicators(symbol) or {"price": float(pos.get("price", 0) or 0)}
+                execute_sell(symbol, pos, "DrawdownGuard DELEVERAGE", indicators)
+                reduced += float(pos.get("quantity", 0) or 0) * float(pos.get("price", 0) or 0)
+                if total_value > 0 and reduced / total_value >= 0.5:
+                    break
+        if decision.get('force_liquidate'):
+            for pos in get_open_positions():
+                symbol = pos.get("symbol", "")
+                if symbol:
+                    indicators = get_us_indicators(symbol) or {"price": float(pos.get("price", 0) or 0)}
+                    execute_sell(symbol, pos, "DrawdownGuard FULL_STOP", indicators)
+            return
 
     # 보유 포지션 손절/익절 먼저
     check_stop_loss_take_profit()
@@ -732,15 +961,10 @@ def run_trading_cycle():
 
     # 시장 레짐 확인
     regime = get_market_regime()
-    risk_regime = get_us_risk_regime()
     log(f"시장 레짐: {regime['regime']} | SPY: {regime.get('spy_price',0):.0f} (200MA: {regime.get('spy_ma200',0):.0f}) | VIX: {regime.get('vix',0):.1f}")
-    log(f"상위 레짐: {risk_regime}")
 
     if regime["regime"] == "BEAR" and RISK.get("market_regime_filter"):
         log("🐻 BEAR 마켓 — 신규 매수 전면 차단")
-        return
-    if risk_regime in {"RISK_OFF", "CRISIS"}:
-        log(f"⛔ {risk_regime} 레짐 — US 신규 매수 전면 차단")
         return
 
     # 모멘텀 스캔 (상위 10% 대상으로 분석)
@@ -783,10 +1007,15 @@ def run_trading_cycle():
                 pass
 
         signal = should_buy(symbol, score, indicators)
+        if signal.get("ml_confidence", 0) > 0:
+            log(
+                f"  US ML: {signal.get('ml_confidence', 0):.1f}% "
+                f"[{signal.get('ml_source', 'US_ML_UNKNOWN')}]"
+            )
         log(f"  신호: {signal['action']} — {signal.get('reason', '')}")
 
         if signal["action"] == "BUY":
-            result = execute_buy(symbol, score, indicators)
+            result = execute_buy(symbol, score, indicators, signal=signal)
             log(f"  결과: {result['result']}")
             if result["result"] == "MAX_DAILY_TRADES":
                 log("오늘 매수 한도 도달 — 스캔 종료")

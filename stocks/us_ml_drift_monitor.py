@@ -1,0 +1,197 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+from datetime import datetime, timedelta
+from pathlib import Path
+
+import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from common.config import BRAIN_PATH
+from common.telegram import Priority, send_telegram
+from us_ml_model import DEFAULT_SYMBOLS, FEATURE_NAMES, _build_feature_frame, load_training_data
+
+
+DRIFT_REPORT_PATH = BRAIN_PATH / "ml" / "us" / "drift_report.json"
+
+
+def _psi(expected: np.ndarray, actual: np.ndarray, bins: int = 10) -> float:
+    expected = expected[np.isfinite(expected)]
+    actual = actual[np.isfinite(actual)]
+    if len(expected) < 20 or len(actual) < 10:
+        return 0.0
+
+    quantiles = np.linspace(0, 1, bins + 1)
+    edges = np.quantile(expected, quantiles)
+    edges = np.unique(edges)
+    if len(edges) < 3:
+        return 0.0
+
+    exp_hist, _ = np.histogram(expected, bins=edges)
+    act_hist, _ = np.histogram(actual, bins=edges)
+    exp_pct = np.clip(exp_hist / max(exp_hist.sum(), 1), 1e-6, None)
+    act_pct = np.clip(act_hist / max(act_hist.sum(), 1), 1e-6, None)
+    return float(np.sum((act_pct - exp_pct) * np.log(act_pct / exp_pct)))
+
+
+def _ks_stat(expected: np.ndarray, actual: np.ndarray) -> dict:
+    expected = expected[np.isfinite(expected)]
+    actual = actual[np.isfinite(actual)]
+    if len(expected) < 20 or len(actual) < 10:
+        return {"statistic": 0.0, "pvalue": 1.0}
+    try:
+        from scipy.stats import ks_2samp
+
+        stat = ks_2samp(expected, actual, alternative="two-sided", mode="auto")
+        return {"statistic": float(stat.statistic), "pvalue": float(stat.pvalue)}
+    except Exception:
+        return {"statistic": 0.0, "pvalue": 1.0}
+
+
+def load_recent_feature_matrix(lookback_days: int = 20) -> np.ndarray:
+    cutoff = (datetime.utcnow().date() - timedelta(days=max(lookback_days, 5))).isoformat()
+    all_rows = []
+    for symbol in DEFAULT_SYMBOLS:
+        try:
+            frame = _build_feature_frame(symbol, period="2y")
+        except Exception:
+            continue
+        if frame.empty:
+            continue
+        recent = frame.loc[frame.index >= cutoff, FEATURE_NAMES]
+        if recent.empty:
+            continue
+        all_rows.extend(recent.astype(float).to_numpy().tolist())
+
+    if not all_rows:
+        return np.empty((0, len(FEATURE_NAMES)))
+    return np.array(all_rows, dtype=float)
+
+
+def build_drift_report() -> dict:
+    X_train, _, data = load_training_data(period="5y")
+    X_recent = load_recent_feature_matrix(lookback_days=20)
+
+    if X_train is None or data is None or len(X_train) == 0:
+        return {"market": "us", "status": "NO_TRAIN_DATA", "generated_at": datetime.utcnow().isoformat() + "Z"}
+    if len(X_recent) == 0:
+        return {"market": "us", "status": "NO_RECENT_DATA", "generated_at": datetime.utcnow().isoformat() + "Z"}
+
+    rows = []
+    max_psi = 0.0
+    high_psi = 0
+    drifted_features = []
+
+    for i, name in enumerate(FEATURE_NAMES):
+        exp = X_train[:, i]
+        act = X_recent[:, i]
+        psi = _psi(exp, act)
+        ks = _ks_stat(exp, act)
+        level = "stable"
+        if psi >= 0.25:
+            level = "danger"
+            high_psi += 1
+        elif psi >= 0.10:
+            level = "warning"
+        if ks["pvalue"] < 0.01:
+            drifted_features.append(name)
+        max_psi = max(max_psi, psi)
+        rows.append(
+            {
+                "feature": name,
+                "psi": round(psi, 6),
+                "ks_statistic": round(ks["statistic"], 6),
+                "ks_pvalue": round(ks["pvalue"], 8),
+                "train_mean": round(float(np.nanmean(exp)), 6),
+                "recent_mean": round(float(np.nanmean(act)), 6),
+                "level": level,
+            }
+        )
+
+    rows.sort(key=lambda x: x["psi"], reverse=True)
+    overall = "stable"
+    action = "none"
+    if max_psi >= 0.25:
+        overall = "danger"
+        action = "retrain"
+    elif max_psi >= 0.10:
+        overall = "warning"
+        action = "alert"
+
+    return {
+        "market": "us",
+        "label": "5d>=3%",
+        "status": overall.upper(),
+        "recommended_action": action,
+        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "recent_samples": int(len(X_recent)),
+        "training_samples": int(len(X_train)),
+        "max_psi": round(max_psi, 6),
+        "high_psi_count": int(high_psi),
+        "ks_drift_features": drifted_features,
+        "top_drift_features": rows[:15],
+        "all_features": rows,
+    }
+
+
+def save_report(report: dict) -> Path:
+    DRIFT_REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    DRIFT_REPORT_PATH.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    return DRIFT_REPORT_PATH
+
+
+def maybe_notify(report: dict) -> None:
+    status = report.get("status", "UNKNOWN")
+    if status == "STABLE":
+        return
+    top = report.get("top_drift_features", [])[:5]
+    summary = ", ".join(f"{r['feature']}({r['psi']:.3f})" for r in top)
+    send_telegram(
+        f"⚠️ US ML Drift {status}\n"
+        f"max PSI: {report.get('max_psi', 0):.3f}\n"
+        f"action: {report.get('recommended_action')}\n"
+        f"top: {summary}",
+        priority=Priority.IMPORTANT if status == "WARNING" else Priority.URGENT,
+    )
+
+
+def maybe_retrain(report: dict, auto_retrain: bool) -> bool:
+    if not auto_retrain or report.get("recommended_action") != "retrain":
+        return False
+    cmd = [
+        str(Path(__file__).resolve().parent.parent / ".venv" / "bin" / "python"),
+        str(Path(__file__).resolve().parent / "us_ml_model.py"),
+        "train",
+    ]
+    try:
+        result = subprocess.run(cmd, check=False, cwd=str(Path(__file__).resolve().parent.parent))
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="US ML feature drift monitor")
+    parser.add_argument("--auto-retrain", action="store_true")
+    parser.add_argument("--no-telegram", action="store_true")
+    args = parser.parse_args()
+
+    report = build_drift_report()
+    save_report(report)
+    if not args.no_telegram:
+        maybe_notify(report)
+    retrained = maybe_retrain(report, auto_retrain=args.auto_retrain)
+    report["auto_retrain_triggered"] = retrained
+    save_report(report)
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

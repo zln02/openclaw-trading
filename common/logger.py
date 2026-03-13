@@ -39,6 +39,19 @@ _JSON_RESERVED = {
 }
 
 
+def _json_safe(value):
+    """Convert logging extras into JSON-safe primitives."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(item) for item in value]
+    return str(value)
+
+
 class JsonFormatter(logging.Formatter):
     """로그 레코드를 JSON-line 으로 직렬화 (구조화 로그용)."""
 
@@ -54,7 +67,7 @@ class JsonFormatter(logging.Formatter):
         # → extra 필드로 JSON에 포함
         for key, val in record.__dict__.items():
             if key not in _JSON_RESERVED and not key.startswith("_"):
-                payload[key] = val
+                payload[key] = _json_safe(val)
         return json.dumps(payload, ensure_ascii=False)
 
 

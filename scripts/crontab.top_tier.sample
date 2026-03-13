@@ -57,5 +57,29 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # 일요일 23:30 — Param Optimizer (attribution + 자율 파라미터 조정 + 텔레그램 알림)
 30 23 * * 0 /home/wlsdud5035/.openclaw/workspace/scripts/run_param_optimizer.sh >> /home/wlsdud5035/.openclaw/logs/param_optimizer.log 2>&1
 
+# 일요일 23:45 — Portfolio Rebalance (risk parity target weights 생성)
+45 23 * * 0 /home/wlsdud5035/.openclaw/workspace/scripts/run_portfolio_rebalance.sh >> /home/wlsdud5035/.openclaw/logs/portfolio_rebalance.log 2>&1
+
+# 매일 07:00 — Cross-Market Portfolio Manager (BTC/KR/US/cash 동적 배분)
+0 7 * * * /home/wlsdud5035/.openclaw/workspace/scripts/run_cross_market_allocation.sh >> /home/wlsdud5035/.openclaw/logs/cross_market_allocation.log 2>&1
+
+# KR ML 드리프트 모니터 (평일 08:25 — PSI/KS 체크, 위험 시 자동 retrain)
+25 8 * * 1-5 /home/wlsdud5035/.openclaw/workspace/.venv/bin/python /home/wlsdud5035/.openclaw/workspace/stocks/ml_drift_monitor.py --auto-retrain >> /home/wlsdud5035/.openclaw/logs/ml_drift_monitor.log 2>&1
+
 # KR ML 재학습 체크 (매일 08:30 — 50회 체결 이상 시 자동 retrain)
-30 8 * * 1-5 /home/wlsdud5035/.openclaw/workspace/.venv/bin/python /home/wlsdud5035/.openclaw/workspace/stocks/ml_model.py retrain 50 >> /home/wlsdud5035/.openclaw/logs/ml_retrain.log 2>&1
+30 8 * * 1-5 /home/wlsdud5035/.openclaw/workspace/.venv/bin/python /home/wlsdud5035/.openclaw/workspace/stocks/ml_model.py retrain 3d 50 >> /home/wlsdud5035/.openclaw/logs/ml_retrain.log 2>&1
+
+# KR 롱숏 DRY-RUN 플랜 (평일 08:40 — long_short_plan.json 생성)
+40 8 * * 1-5 /home/wlsdud5035/.openclaw/workspace/scripts/run_long_short_cycle.sh plan >> /home/wlsdud5035/.openclaw/logs/long_short_cycle.log 2>&1
+
+# KR 롱숏 중립성 모니터 (평일 장중 30분마다)
+0,30 9-15 * * 1-5 /home/wlsdud5035/.openclaw/workspace/scripts/run_neutrality_monitor.sh --no-send >> /home/wlsdud5035/.openclaw/logs/neutrality_monitor.log 2>&1
+
+# BTC DEX/CEX 차익 모니터 (10초 간격으로는 systemd 권장, cron 샘플은 1분)
+*/1 * * * * /home/wlsdud5035/.openclaw/workspace/scripts/run_dex_price_monitor.sh --no-send >> /home/wlsdud5035/.openclaw/logs/dex_price_monitor.log 2>&1
+
+# BTC DEX/CEX 차익 DRY-RUN 실행기 (모니터 직후)
+*/1 * * * * /home/wlsdud5035/.openclaw/workspace/scripts/run_arb_executor.sh --no-send >> /home/wlsdud5035/.openclaw/logs/arb_executor.log 2>&1
+
+# US ML 드리프트 모니터 (평일 22:20 — PSI/KS 체크, 위험 시 자동 retrain)
+20 22 * * 1-5 /home/wlsdud5035/.openclaw/workspace/.venv/bin/python /home/wlsdud5035/.openclaw/workspace/stocks/us_ml_drift_monitor.py --auto-retrain >> /home/wlsdud5035/.openclaw/logs/us_ml_drift_monitor.log 2>&1

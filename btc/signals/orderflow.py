@@ -175,9 +175,9 @@ def fetch_recent_binance_trades(symbol: str = "BTCUSDT", limit: int = 500) -> li
     resp = retry_call(
         requests.get,
         args=(BINANCE_RECENT_TRADES_URL,),
-        kwargs={"params": {"symbol": sym, "limit": lim}, "timeout": 5},
-        max_attempts=3,
-        base_delay=0.5,
+        kwargs={"params": {"symbol": sym, "limit": lim}, "timeout": (2, 3)},
+        max_attempts=1,
+        base_delay=0.25,
         default=None,
     )
     if resp is None or not getattr(resp, "ok", False):
@@ -190,7 +190,7 @@ def fetch_recent_binance_trades(symbol: str = "BTCUSDT", limit: int = 500) -> li
         set_cached(cache_key, out, ttl=2)
         return out
     except Exception as exc:
-        log.warning("recent trades parse failed", symbol=sym, error=exc)
+        log.warning("recent trades parse failed", symbol=sym, error=str(exc))
         return []
 
 
@@ -212,7 +212,13 @@ async def stream_binance_orderflow(
 
         url = BINANCE_TRADE_WS.format(symbol=sym)
         deadline = time.time() + duration
-        async with websockets.connect(url, ping_interval=20, ping_timeout=20) as ws:
+        async with websockets.connect(
+            url,
+            open_timeout=5,
+            close_timeout=1,
+            ping_interval=20,
+            ping_timeout=10,
+        ) as ws:
             while time.time() < deadline:
                 timeout = max(0.1, deadline - time.time())
                 raw = await asyncio.wait_for(ws.recv(), timeout=timeout)
@@ -221,7 +227,7 @@ async def stream_binance_orderflow(
                     analyzer.process_trade(payload)
         return analyzer.snapshot()
     except Exception as exc:
-        log.warning("websocket stream failed; fallback to recent trades", symbol=sym.upper(), error=exc)
+        log.warning("websocket stream failed; fallback to recent trades", symbol=sym.upper(), error=str(exc))
         recent = fetch_recent_binance_trades(sym.upper(), limit=500)
         return analyze_trade_batch(
             recent,

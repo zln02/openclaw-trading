@@ -26,19 +26,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from common.env_loader import load_env
 from common.logger import get_logger
 from common.config import STOCK_PREMARKET_LOG
-from common.supabase_client import create_supabase_client_from_env
 
 load_env()
 _log = get_logger("stock_premarket", STOCK_PREMARKET_LOG)
 
 sys.path.insert(0, str(Path(__file__).parent))
 from kiwoom_client import KiwoomClient
+from supabase import create_client
 
 TG_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
 TG_CHAT = os.environ.get('TELEGRAM_CHAT_ID', '')
 OPENAI_KEY = os.environ.get('OPENAI_API_KEY', '')
+SUPABASE_URL = os.environ.get('SUPABASE_URL', '')
+SUPABASE_KEY = os.environ.get('SUPABASE_SECRET_KEY', '')
 
-supabase = create_supabase_client_from_env()
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if (SUPABASE_URL and SUPABASE_KEY) else None
 kiwoom = KiwoomClient()
 
 STRATEGY_PATH = Path('/home/wlsdud5035/.openclaw/workspace/stocks/today_strategy.json')

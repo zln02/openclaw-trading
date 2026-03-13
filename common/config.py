@@ -20,8 +20,12 @@ WORKSPACE = Path(
 ).expanduser()
 LOG_DIR = Path(os.environ.get("OPENCLAW_LOG_DIR", str(OPENCLAW_ROOT / "logs"))).expanduser()
 
-BRAIN_PATH = WORKSPACE / "brain"
-MEMORY_PATH = WORKSPACE / "memory"
+BRAIN_PATH = Path(
+    os.environ.get("OPENCLAW_BRAIN_PATH", str(OPENCLAW_ROOT / "workspace" / "brain"))
+).expanduser()
+MEMORY_PATH = Path(
+    os.environ.get("OPENCLAW_MEMORY_PATH", str(OPENCLAW_ROOT / "workspace" / "memory"))
+).expanduser()
 
 BTC_LOG = LOG_DIR / "btc_trading.log"
 STOCK_TRADING_LOG = LOG_DIR / "stock_trading.log"
@@ -31,7 +35,12 @@ STOCK_COLLECTOR_LOG = LOG_DIR / "stock_collector.log"
 US_TRADING_LOG = LOG_DIR / "us_trading.log"
 DASHBOARD_LOG = LOG_DIR / "dashboard.log"
 
-STRATEGY_JSON = WORKSPACE / "stocks" / "today_strategy.json"
+STRATEGY_JSON = Path(
+    os.environ.get(
+        "OPENCLAW_STRATEGY_JSON",
+        str(OPENCLAW_ROOT / "workspace" / "stocks" / "today_strategy.json"),
+    )
+).expanduser()
 OPENCLAW_JSON = Path(
     os.environ.get("OPENCLAW_CONFIG_PATH", str(OPENCLAW_ROOT / "openclaw.json"))
 ).expanduser()
