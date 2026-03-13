@@ -15,6 +15,15 @@ set -u
 source "$(dirname "$0")/load_env.sh"
 load_openclaw_env
 export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}$WORKSPACE"
+require_openclaw_workspace
+PYTHON_BIN="$WORKSPACE/.venv/bin/python3"
+
+if [ ! -x "$PYTHON_BIN" ]; then
+  echo "Python runtime not found: $PYTHON_BIN" >&2
+  exit 1
+fi
+
+cd "$WORKSPACE"
 
 MODE="${1:-all}"
 KR_SYMBOL="${KR_SYMBOL:-005930}"
@@ -22,7 +31,7 @@ US_SYMBOL="${US_SYMBOL:-AAPL}"
 
 run_py() {
   echo "[TOP_TIER] $(date -Iseconds) RUN: $*"
-  .venv/bin/python3 "$@"
+  "$PYTHON_BIN" "$@"
   rc=$?
   if [ $rc -ne 0 ]; then
     echo "[TOP_TIER][WARN] failed rc=$rc cmd=$*" >&2
@@ -31,7 +40,7 @@ run_py() {
 }
 
 run_phase14() {
-  run_py btc/signals/orderflow.py --symbol BTCUSDT --seconds 15 --window 300 --large-threshold 10
+  run_py btc/signals/orderflow.py --symbol BTCUSDT --recent-only --window 300 --large-threshold 10
   run_py btc/strategies/funding_carry.py --symbol BTCUSDT --notional 10000
   run_py btc/signals/arb_detector.py --alert 5 --reverse -1
   run_py btc/signals/whale_tracker.py

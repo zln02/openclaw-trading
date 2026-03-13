@@ -121,7 +121,7 @@ UPBIT_ACCESS  = os.environ.get("UPBIT_ACCESS_KEY", "")
 UPBIT_SECRET  = os.environ.get("UPBIT_SECRET_KEY", "")
 OPENAI_KEY    = os.environ.get("OPENAI_API_KEY", "")
 DRY_RUN       = os.environ.get("DRY_RUN", "0") == "1"
-RUNTIME_ENV_READY = all([UPBIT_ACCESS, UPBIT_SECRET, OPENAI_KEY])
+RUNTIME_ENV_READY = all([UPBIT_ACCESS, UPBIT_SECRET])
 
 if not RUNTIME_ENV_READY:
     log.warning("필수 환경변수 부족: 에이전트 실행은 제한되지만 API helper import는 허용")
@@ -1585,7 +1585,7 @@ def send_hourly_report():
 if __name__ == "__main__":
     import sys
     if not RUNTIME_ENV_READY:
-        log.critical("필수 환경변수 없음: UPBIT keys + OPENAI_API_KEY 필요")
+        log.critical("필수 환경변수 없음: UPBIT keys 필요")
         sys.exit(1)
     if len(sys.argv) > 1 and sys.argv[1] == "check":
         pos = get_open_position()
