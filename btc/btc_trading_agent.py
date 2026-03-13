@@ -839,7 +839,7 @@ RSI: {rsi_d:.1f} | BB%: {mom.get('bb_pct', 50):.1f}% | 7일수익: {mom.get('ret
 [출력 형식 - JSON만]
 {{"action":"BUY또는SELL또는HOLD","confidence":0~100,"reason":"한줄근거"}}"""
 
-    if client is None:
+    if client is None or not getattr(client, "chat", None):
         action = "HOLD"
         confidence = 55
         reason = "LLM 비활성화 - 룰 기반 중립 유지"

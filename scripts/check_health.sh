@@ -10,6 +10,11 @@ set -euo pipefail
 
 source "$(dirname "$0")/load_env.sh"
 load_openclaw_env
+export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}$WORKSPACE"
+PYTHON_BIN="${WORKSPACE}/.venv/bin/python3"
+if [ ! -x "$PYTHON_BIN" ]; then
+    PYTHON_BIN="python3"
+fi
 
 mkdir -p "$LOG_DIR"
 HEALTH_STATUS_FILE="$LOG_DIR/health_status.json"
@@ -20,6 +25,8 @@ chmod 700 "$CACHE_DIR" 2>/dev/null || true
 
 # 임계치 (분)
 STALE_MINUTES=30
+BTC_CONTAINER="${BTC_CONTAINER_NAME:-openclaw-btc-agent-1}"
+US_CONTAINER="${US_CONTAINER_NAME:-openclaw-us-agent-1}"
 
 # openclaw.json에서 텔레그램 자격증명 추출
 BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-$(python3 -c "
@@ -124,9 +131,34 @@ check_agent_health() {
     fi
 }
 
+check_docker_container_health() {
+    local container_name="$1"
+    local status
+
+    if ! command -v docker >/dev/null 2>&1; then
+        echo "DOCKER_UNAVAILABLE"
+        return
+    fi
+
+    status=$(docker inspect -f '{{.State.Status}}' "$container_name" 2>/dev/null || true)
+    if [ -z "$status" ]; then
+        echo "NO_CONTAINER"
+        return
+    fi
+
+    if [ "$status" = "running" ]; then
+        echo "ok"
+    else
+        echo "$status"
+    fi
+}
+
 # ── 1. BTC 에이전트 체크 (24/7) ───────────────────────────────────────────
 BTC_LOG="$LOG_DIR/btc_trading.log"
-BTC_RESULT=$(check_agent_health "BTC" "$BTC_LOG" "btc_trading_agent.py" "cron")
+BTC_RESULT=$(check_docker_container_health "$BTC_CONTAINER")
+if [ "$BTC_RESULT" = "DOCKER_UNAVAILABLE" ] || [ "$BTC_RESULT" = "NO_CONTAINER" ]; then
+    BTC_RESULT=$(check_agent_health "BTC" "$BTC_LOG" "btc_trading_agent.py" "cron")
+fi
 KR_RESULT="SKIPPED"
 US_RESULT="SKIPPED"
 
@@ -177,7 +209,10 @@ fi
 
 if [ "$US_ACTIVE" -eq 1 ]; then
     US_LOG="$LOG_DIR/us_trading.log"
-    US_RESULT=$(check_agent_health "US" "$US_LOG" "us_stock_trading_agent.py" "cron")
+    US_RESULT=$(check_docker_container_health "$US_CONTAINER")
+    if [ "$US_RESULT" = "DOCKER_UNAVAILABLE" ] || [ "$US_RESULT" = "NO_CONTAINER" ]; then
+        US_RESULT=$(check_agent_health "US" "$US_LOG" "us_stock_trading_agent.py" "cron")
+    fi
     
     echo "US 상태: $US_RESULT"
     
@@ -203,7 +238,7 @@ else
 fi
 
 # ── 5. 상태 스냅샷 기록 ───────────────────────────────────────────────────────
-python3 - "$HEALTH_STATUS_FILE" "$NOW_ISO" "$STALE_MINUTES" "$BTC_RESULT" "$KR_RESULT" "$US_RESULT" "$HTTP_CODE" "$DASHBOARD_URL" <<'PY'
+"$PYTHON_BIN" - "$HEALTH_STATUS_FILE" "$NOW_ISO" "$STALE_MINUTES" "$BTC_RESULT" "$KR_RESULT" "$US_RESULT" "$HTTP_CODE" "$DASHBOARD_URL" <<'PY'
 import json
 import sys
 from pathlib import Path

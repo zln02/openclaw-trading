@@ -8,9 +8,12 @@ services:
       - OPENCLAW_CONFIG_DIR=/app
       - OPENCLAW_WORKSPACE_DIR=/app
       - OPENCLAW_LOG_DIR=/app/logs
+      - OPENCLAW_BRAIN_PATH=/app/brain
+      - OPENCLAW_MEMORY_PATH=/app/memory
       - PYTHONPATH=/app
     volumes:
       - ./brain:/app/brain
+      - ./memory:/app/memory
       - ./certs:/app/certs:ro
       - ./logs:/app/logs
       - ../.openclaw/logs:/app/logs/cron:ro
@@ -32,15 +35,18 @@ services:
 
   btc-agent:
     build: .
-    command: ["python", "btc/btc_trading_agent.py"]
+    command: ["bash", "scripts/run_agent_loop.sh", "600", "btc/btc_trading_agent.py"]
     env_file: .env.runtime
     environment:
       - OPENCLAW_CONFIG_DIR=/app
       - OPENCLAW_WORKSPACE_DIR=/app
       - OPENCLAW_LOG_DIR=/app/logs
+      - OPENCLAW_BRAIN_PATH=/app/brain
+      - OPENCLAW_MEMORY_PATH=/app/memory
       - PYTHONPATH=/app
     volumes:
       - ./brain:/app/brain
+      - ./memory:/app/memory
       - ./logs:/app/logs
       - ./.docker-secrets:/run/local-secrets:ro
     restart: unless-stopped
@@ -63,9 +69,12 @@ services:
       - OPENCLAW_CONFIG_DIR=/app
       - OPENCLAW_WORKSPACE_DIR=/app
       - OPENCLAW_LOG_DIR=/app/logs
+      - OPENCLAW_BRAIN_PATH=/app/brain
+      - OPENCLAW_MEMORY_PATH=/app/memory
       - PYTHONPATH=/app
     volumes:
       - ./brain:/app/brain
+      - ./memory:/app/memory
       - ./logs:/app/logs
       - ./.docker-secrets:/run/local-secrets:ro
     restart: "no"
@@ -80,15 +89,18 @@ services:
 
   us-agent:
     build: .
-    command: ["python", "stocks/us_stock_trading_agent.py"]
+    command: ["bash", "scripts/run_agent_loop.sh", "900", "stocks/us_stock_trading_agent.py"]
     env_file: .env.runtime
     environment:
       - OPENCLAW_CONFIG_DIR=/app
       - OPENCLAW_WORKSPACE_DIR=/app
       - OPENCLAW_LOG_DIR=/app/logs
+      - OPENCLAW_BRAIN_PATH=/app/brain
+      - OPENCLAW_MEMORY_PATH=/app/memory
       - PYTHONPATH=/app
     volumes:
       - ./brain:/app/brain
+      - ./memory:/app/memory
       - ./logs:/app/logs
       - ./.docker-secrets:/run/local-secrets:ro
     restart: unless-stopped
@@ -109,10 +121,13 @@ services:
       - OPENCLAW_CONFIG_DIR=/app
       - OPENCLAW_WORKSPACE_DIR=/app
       - OPENCLAW_LOG_DIR=/app/logs
+      - OPENCLAW_BRAIN_PATH=/app/brain
+      - OPENCLAW_MEMORY_PATH=/app/memory
       - PYTHONPATH=/app
     volumes:
       - ../.openclaw/.env:/app/.env:ro
       - ./brain:/app/brain
+      - ./memory:/app/memory
       - ./logs:/app/logs
       - ./.docker-secrets:/run/local-secrets:ro
     restart: unless-stopped
