@@ -14,7 +14,7 @@ export default function ScoreGauge({ score = 0, label = "복합 스코어", max 
   return (
     <div className="card flex flex-col items-center gap-3 py-6">
       <span className="data-label">{label}</span>
-      <div className={`text-4xl font-bold font-mono ${color}`}>{score}</div>
+      <div className={`numeric text-4xl font-bold ${color}`}>{score}</div>
       <div className="w-full max-w-[200px] h-3 bg-card/50 rounded-full overflow-hidden border border-border/50">
         <div className={`h-full rounded-full transition-all duration-700 ${bg}`} style={{ width: `${pct * 100}%` }} />
       </div>

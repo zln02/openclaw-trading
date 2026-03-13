@@ -1374,6 +1374,17 @@ def execute_trade(
     action = signal.get('action', 'HOLD')
 
     if action == 'BUY':
+        try:
+            from common.circuit_breaker import check_trade_allowed_sync
+
+            breaker = check_trade_allowed_sync("kr")
+            if not breaker.get("allowed", True):
+                log(f"circuit breaker blocked KR buy: {breaker.get('reason')}", "WARN")
+                return {"result": "BLOCKED_CIRCUIT_BREAKER", "reason": breaker.get("reason"), "level": breaker.get("level")}
+        except Exception as exc:
+            log(f"circuit breaker check failed: {exc}", "WARN")
+
+    if action == 'BUY':
         return execute_buy(stock, signal, indicators, kospi, weekly)
     elif action == 'SELL':
         return execute_sell(stock, signal, indicators)

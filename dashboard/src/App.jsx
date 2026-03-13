@@ -1,5 +1,5 @@
 import { Suspense, lazy } from "react";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Route, Routes } from "react-router-dom";
 import Layout from "./components/Layout";
 
 const BtcPage = lazy(() => import("./pages/BtcPage"));
@@ -9,16 +9,9 @@ const AgentsPage = lazy(() => import("./pages/AgentsPage"));
 
 function RouteSkeleton() {
   return (
-    <div
-      className="glass-card"
-      style={{
-        minHeight: 420,
-        display: "grid",
-        placeItems: "center",
-        borderRadius: 24,
-      }}
-    >
-      <div className="subtle">Loading dashboard view…</div>
+    <div className="rounded-[var(--panel-radius)] border border-white/10 bg-white/[0.02] p-6 shadow-[var(--shadow-panel)]">
+      <div className="h-6 w-40 animate-pulse rounded-full bg-white/10" />
+      <div className="mt-4 h-[360px] animate-pulse rounded-[var(--panel-radius-sm)] bg-white/[0.04]" />
     </div>
   );
 }

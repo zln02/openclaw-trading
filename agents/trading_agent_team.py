@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
@@ -29,6 +30,8 @@ if _WS not in sys.path:
 from common.env_loader import load_env
 from common.logger import get_logger
 from common.telegram import send_telegram
+from agents.conflict_resolver import ConflictResolver
+from agents.decision_logger import DecisionLogger
 
 load_env()
 log = get_logger("agent_team")
@@ -331,6 +334,24 @@ def _validate_orchestrator_decision(decision_text: str) -> bool:
     return False
 
 
+def _extract_agent_vote(agent: str, text: str) -> dict[str, Any]:
+    text_upper = str(text or "").upper()
+    action = "HOLD"
+    for candidate in ("BUY", "SELL", "HOLD", "SKIP"):
+        if candidate in text_upper:
+            action = candidate
+            break
+
+    confidence_match = re.search(r"(\d{1,3})(?:\s*%)", str(text or ""))
+    confidence_pct = max(0, min(int(confidence_match.group(1)), 100)) if confidence_match else 50
+    return {
+        "agent": agent,
+        "action": action,
+        "confidence": round(confidence_pct / 100.0, 4),
+        "reasoning": str(text or "")[:2000],
+    }
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # TradingAgentTeam 클래스
 # ══════════════════════════════════════════════════════════════════════════
@@ -421,12 +442,14 @@ class TradingAgentTeam:
         market_analysis: str,
         news_analysis: str,
         risk_analysis: str,
+        resolver_summary: dict[str, Any],
     ) -> str:
         task = (
             f"다음 세 전문가의 분석을 종합해 {self.market.upper()} 최종 매매 결정을 내리세요.\n\n"
             f"### MarketAnalyst 분석\n{market_analysis}\n\n"
             f"### NewsAnalyst 분석\n{news_analysis}\n\n"
             f"### RiskManager 분석\n{risk_analysis}\n\n"
+            f"### ConflictResolver 참고\n{json.dumps(resolver_summary, ensure_ascii=False)}\n\n"
             "BUY / SELL / HOLD 중 하나를 결정하고 log_agent_decision 도구로 기록하세요."
         )
         return _run_sub_agent(
@@ -472,14 +495,55 @@ class TradingAgentTeam:
         news_analysis    = self._run_news_analyst()
         risk_analysis    = self._run_risk_manager()
 
+        market_vote = _extract_agent_vote("market_analyst", market_analysis)
+        news_vote = _extract_agent_vote("news_analyst", news_analysis)
+        risk_vote = _extract_agent_vote("risk_manager", risk_analysis)
+        resolver_summary = ConflictResolver.resolve([market_vote, news_vote, risk_vote])
+
+        for vote in (market_vote, news_vote, risk_vote):
+            DecisionLogger.log_sync(
+                agent_name=vote["agent"],
+                market=self.market,
+                decision_type="analysis",
+                action=vote["action"],
+                reasoning=vote["reasoning"],
+                confidence=vote["confidence"],
+                context={"symbol": self.symbol},
+            )
+
+        if resolver_summary.get("conflict"):
+            DecisionLogger.log_sync(
+                agent_name="orchestrator",
+                market=self.market,
+                decision_type="conflict_resolution",
+                action=resolver_summary["action"],
+                reasoning=resolver_summary["reason"],
+                confidence=float(resolver_summary.get("weighted_scores", {}).get(resolver_summary["action"], 0) or 0),
+                context={"votes": [market_vote, news_vote, risk_vote]},
+            )
+
         orchestrator_out = self._run_orchestrator(
-            market_analysis, news_analysis, risk_analysis
+            market_analysis, news_analysis, risk_analysis, resolver_summary
         )
 
         # 오케스트레이터 결정 검증
         if not _validate_orchestrator_decision(orchestrator_out):
             log.warning("유효한 결정 없음 — HOLD로 처리")
-            orchestrator_out = f"[검증 실패] {orchestrator_out}\n최종 결정: HOLD (신뢰도: 0%)"
+            orchestrator_out = (
+                f"[검증 실패] {orchestrator_out}\n"
+                f"최종 결정: {resolver_summary['action']} (ConflictResolver fallback)"
+            )
+
+        final_vote = _extract_agent_vote("orchestrator", orchestrator_out)
+        DecisionLogger.log_sync(
+            agent_name="orchestrator",
+            market=self.market,
+            decision_type="execution",
+            action=final_vote["action"],
+            reasoning=orchestrator_out,
+            confidence=final_vote["confidence"],
+            context={"symbol": self.symbol, "resolver": resolver_summary},
+        )
 
         reporter_out = self._run_reporter(
             market_analysis, news_analysis, risk_analysis, orchestrator_out

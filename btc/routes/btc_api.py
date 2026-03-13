@@ -781,34 +781,137 @@ async def get_brain():
 
 
 @router.get("/api/agents/decisions")
-async def get_agent_decisions(limit: int = 20):
+@router.get("/api/agent-decisions")
+async def get_agent_decisions(
+    limit: int = 20,
+    market: str | None = Query(default=None),
+    agent: str | None = Query(default=None),
+    action: str | None = Query(default=None),
+):
     """최근 에이전트 팀 결정 이력 반환."""
     try:
-        rows = (
-            supabase.table("agent_decisions")
-            .select("*")
-            .order("created_at", desc=True)
-            .limit(limit)
-            .execute()
-        )
+        query = supabase.table("agent_decisions").select("*")
+        if market and market.lower() != "all":
+            query = query.eq("market", market.lower())
+        if agent and agent.lower() != "all":
+            query = query.eq("agent_name", agent)
+        if action and action.lower() != "all":
+            query = query.eq("action", action.upper())
+        rows = query.order("created_at", desc=True).limit(limit).execute()
         return {"decisions": rows.data or []}
     except Exception as e:
         log.warning(f"agent_decisions: {e}")
         return {"decisions": [], "error": str(e)}
 
 
-@router.get("/api/btc/decision-log")
-async def get_decision_log(limit: int = 20):
-    """BTC 매매 판단 로그 (AI reason + 지표 스냅샷)."""
+@router.get("/api/decisions/{market}")
+async def get_decisions_by_market(market: str, limit: int = 20):
+    """특정 마켓(btc/kr/us)의 에이전트 결정 이력 반환."""
     try:
-        rows = (
-            supabase.table("btc_trades")
-            .select("created_at, action, confidence, reason, composite_score, fear_greed, rsi")
+        data = (
+            supabase.table("agent_decisions")
+            .select("*")
+            .eq("market", market.lower())
             .order("created_at", desc=True)
             .limit(limit)
             .execute()
         )
-        return {"decisions": rows.data or []}
+        return {"decisions": data.data or []}
+    except Exception as e:
+        log.warning(f"decisions/{market}: {e}")
+        return {"decisions": [], "error": str(e)}
+
+
+@router.get("/api/agent-performance")
+async def get_agent_performance(period: str = Query(default="weekly")):
+    try:
+        from agents.agent_performance import AgentPerformanceTracker
+
+        return await AgentPerformanceTracker.fetch_summary(period=period)
+    except Exception as e:
+        log.warning(f"agent_performance: {e}")
+        return {"items": [], "period": period, "error": str(e)}
+
+
+@router.get("/api/risk-metrics")
+async def get_risk_metrics():
+    try:
+        from common.circuit_breaker import build_portfolio_state_sync
+        from quant.cross_market_risk import CrossMarketRisk
+
+        btc_state = await asyncio.to_thread(build_portfolio_state_sync, "btc")
+        kr_state = await asyncio.to_thread(build_portfolio_state_sync, "kr")
+        us_state = await asyncio.to_thread(build_portfolio_state_sync, "us")
+        cross_market = await CrossMarketRisk().check_exposure()
+        return {
+            "circuit_breaker": {
+                "btc": btc_state,
+                "kr": kr_state,
+                "us": us_state,
+            },
+            "cross_market": cross_market,
+        }
+    except Exception as e:
+        log.warning(f"risk_metrics: {e}")
+        return {
+            "circuit_breaker": {},
+            "cross_market": {"risk_level": "UNKNOWN", "correlations": {}},
+            "error": str(e),
+        }
+
+
+@router.get("/api/btc/decision-log")
+async def get_decision_log(limit: int = 20):
+    """BTC 매매 판단 로그 (AI reason + 지표 스냅샷)."""
+    try:
+        if supabase:
+            try:
+                rows = (
+                    supabase.table("agent_decisions")
+                    .select("created_at, action, confidence, reasoning, agent_name, context")
+                    .eq("market", "btc")
+                    .order("created_at", desc=True)
+                    .limit(limit)
+                    .execute()
+                )
+                if rows.data:
+                    return {
+                        "decisions": [
+                            {
+                                "created_at": row.get("created_at"),
+                                "action": row.get("action"),
+                                "confidence": row.get("confidence"),
+                                "reason": row.get("reasoning"),
+                                "agent_name": row.get("agent_name"),
+                                "context": row.get("context"),
+                            }
+                            for row in rows.data
+                        ]
+                    }
+            except Exception:
+                pass
+
+        rows = (
+            supabase.table("btc_trades")
+            .select("*")
+            .order("timestamp", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        normalized = []
+        for row in rows.data or []:
+            normalized.append(
+                {
+                    "created_at": row.get("created_at") or row.get("timestamp"),
+                    "action": row.get("action"),
+                    "confidence": row.get("confidence"),
+                    "reason": row.get("reason"),
+                    "composite_score": row.get("composite_score"),
+                    "fear_greed": row.get("fear_greed"),
+                    "rsi": row.get("rsi"),
+                }
+            )
+        return {"decisions": normalized}
     except Exception as e:
         log.error(f"decision-log 조회 실패: {e}")
         from common.api_utils import api_error

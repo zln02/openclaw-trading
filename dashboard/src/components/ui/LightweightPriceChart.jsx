@@ -1,9 +1,44 @@
-import PropTypes from "prop-types";
-import { AreaSeries, CandlestickSeries, createChart, HistogramSeries } from "lightweight-charts";
-import { useState } from "react";
-import { useEffect, useRef } from "react";
+import { AreaSeries, CandlestickSeries, HistogramSeries, LineSeries, createChart } from "lightweight-charts";
+import { useEffect, useRef, useState } from "react";
 
-export default function LightweightPriceChart({ data = [], title = "BTC Price" }) {
+function toUnixTime(value, index, fallbackStep = 300) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  const parsed = Date.parse(value || "");
+  if (Number.isFinite(parsed)) {
+    return Math.floor(parsed / 1000);
+  }
+  return Math.floor(Date.now() / 1000) - (50 - index) * fallbackStep;
+}
+
+function normalize(data) {
+  return (Array.isArray(data) ? data : []).map((row, index) => ({
+    time: toUnixTime(row?.time || row?.timestamp || row?.date || row?.label, index),
+    open: Number(row?.open ?? row?.value ?? row?.close ?? 0),
+    high: Number(row?.high ?? row?.value ?? row?.close ?? 0),
+    low: Number(row?.low ?? row?.value ?? row?.close ?? 0),
+    close: Number(row?.close ?? row?.value ?? 0),
+    volume: Number(row?.volume ?? 0),
+    value: Number(row?.value ?? row?.close ?? 0),
+  }));
+}
+
+function readColor(name, fallback) {
+  if (typeof window === "undefined") {
+    return fallback;
+  }
+  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return value || fallback;
+}
+
+export default function LightweightPriceChart({
+  data = [],
+  title = "Price",
+  height = 420,
+  showVolume = true,
+  priceLine = true,
+}) {
   const hostRef = useRef(null);
   const [chartError, setChartError] = useState(null);
 
@@ -12,22 +47,34 @@ export default function LightweightPriceChart({ data = [], title = "BTC Price" }
       return undefined;
     }
 
+    const normalized = normalize(data);
+    const hasOhlc = normalized.some((row) => row.open || row.high || row.low);
+    const colors = {
+      grid: readColor("--chart-grid", "rgba(255,255,255,0.03)"),
+      crosshair: readColor("--chart-crosshair", "rgba(255,255,255,0.2)"),
+      up: readColor("--chart-candle-up", "#00d4aa"),
+      down: readColor("--chart-candle-down", "#ff4757"),
+      area: readColor("--accent-us", "#3b82f6"),
+    };
     let chart;
 
     try {
       setChartError(null);
       chart = createChart(hostRef.current, {
         autoSize: true,
+        height,
         layout: {
           background: { color: "transparent" },
-          textColor: "rgba(232,232,239,0.7)",
+          textColor: "rgba(232, 232, 237, 0.72)",
+          fontFamily: "Inter, sans-serif",
         },
         grid: {
-          vertLines: { color: "rgba(255,255,255,0.05)" },
-          horzLines: { color: "rgba(255,255,255,0.05)" },
+          vertLines: { color: colors.grid },
+          horzLines: { color: colors.grid },
         },
         rightPriceScale: {
           borderColor: "rgba(255,255,255,0.08)",
+          scaleMargins: { top: 0.08, bottom: showVolume ? 0.22 : 0.08 },
         },
         timeScale: {
           borderColor: "rgba(255,255,255,0.08)",
@@ -35,31 +82,19 @@ export default function LightweightPriceChart({ data = [], title = "BTC Price" }
           secondsVisible: false,
         },
         crosshair: {
-          vertLine: { color: "rgba(139,92,246,0.5)" },
-          horzLine: { color: "rgba(139,92,246,0.35)" },
+          vertLine: { color: colors.crosshair, width: 1, style: 0 },
+          horzLine: { color: colors.crosshair, width: 1, style: 0 },
         },
       });
 
-      const baseTime = Math.floor(Date.now() / 1000) - data.length * 300;
-      const normalized = data.map((row, index) => ({
-        time: baseTime + index * 300,
-        open: Number(row.open ?? row.value ?? 0),
-        high: Number(row.high ?? row.value ?? 0),
-        low: Number(row.low ?? row.value ?? 0),
-        close: Number(row.close ?? row.value ?? 0),
-        value: Number(row.value ?? row.close ?? 0),
-        volume: Number(row.volume ?? 0),
-      }));
-
-      const hasOhlc = normalized.some((row) => row.open !== row.close || row.high !== row.low);
-
       if (hasOhlc) {
         const candleSeries = chart.addSeries(CandlestickSeries, {
-          upColor: "#22c55e",
-          downColor: "#ef4444",
-          wickUpColor: "#22c55e",
-          wickDownColor: "#ef4444",
-          borderVisible: false,
+          upColor: colors.up,
+          downColor: colors.down,
+          wickUpColor: colors.up,
+          wickDownColor: colors.down,
+          borderUpColor: colors.up,
+          borderDownColor: colors.down,
         });
         candleSeries.setData(
           normalized.map((row) => ({
@@ -71,32 +106,53 @@ export default function LightweightPriceChart({ data = [], title = "BTC Price" }
           })),
         );
 
-        const volumeSeries = chart.addSeries(HistogramSeries, {
-          priceFormat: { type: "volume" },
-          priceScaleId: "",
-          color: "rgba(139,92,246,0.35)",
-        });
-        volumeSeries.priceScale().applyOptions({
-          scaleMargins: { top: 0.82, bottom: 0 },
-        });
-        volumeSeries.setData(
-          normalized.map((row) => ({
-            time: row.time,
-            value: row.volume,
-            color: row.close >= row.open ? "rgba(34,197,94,0.32)" : "rgba(239,68,68,0.32)",
-          })),
-        );
+        if (priceLine && normalized.length > 0) {
+          candleSeries.createPriceLine({
+            price: normalized.at(-1)?.close || 0,
+            color: "rgba(247,147,26,0.8)",
+            lineWidth: 1,
+            axisLabelVisible: true,
+            lineStyle: 2,
+          });
+        }
+
+        if (showVolume) {
+          const volumeSeries = chart.addSeries(HistogramSeries, {
+            priceFormat: { type: "volume" },
+            priceScaleId: "",
+          });
+          volumeSeries.priceScale().applyOptions({
+            scaleMargins: { top: 0.82, bottom: 0 },
+          });
+          volumeSeries.setData(
+            normalized.map((row) => ({
+              time: row.time,
+              value: row.volume,
+              color:
+                row.close >= row.open
+                  ? "rgba(0,212,170,0.26)"
+                  : "rgba(255,71,87,0.26)",
+            })),
+          );
+        }
       } else {
-        const series = chart.addSeries(AreaSeries, {
-          topColor: "rgba(139,92,246,0.18)",
-          bottomColor: "rgba(139,92,246,0.02)",
-          lineColor: "#8b5cf6",
-          lineWidth: 2.4,
+        const areaSeries = chart.addSeries(AreaSeries, {
+          lineColor: colors.area,
+          topColor: "rgba(59,130,246,0.24)",
+          bottomColor: "rgba(59,130,246,0.02)",
+          lineWidth: 2,
         });
-        series.setData(
+        areaSeries.setData(normalized.map((row) => ({ time: row.time, value: row.value })));
+
+        const baselineSeries = chart.addSeries(LineSeries, {
+          color: "rgba(255,255,255,0.18)",
+          lineWidth: 1,
+          lineStyle: 2,
+        });
+        baselineSeries.setData(
           normalized.map((row) => ({
             time: row.time,
-            value: row.value,
+            value: normalized[0]?.value || 0,
           })),
         );
       }
@@ -107,27 +163,24 @@ export default function LightweightPriceChart({ data = [], title = "BTC Price" }
     }
 
     return () => {
-      if (chart) {
-        chart.remove();
-      }
+      chart?.remove();
     };
-  }, [data]);
+  }, [data, height, priceLine, showVolume]);
 
   return (
-    <div className="glass-card glass-card--accent card-pad chart-shell">
-      <div className="panel-title">
-        <h2>{title}</h2>
+    <div className="h-full min-h-[320px] overflow-hidden rounded-[var(--panel-radius-sm)] border border-white/5 bg-[rgba(7,9,14,0.86)]">
+      <div className="flex items-center justify-between border-b border-white/5 px-4 py-3">
+        <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[color:var(--text-muted)]">
+          {title}
+        </span>
       </div>
       {chartError ? (
-        <div className="error-state">{`Chart unavailable: ${chartError}`}</div>
+        <div className="flex h-[calc(100%-44px)] min-h-[220px] items-center justify-center px-6 text-sm text-[color:var(--text-secondary)]">
+          {`Chart unavailable: ${chartError}`}
+        </div>
       ) : (
-        <div ref={hostRef} className="chart-host" />
+        <div ref={hostRef} className="h-[calc(100%-44px)] min-h-[260px] w-full" />
       )}
     </div>
   );
 }
-
-LightweightPriceChart.propTypes = {
-  data: PropTypes.arrayOf(PropTypes.object),
-  title: PropTypes.string,
-};

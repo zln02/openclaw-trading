@@ -912,6 +912,22 @@ def execute_trade(
         payload.update(extra)
         return payload
 
+    if signal["action"] == "BUY":
+        try:
+            from common.circuit_breaker import check_trade_allowed_sync
+
+            breaker = check_trade_allowed_sync("btc")
+            if not breaker.get("allowed", True):
+                log.warning(
+                    "circuit breaker blocked BTC buy",
+                    guard="circuit_breaker",
+                    reason=breaker.get("reason"),
+                    level=breaker.get("level"),
+                )
+                return _result("BLOCKED_CIRCUIT_BREAKER", guard="circuit_breaker", reason=breaker.get("reason"))
+        except Exception as exc:
+            log.warning(f"circuit breaker check failed: {exc}")
+
     # ── 코드 레벨 안전 필터 (복합 스코어 기반) ──
     if signal["action"] == "BUY":
         comp_total = comp["total"] if isinstance(comp, dict) else 0

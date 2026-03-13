@@ -108,8 +108,19 @@ async def favicon():
 @app.get("/health")
 async def health():
     """헬스 체크 — 인증 불필요."""
-    import time
-    return {"status": "ok", "service": "openclaw-dashboard", "uptime_placeholder": int(time.time())}
+    try:
+        from common.health import health_monitor
+
+        payload = await health_monitor.run_checks()
+        payload["service"] = "openclaw-dashboard"
+        return payload
+    except Exception as exc:
+        return {
+            "status": "degraded",
+            "service": "openclaw-dashboard",
+            "components": {},
+            "error": str(exc),
+        }
 
 
 # Serve built React dashboard (production)

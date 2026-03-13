@@ -115,6 +115,31 @@ async def get_market_summary():
         return _market_summary_cache["data"]
     try:
         data = _fetch_market_summary_dict()
+        flattened = {
+            "kospi": data.get("kospi", {}).get("price", 0),
+            "kospi_change": data.get("kospi", {}).get("change", 0),
+            "kospi_change_pct": data.get("kospi", {}).get("change_pct", 0),
+            "kosdaq": data.get("kosdaq", {}).get("price", 0),
+            "kosdaq_change": data.get("kosdaq", {}).get("change", 0),
+            "kosdaq_change_pct": data.get("kosdaq", {}).get("change_pct", 0),
+            "sp500": data.get("sp500", {}).get("price", 0),
+            "nasdaq": data.get("nasdaq", {}).get("price", 0),
+            "nikkei": data.get("nikkei", {}).get("price", 0),
+            "usdkrw": data.get("usdkrw", {}).get("price", 0),
+            "btc": data.get("btc", {}).get("price", 0),
+            "market_index": {
+                "kospi": data.get("kospi", {}).get("price", 0),
+                "kosdaq": data.get("kosdaq", {}).get("price", 0),
+            },
+            "trading_value": 0,
+            "turnover": 0,
+            "turnover_change_pct": 0,
+            "foreign_net_buy": 0,
+            "foreign_ratio": 0,
+            "institution_net_buy": 0,
+            "institution_ratio": 0,
+        }
+        data.update(flattened)
         _market_summary_cache["data"], _market_summary_cache["ts"] = data, now
         return data
     except Exception as e:
@@ -631,12 +656,43 @@ async def get_stocks_daily_pnl(days: int = Query(7, ge=1, le=31)):
 async def get_stocks_strategy():
     try:
         if not STRATEGY_JSON.exists():
-            return {"error": "없음", "strategy": None}
+            return {
+                "error": "없음",
+                "strategy": None,
+                "mode": "전략 대기",
+                "confidence": 0,
+                "ml_prediction": 50,
+                "summary": "전략 파일이 아직 생성되지 않았습니다.",
+                "market_outlook": "중립",
+                "risk_level": "알 수 없음",
+                "top_picks": [],
+            }
         data = json.loads(STRATEGY_JSON.read_text(encoding="utf-8"))
-        return {"strategy": data}
+        outlook = str(data.get("market_outlook") or "중립")
+        confidence_map = {"강세": 78, "중립": 55, "약세": 35}
+        confidence = confidence_map.get(outlook, 50)
+        return {
+            "strategy": data,
+            "mode": f"{outlook} / 리스크 {data.get('risk_level', '보통')}",
+            "confidence": confidence,
+            "ml_prediction": confidence,
+            "summary": data.get("summary") or "전략 요약이 없습니다.",
+            "market_outlook": outlook,
+            "risk_level": data.get("risk_level", "보통"),
+            "top_picks": data.get("top_picks", []),
+            "source": data.get("source", "AI"),
+        }
     except Exception as e:
         log.error(f"strategy: {e}")
-        return {"error": "Internal server error", "strategy": None}
+        return {
+            "error": "Internal server error",
+            "strategy": None,
+            "mode": "전략 오류",
+            "confidence": 0,
+            "ml_prediction": 50,
+            "summary": "전략 정보를 불러오지 못했습니다.",
+            "top_picks": [],
+        }
 
 
 @router.get("/api/stocks/logs")

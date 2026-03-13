@@ -1,304 +1,308 @@
-import { Brain, BriefcaseBusiness, Landmark, ListOrdered, ShieldEllipsis, History } from "lucide-react";
+import { ArrowUpDown, Landmark, PieChart as PieChartIcon, Wallet } from "lucide-react";
 import { useMemo, useState } from "react";
 import {
   getKrTop,
+  getStockChart,
+  getStockMarket,
   getStockPortfolio,
   getStockStrategy,
-  getStockChart,
   getStockTrades,
 } from "../api";
 import usePolling from "../hooks/usePolling";
-import { compactTime, krw, pct } from "../lib/format";
-import DeferredRender from "../components/ui/DeferredRender";
-import GlassCard from "../components/ui/GlassCard";
+import { compactTime, krw, num, pct } from "../lib/format";
+import Badge from "../components/ui/Badge";
+import Card from "../components/ui/Card";
+import LightweightPriceChart from "../components/ui/LightweightPriceChart";
 import LoadingSkeleton from "../components/ui/LoadingSkeleton";
 import { EmptyState } from "../components/ui/PageState";
-import StatCard from "../components/ui/StatCard";
-import SvgDonutChart from "../components/ui/SvgDonutChart";
-import LightweightPriceChart from "../components/ui/LightweightPriceChart";
+import PortfolioPieChart from "../components/ui/PortfolioPieChart";
 
-const COLORS = ["#8b5cf6", "#3b82f6", "#22c55e", "#f59e0b", "#ef4444", "#14b8a6"];
+const PIE_COLORS = ["#00d4aa", "#3b82f6", "#f7931a", "#8ea6ff", "#ffa502", "#ff6b81"];
+
+function gradeVariant(grade) {
+  const key = String(grade || "").toUpperCase();
+  if (key === "A") return "profit";
+  if (key === "B") return "info";
+  if (key === "C") return "warning";
+  if (key === "D") return "loss";
+  return "neutral";
+}
+
+function resolvePositionValue(row) {
+  const evaluation = Number(row?.evaluation || row?.evaluation_amount || row?.market_value || 0);
+  if (evaluation > 0) {
+    return evaluation;
+  }
+  return Number(row?.current_price || row?.price || 0) * Number(row?.quantity || row?.qty || 0);
+}
 
 export default function KrStockPage() {
   const { data: portfolio, loading: portfolioLoading } = usePolling(getStockPortfolio, 30000);
   const { data: topStocks, loading: topLoading } = usePolling(getKrTop, 60000);
   const { data: trades, loading: tradesLoading } = usePolling(getStockTrades, 30000);
+  const { data: market } = usePolling(getStockMarket, 60000);
   const { data: strategy } = usePolling(getStockStrategy, 60000);
 
-  const positions = portfolio?.positions || portfolio?.holdings || [];
-  const donutData = positions.map((row) => ({
-    name: row.stock_name || row.name || row.stock_code,
-    value: Number(row.weight || row.evaluation_amount || row.market_value || 0),
-  }));
-  const mlSignals = useMemo(
-    () => [
-      { label: "Prediction", value: Number(strategy?.ml_prediction || 63), suffix: "%", delta: 4.6, tone: "profit" },
-      { label: "Confidence", value: Number(strategy?.confidence || 71), suffix: "%", delta: 2.4, tone: "profit" },
-      { label: "Risk Score", value: Number(strategy?.risk_score || 38), suffix: "", delta: -1.2, tone: "loss" },
-      { label: "SHAP Rank", value: Number(strategy?.shap_strength || 5), suffix: "", delta: 0.8, tone: "neutral" },
-    ],
-    [strategy],
-  );
-  const watchRows = (topStocks || []).slice(0, 8).map((row) => ({
-    symbol: row.stock_code || row.symbol,
-    score: Number(row.score || 0),
-    delta: Number(row.momentum || row.ret_20d || 0),
-    tag: row.grade || "A",
-  }));
+  const ranking = Array.isArray(topStocks) ? topStocks : [];
+  const positions = portfolio?.positions || portfolio?.open_positions || portfolio?.holdings || [];
+  const [sortKey, setSortKey] = useState("score");
   const [selectedSymbol, setSelectedSymbol] = useState(null);
-  const activeSymbol = selectedSymbol || watchRows[0]?.symbol || positions[0]?.stock_code || "KR EQUITY";
-  const activeTop = (topStocks || []).find((row) => (row.stock_code || row.symbol) === activeSymbol) || topStocks?.[0];
-  const activePosition = positions.find((row) => (row.stock_code || row.symbol) === activeSymbol) || positions[0];
-  const { data: chartData, loading: chartLoading } = usePolling(
-    () => getStockChart(activeSymbol, "1d"),
-    60000,
-    [activeSymbol],
-  );
-  const activeCurve = useMemo(() => {
-    const base = Number(activeTop?.score || activePosition?.factor_score || 50);
-    return [
-      { label: "D-5", value: Math.max(base - 18, 8) },
-      { label: "D-4", value: Math.max(base - 10, 12) },
-      { label: "D-3", value: Math.max(base - 6, 16) },
-      { label: "D-2", value: Math.max(base - 2, 20) },
-      { label: "D-1", value: Math.max(base + 4, 24) },
-      { label: "Now", value: base },
-    ];
-  }, [activeTop, activePosition]);
+  const activeSymbol = selectedSymbol || ranking[0]?.stock_code || positions[0]?.stock_code || positions[0]?.code || "005930";
+  const { data: chartData, loading: chartLoading } = usePolling(() => getStockChart(activeSymbol, "1d"), 60000, [activeSymbol]);
+
   const chartSeries = useMemo(
-    () => (chartData?.candles || []).map((row) => ({
-      time: row.time || row.date,
-      open: Number(row.open || row.open_price || row.close || 0),
-      high: Number(row.high || row.high_price || row.close || 0),
-      low: Number(row.low || row.low_price || row.close || 0),
-      close: Number(row.close || row.close_price || 0),
-      volume: Number(row.volume || 0),
-      value: Number(row.close || row.close_price || 0),
-    })),
+    () =>
+      (chartData?.candles || []).map((row) => ({
+        time: row.time || row.date,
+        open: Number(row.open || row.open_price || row.close || 0),
+        high: Number(row.high || row.high_price || row.close || 0),
+        low: Number(row.low || row.low_price || row.close || 0),
+        close: Number(row.close || row.close_price || 0),
+        volume: Number(row.volume || 0),
+        value: Number(row.close || row.close_price || 0),
+      })),
     [chartData],
   );
 
+  const totalEvaluation = positions.reduce((sum, row) => sum + resolvePositionValue(row), 0);
+  const pieData = positions.map((row, index) => {
+    const value = resolvePositionValue(row);
+    const share = totalEvaluation > 0 ? (value / totalEvaluation) * 100 : Number(row.weight || 0);
+    return {
+      name: row.stock_name || row.name || row.stock_code || row.code,
+      value,
+      displayValue: krw(value),
+      share: `${Number(share || 0).toFixed(1)}%`,
+      color: PIE_COLORS[index % PIE_COLORS.length],
+      subtitle: row.stock_code || row.code,
+    };
+  });
+
+  const sortedRanking = [...ranking].sort((a, b) => Number(b?.[sortKey] || 0) - Number(a?.[sortKey] || 0));
+  const marketCards = [
+    { label: "KOSPI", value: market?.kospi ?? 0, delta: Number(market?.kospi_change_pct || 0) },
+    { label: "KOSDAQ", value: market?.kosdaq ?? 0, delta: Number(market?.kosdaq_change_pct || 0) },
+    { label: "S&P 500", value: num(market?.sp500 ?? 0, 2), delta: 0 },
+    { label: "USD/KRW", value: num(market?.usdkrw ?? 0, 2), delta: 0 },
+    { label: "BTC", value: `$${num(market?.btc ?? 0, 2)}`, delta: 0 },
+    { label: "전략 신뢰도", value: `${Number(strategy?.confidence || 0).toFixed(0)}%`, delta: Number(strategy?.ml_prediction || 50) - 50 },
+  ];
+
+  const actionBadgeVariant = (action) => {
+    const normalized = String(action || "HOLD").toUpperCase();
+    if (normalized === "BUY") return "buy";
+    if (normalized === "SELL") return "sell";
+    if (normalized === "SKIP") return "warning";
+    return "hold";
+  };
+
   return (
-    <div className="stack">
-      <div className="page-heading">
-        <div>
-          <h1>KR Stocks Portfolio Lab</h1>
-          <p>Paper-trading workspace for Kiwoom-connected portfolio control, ML conviction, and ranked momentum selection.</p>
-        </div>
-      </div>
-
-      <div className="tv-terminal">
-        <aside className="tv-left-rail">
-          <GlassCard className="card-pad">
-            <div className="panel-title">
-              <h2>Watchlist</h2>
-            </div>
-            <div className="rail-list">
-              {watchRows.map((row) => (
-                <button
-                  key={row.symbol}
-                  type="button"
-                  className={`watchlist-row ${activeSymbol === row.symbol ? "is-active" : ""}`.trim()}
-                  onClick={() => setSelectedSymbol(row.symbol)}
-                  style={{ color: "inherit", textAlign: "left" }}
-                >
-                  <strong>{row.symbol}</strong>
-                  <span className="mono">{row.score.toFixed(0)}</span>
-                  <span className={row.delta >= 0 ? "profit mono" : "loss mono"}>{pct(row.delta)}</span>
-                  <span className="subtle">{row.tag}</span>
-                </button>
-              ))}
-              {watchRows.length === 0 ? <EmptyState message="No KR symbols." /> : null}
-            </div>
-          </GlassCard>
-
-          <GlassCard className="card-pad">
-            <div className="panel-title">
-              <h2>Strategy Bias</h2>
-            </div>
-            <div className="tabular-list">
-              <div className="kv-row"><span className="subtle">Rule Weight</span><span className="mono">60%</span></div>
-              <div className="kv-row"><span className="subtle">ML Weight</span><span className="mono">40%</span></div>
-              <div className="kv-row"><span className="subtle">Confidence</span><span className="mono">{Number(strategy?.confidence || 71).toFixed(0)}%</span></div>
-              <div className="kv-row"><span className="subtle">Risk Score</span><span className="mono">{Number(strategy?.risk_score || 38).toFixed(0)}</span></div>
-            </div>
-          </GlassCard>
-        </aside>
-
-        <div className="tv-main tv-stack">
-          <DeferredRender height={320}>
-            <GlassCard className="card-pad">
-              <div className="panel-title">
-                <h2>Momentum Curve</h2>
-                <ListOrdered size={18} color="var(--text-secondary)" />
+    <div className="space-y-[var(--content-gap)]">
+      <div className="grid gap-[var(--content-gap)] xl:grid-cols-[1.6fr_1fr]">
+        <Card title="포트폴리오 비중" icon={<PieChartIcon size={14} />} delay={0}>
+          {portfolioLoading ? (
+            <LoadingSkeleton height={420} />
+          ) : pieData.length === 0 ? (
+            <EmptyState message="현재 보유 중인 국내 포지션이 없습니다." />
+          ) : (
+            <div className="space-y-4">
+              <PortfolioPieChart data={pieData} />
+              <div className="overflow-x-auto scrollbar-subtle">
+                <table className="terminal-table">
+                  <thead>
+                    <tr>
+                      <th>종목</th>
+                      <th>수량</th>
+                      <th>현재가</th>
+                      <th>수익률</th>
+                      <th>비중</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {positions.slice(0, 10).map((row, index) => {
+                      const weight = totalEvaluation > 0 ? (resolvePositionValue(row) / totalEvaluation) * 100 : Number(row.weight || 0);
+                      return (
+                        <tr key={row.stock_code || row.code || index}>
+                          <td>
+                            <div>{row.stock_name || row.name || row.stock_code || row.code}</div>
+                            <div className="mt-1 text-xs text-[color:var(--text-muted)]">{row.stock_code || row.code}</div>
+                          </td>
+                          <td className="numeric">{num(row.quantity || row.qty || 0)}</td>
+                          <td className="numeric">{krw(row.current_price || row.price)}</td>
+                          <td className={`numeric ${Number(row.pnl_pct || row.return_pct || 0) >= 0 ? "text-[color:var(--color-profit)]" : "text-[color:var(--color-loss)]"}`}>
+                            {pct(row.pnl_pct || row.return_pct || 0)}
+                          </td>
+                          <td className="numeric">{weight.toFixed(1)}%</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
-              {chartLoading ? (
-                <LoadingSkeleton height={300} />
-              ) : (
-                <LightweightPriceChart title={`${activeSymbol} Price`} data={chartSeries.length > 0 ? chartSeries : activeCurve} />
-              )}
-            </GlassCard>
-          </DeferredRender>
+            </div>
+          )}
+        </Card>
 
-          <GlassCard className="card-pad">
-            <div className="symbol-header">
-              <div>
-                <div className="symbol-code">{activeSymbol}</div>
-                <div className="symbol-meta">
-                  <span className="toolbar-chip">KOSPI/KOSDAQ</span>
-                  <span className="toolbar-chip">Paper Trading</span>
-                  <span className="toolbar-chip mono">{activeTop?.grade || "A"}</span>
+        <Card title="시장 요약" icon={<Landmark size={14} />} delay={1} bodyClassName="space-y-4">
+          <div className="grid grid-cols-2 gap-2">
+            {marketCards.map((item) => (
+              <div key={item.label} className="rounded-xl border border-white/5 bg-white/[0.02] px-3 py-3">
+                <div className="text-[11px] uppercase tracking-[0.14em] text-[color:var(--text-muted)]">{item.label}</div>
+                <div className="mt-2 numeric text-sm text-[color:var(--text-primary)]">{typeof item.value === "string" ? item.value : num(item.value, 2)}</div>
+                <div className={`mt-1 numeric text-xs ${Number(item.delta || 0) >= 0 ? "text-[color:var(--color-profit)]" : "text-[color:var(--color-loss)]"}`}>
+                  {pct(item.delta || 0)}
                 </div>
               </div>
+            ))}
+          </div>
+
+          <div className="rounded-xl border border-white/5 bg-white/[0.02] p-3">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <div className="text-[11px] uppercase tracking-[0.14em] text-[color:var(--text-muted)]">선택 종목</div>
+                <div className="mt-1 text-sm font-semibold text-[color:var(--text-primary)]">{activeSymbol}</div>
+              </div>
+              <Badge variant="kr">{strategy?.mode || "국내 전략"}</Badge>
             </div>
-            <div className="panel-title">
-              <h2>Current Holdings</h2>
-              <BriefcaseBusiness size={18} color="var(--text-secondary)" />
+            <div className="mb-3 rounded-lg border border-white/5 bg-[rgba(255,255,255,0.02)] px-3 py-2 text-sm text-[color:var(--text-secondary)]">
+              {strategy?.summary || strategy?.market_outlook || "전략 요약이 아직 준비되지 않았습니다."}
             </div>
-            <div className="table-shell">
-              <table>
+            {chartLoading ? (
+              <LoadingSkeleton height={220} />
+            ) : (
+              <LightweightPriceChart title={`${activeSymbol} 가격`} data={chartSeries} height={220} />
+            )}
+          </div>
+        </Card>
+      </div>
+
+      <div className="grid gap-[var(--content-gap)] xl:grid-cols-2">
+        <Card
+          title="모멘텀 랭킹"
+          icon={<ArrowUpDown size={14} />}
+          action={
+            <div className="flex gap-1">
+              {[
+                ["score", "룰"],
+                ["ret_5d", "5일"],
+                ["ret_20d", "20일"],
+              ].map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setSortKey(key)}
+                  className={`rounded-full px-2 py-1 text-[11px] ${
+                    sortKey === key ? "bg-white/10 text-white" : "text-[color:var(--text-secondary)]"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          }
+          delay={2}
+          bodyClassName="p-0"
+        >
+          {topLoading ? (
+            <LoadingSkeleton height={420} className="m-4" />
+          ) : (
+            <div className="overflow-x-auto scrollbar-subtle px-4 pb-4">
+              <table className="terminal-table">
                 <thead>
                   <tr>
-                    <th>Name</th>
-                    <th>Qty</th>
-                    <th>Avg</th>
-                    <th>Now</th>
-                    <th>PnL</th>
-                    <th>Factor</th>
+                    <th>순위</th>
+                    <th>종목</th>
+                    <th>5일</th>
+                    <th>20일</th>
+                    <th>현재가</th>
+                    <th>점수</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {positions.slice(0, 12).map((row, index) => {
-                    const pnl = Number(row.pnl_pct || row.return_pct || 0);
-                    const factor = Number(row.factor_score || row.score || 0);
-                    return (
-                      <tr key={row.stock_code || index} className={(row.stock_code || row.symbol) === activeSymbol ? "is-active" : ""}>
-                        <td>
-                          <div>{row.stock_name || row.name || row.stock_code}</div>
-                          <div className="subtle mono" style={{ fontSize: 12 }}>{row.stock_code || "—"}</div>
-                        </td>
-                        <td>{row.quantity || row.qty || 0}</td>
-                        <td>{krw(row.avg_price || row.purchase_price)}</td>
-                        <td>{krw(row.current_price || row.price)}</td>
-                        <td className={pnl >= 0 ? "profit mono" : "loss mono"}>{pct(pnl)}</td>
-                        <td className="mono">{factor.toFixed(0)}</td>
-                      </tr>
-                    );
-                  })}
+                  {sortedRanking.slice(0, 10).map((row, index) => (
+                    <tr
+                      key={row.stock_code || index}
+                      className={activeSymbol === row.stock_code ? "data-flash" : ""}
+                      onClick={() => setSelectedSymbol(row.stock_code)}
+                    >
+                      <td className="numeric text-[color:var(--text-secondary)]">{index + 1}</td>
+                      <td>
+                        <div className="font-medium text-[color:var(--text-primary)]">{row.stock_name || row.stock_code}</div>
+                        <div className="mt-1 text-xs text-[color:var(--text-muted)]">{row.stock_code}</div>
+                      </td>
+                      <td className={`numeric ${Number(row.ret_5d || 0) >= 0 ? "text-[color:var(--color-profit)]" : "text-[color:var(--color-loss)]"}`}>
+                        {pct(row.ret_5d || 0)}
+                      </td>
+                      <td className={`numeric ${Number(row.ret_20d || 0) >= 0 ? "text-[color:var(--color-profit)]" : "text-[color:var(--color-loss)]"}`}>
+                        {pct(row.ret_20d || 0)}
+                      </td>
+                      <td className="numeric">{krw(row.current_price || 0)}</td>
+                      <td>
+                        <Badge variant={gradeVariant(row.grade || (Number(row.score || 0) >= 80 ? "A" : Number(row.score || 0) >= 60 ? "B" : Number(row.score || 0) >= 40 ? "C" : "D"))}>
+                          {num(row.score || row.rule_score || 0)}
+                        </Badge>
+                      </td>
+                    </tr>
+                  ))}
+                  {sortedRanking.length === 0 ? (
+                    <tr>
+                      <td colSpan="6">
+                        <EmptyState message="국내 모멘텀 랭킹 데이터가 없습니다." />
+                      </td>
+                    </tr>
+                  ) : null}
                 </tbody>
               </table>
             </div>
-          </GlassCard>
+          )}
+        </Card>
 
-          <div className="split-2">
-            <GlassCard className="card-pad">
-              <div className="panel-title">
-                <h2>Top Momentum Ranking</h2>
-                <ListOrdered size={18} color="var(--text-secondary)" />
-              </div>
-              {topLoading ? (
-                <LoadingSkeleton height={320} />
-              ) : (
-                <div className="tabular-list">
-                  {(topStocks || []).slice(0, 10).map((row, index) => (
-                    <button
-                      key={row.stock_code || index}
-                      type="button"
-                      className={`watchlist-row ${activeSymbol === row.stock_code ? "is-active" : ""}`.trim()}
-                      onClick={() => setSelectedSymbol(row.stock_code)}
-                      style={{ color: "inherit", textAlign: "left" }}
-                    >
-                      <strong>{row.stock_code}</strong>
-                      <span className="mono">{Number(row.score || 0).toFixed(0)}</span>
-                      <span className={Number(row.momentum || row.ret_20d || 0) >= 0 ? "profit mono" : "loss mono"}>
-                        {pct(row.momentum || row.ret_20d || 0)}
-                      </span>
-                      <span className="subtle">{row.grade || "A"}</span>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </GlassCard>
-
-            <GlassCard className="card-pad">
-              <div className="panel-title">
-                <h2>Trade Timeline</h2>
-                <History size={18} color="var(--text-secondary)" />
-              </div>
-              {tradesLoading ? (
-                <LoadingSkeleton height={320} />
-              ) : (
-                <div className="stack" style={{ gap: 12 }}>
-                  {(trades || []).slice(0, 8).map((trade, index) => {
+        <Card title="거래 기록" icon={<Wallet size={14} />} delay={3} bodyClassName="p-0">
+          {tradesLoading ? (
+            <LoadingSkeleton height={420} className="m-4" />
+          ) : (
+            <div className="overflow-x-auto scrollbar-subtle px-4 pb-4">
+              <table className="terminal-table">
+                <thead>
+                  <tr>
+                    <th>시각</th>
+                    <th>종목</th>
+                    <th>액션</th>
+                    <th>가격</th>
+                    <th>손익</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(trades || []).slice(0, 12).map((trade, index) => {
                     const action = String(trade.trade_type || trade.action || "").toUpperCase();
                     return (
-                      <div key={trade.trade_id || index} className="timeline-row" style={{ gridTemplateColumns: "140px 90px 1fr", borderColor: (trade.stock_code || trade.symbol) === activeSymbol ? "rgba(139,92,246,0.35)" : undefined }}>
-                        <div className="mono subtle">{compactTime(trade.created_at)}</div>
-                        <div className={action === "BUY" ? "profit" : "loss"} style={{ fontWeight: 700 }}>{action || "HOLD"}</div>
-                        <div>
-                          {trade.stock_name || trade.stock_code || "Unknown"} · {krw(trade.price)} ·{" "}
-                          <span className={Number(trade.pnl_pct || 0) >= 0 ? "profit mono" : "loss mono"}>{pct(trade.pnl_pct || 0)}</span>
-                        </div>
-                      </div>
+                      <tr key={trade.trade_id || index}>
+                        <td className="numeric text-[color:var(--text-secondary)]">{compactTime(trade.created_at)}</td>
+                        <td>
+                          <div>{trade.stock_name || trade.stock_code}</div>
+                        </td>
+                        <td>
+                          <Badge variant={actionBadgeVariant(action)}>{action || "HOLD"}</Badge>
+                        </td>
+                        <td className="numeric">{krw(trade.price)}</td>
+                        <td className={`numeric ${Number(trade.pnl_pct || 0) >= 0 ? "text-[color:var(--color-profit)]" : "text-[color:var(--color-loss)]"}`}>
+                          {pct(trade.pnl_pct || 0)}
+                        </td>
+                      </tr>
                     );
                   })}
-                  {(trades || []).length === 0 ? <EmptyState message="No KR trade timeline entries." /> : null}
-                </div>
-              )}
-            </GlassCard>
-          </div>
-        </div>
-
-        <aside className="tv-side">
-          <DeferredRender height={360}>
-            <GlassCard className="card-pad">
-              <div className="panel-title">
-                <h2>Portfolio Allocation</h2>
-                <Landmark size={18} color="var(--text-secondary)" />
-              </div>
-              {portfolioLoading ? (
-                <LoadingSkeleton height={360} />
-              ) : donutData.length === 0 ? (
-                <EmptyState message="No KR positions available." />
-              ) : (
-                <SvgDonutChart data={donutData} colors={COLORS} />
-              )}
-            </GlassCard>
-          </DeferredRender>
-
-          <GlassCard className="card-pad">
-            <div className="panel-title">
-              <h2>ML Signals</h2>
-              <Brain size={18} color="var(--text-secondary)" />
+                  {(trades || []).length === 0 ? (
+                    <tr>
+                      <td colSpan="5">
+                        <EmptyState message="국내 거래 이력이 없습니다." />
+                      </td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
             </div>
-            <div className="tv-section">
-              {mlSignals.map((signal) => (
-                <StatCard
-                  key={signal.label}
-                  label={signal.label}
-                  value={signal.value}
-                  suffix={signal.suffix}
-                  delta={signal.delta}
-                  trend={[{ value: signal.value * 0.76 }, { value: signal.value }]}
-                  tone={signal.tone}
-                  icon={<ShieldEllipsis size={18} />}
-                />
-              ))}
-            </div>
-          </GlassCard>
-
-          <GlassCard className="card-pad">
-            <div className="panel-title">
-              <h2>Selection Summary</h2>
-            </div>
-            <div className="tabular-list">
-              <div className="kv-row"><span className="subtle">Selected</span><span className="mono">{activeSymbol}</span></div>
-              <div className="kv-row"><span className="subtle">Grade</span><span className="mono">{activeTop?.grade || "A"}</span></div>
-              <div className="kv-row"><span className="subtle">Score</span><span className="mono">{Number(activeTop?.score || activePosition?.factor_score || 0).toFixed(0)}</span></div>
-              <div className="kv-row"><span className="subtle">PnL</span><span className={Number(activePosition?.pnl_pct || activePosition?.return_pct || activeTop?.momentum || 0) >= 0 ? "profit mono" : "loss mono"}>{pct(activePosition?.pnl_pct || activePosition?.return_pct || activeTop?.momentum || 0)}</span></div>
-            </div>
-          </GlassCard>
-        </aside>
+          )}
+        </Card>
       </div>
     </div>
   );

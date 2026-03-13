@@ -2,7 +2,7 @@ services:
   dashboard:
     build: .
     ports:
-      - "127.0.0.1:18080:8080"
+      - "8080:8080"
     env_file: .env.runtime
     environment:
       - OPENCLAW_CONFIG_DIR=/app
@@ -13,6 +13,7 @@ services:
       - ./brain:/app/brain
       - ./certs:/app/certs:ro
       - ./logs:/app/logs
+      - ../.openclaw/logs:/app/logs/cron:ro
       - ./.docker-secrets:/run/local-secrets:ro
     restart: unless-stopped
     read_only: true
@@ -87,6 +88,30 @@ services:
       - OPENCLAW_LOG_DIR=/app/logs
       - PYTHONPATH=/app
     volumes:
+      - ./brain:/app/brain
+      - ./logs:/app/logs
+      - ./.docker-secrets:/run/local-secrets:ro
+    restart: unless-stopped
+    read_only: true
+    user: "0:0"
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  telegram-bot:
+    build: .
+    command: ["python", "stocks/telegram_bot.py"]
+    env_file: .env.runtime
+    environment:
+      - OPENCLAW_CONFIG_DIR=/app
+      - OPENCLAW_WORKSPACE_DIR=/app
+      - OPENCLAW_LOG_DIR=/app/logs
+      - PYTHONPATH=/app
+    volumes:
+      - ../.openclaw/.env:/app/.env:ro
       - ./brain:/app/brain
       - ./logs:/app/logs
       - ./.docker-secrets:/run/local-secrets:ro

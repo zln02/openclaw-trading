@@ -289,7 +289,38 @@ async def api_us_logs():
 async def api_us_market():
     data = _get_us_market_summary()
     regime = _get_market_regime()
-    return {"indices": data, "regime": regime}
+    top_payload = _fetch_us_signals()
+    flat = {
+        "sp500": 0.0,
+        "sp500_change_pct": 0.0,
+        "nasdaq": 0.0,
+        "nasdaq_change_pct": 0.0,
+        "dji": 0.0,
+        "dji_change_pct": 0.0,
+        "vix": 0.0,
+        "vix_change_pct": 0.0,
+    }
+    for item in data:
+        name = item.get("name")
+        if name == "S&P 500":
+            flat["sp500"] = item.get("price", 0.0)
+            flat["sp500_change_pct"] = item.get("change_pct", 0.0)
+        elif name == "NASDAQ":
+            flat["nasdaq"] = item.get("price", 0.0)
+            flat["nasdaq_change_pct"] = item.get("change_pct", 0.0)
+        elif name == "Dow Jones":
+            flat["dji"] = item.get("price", 0.0)
+            flat["dji_change_pct"] = item.get("change_pct", 0.0)
+        elif name == "VIX":
+            flat["vix"] = item.get("price", 0.0)
+            flat["vix_change_pct"] = item.get("change_pct", 0.0)
+    return {
+        "indices": data,
+        "regime": regime,
+        "top": top_payload.get("items", []),
+        "momentum": top_payload.get("items", []),
+        **flat,
+    }
 
 
 @router.get("/api/us/realtime/news")
@@ -356,21 +387,24 @@ def _get_market_regime() -> dict:
 @router.get("/api/us/fx")
 async def api_us_fx():
     if _time.time() - _fx_cache["ts"] < 300 and _fx_cache["rate"] > 0:
-        return {"usdkrw": _fx_cache["rate"]}
+        return {"usdkrw": _fx_cache["rate"], "rate": _fx_cache["rate"], "change_pct": 0.0}
     try:
         import yfinance as _yf_fx
         t = _yf_fx.Ticker("USDKRW=X")
         h = t.history(period="5d")
         if h is not None and not h.empty:
             rate = round(float(h["Close"].iloc[-1]), 2)
+            change_pct = 0.0
+            if len(h) >= 2 and float(h["Close"].iloc[-2]) != 0:
+                change_pct = round((float(h["Close"].iloc[-1]) - float(h["Close"].iloc[-2])) / float(h["Close"].iloc[-2]) * 100, 2)
             _fx_cache["ts"] = _time.time()
             _fx_cache["rate"] = rate
-            return {"usdkrw": rate}
+            return {"usdkrw": rate, "rate": rate, "change_pct": change_pct}
     except Exception as e:
         log.error(f"fx: {e}")
     if _fx_cache["rate"] > 0:
-        return {"usdkrw": _fx_cache["rate"]}
-    return {"usdkrw": 1450}
+        return {"usdkrw": _fx_cache["rate"], "rate": _fx_cache["rate"], "change_pct": 0.0}
+    return {"usdkrw": 1450, "rate": 1450, "change_pct": 0.0}
 
 
 # ── helpers ─────────────────────────────────────────────

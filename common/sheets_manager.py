@@ -59,6 +59,10 @@ class AdvancedSheetsManager:
             result = subprocess.run(
                 cmd, capture_output=True, text=True, timeout=30, env=env
             )
+            if result.returncode != 0:
+                stderr = (result.stderr or "").strip()
+                stdout = (result.stdout or "").strip()
+                log.error(f"gog 실행 실패(rc={result.returncode}): {stderr or stdout or args}")
             return result.returncode == 0
         except Exception as e:
             log.error(f"gog 실행 실패: {e}")
@@ -427,13 +431,21 @@ class AdvancedSheetsManager:
         if not self.supabase:
             return []
         try:
-            table = "btc_trades" if market == "btc" else "trade_executions"
+            if market == "btc":
+                table = "btc_trades"
+                time_col = "timestamp"
+            elif market == "us":
+                table = "us_trade_executions"
+                time_col = "created_at"
+            else:
+                table = "trade_executions"
+                time_col = "created_at"
             cutoff = (datetime.now() - timedelta(days=days)).isoformat()
             res = (
                 self.supabase.table(table)
-                .select("pnl,pnl_pct,quantity,price,entry_price,timestamp")
-                .gte("timestamp", cutoff)
-                .order("timestamp")
+                .select("*")
+                .gte(time_col, cutoff)
+                .order(time_col)
                 .execute()
             )
             return res.data or []
@@ -447,7 +459,18 @@ class AdvancedSheetsManager:
             return {"mdd": 0.0, "win_loss_ratio": 0.0, "sharpe": 0.0, "max_pos": 0.0}
 
         pnl_list = [self._safe_float(t.get("pnl")) for t in trades]
-        pnl_pct_list = [self._safe_float(t.get("pnl_pct")) for t in trades]
+        pnl_pct_list = []
+        pos_sizes = []
+        for t in trades:
+            entry_price = self._safe_float(t.get("entry_price") or t.get("price"))
+            price = self._safe_float(t.get("price") or t.get("exit_price") or t.get("entry_price"))
+            quantity = self._safe_float(t.get("quantity"))
+            pnl = self._safe_float(t.get("pnl"))
+            pnl_pct = t.get("pnl_pct")
+            if pnl_pct is None and pnl != 0 and entry_price > 0 and quantity > 0:
+                pnl_pct = pnl / (entry_price * quantity) * 100
+            pnl_pct_list.append(self._safe_float(pnl_pct))
+            pos_sizes.append(price * quantity)
         returns = [p for p in pnl_pct_list if p != 0]
 
         wins = [p for p in pnl_list if p > 0]
@@ -455,12 +478,6 @@ class AdvancedSheetsManager:
         avg_win = sum(wins) / len(wins) if wins else 0
         avg_loss = sum(losses) / len(losses) if losses else 1
         wl_ratio = round(avg_win / avg_loss, 2) if avg_loss > 0 else 0.0
-
-        # 최대 포지션 크기 (가격 × 수량)
-        pos_sizes = [
-            self._safe_float(t.get("price") or t.get("entry_price", 0)) * self._safe_float(t.get("quantity", 0))
-            for t in trades
-        ]
         max_pos = round(max(pos_sizes, default=0), 0)
 
         return {

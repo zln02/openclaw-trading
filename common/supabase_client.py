@@ -3,6 +3,20 @@ from __future__ import annotations
 
 import os
 
+try:
+    from tenacity import retry, reraise, stop_after_attempt, wait_exponential
+except Exception:  # pragma: no cover - optional dependency fallback
+    def retry(*args, **kwargs):
+        def decorator(fn):
+            return fn
+        return decorator
+
+    def stop_after_attempt(*args, **kwargs):
+        return None
+
+    def wait_exponential(*args, **kwargs):
+        return None
+
 _client = None
 
 
@@ -52,3 +66,21 @@ def get_supabase():
 
     _client = create_supabase_client_from_env()
     return _client
+
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=1, max=10),
+    reraise=True,
+)
+def run_query_with_retry(query_fn):
+    """Execute a Supabase query with retry/backoff."""
+    supabase = get_supabase()
+    if not supabase:
+        raise RuntimeError("Supabase client unavailable")
+    return query_fn(supabase)
+
+
+def run_table_query(table: str, query_fn):
+    """Convenience wrapper for table-scoped retryable queries."""
+    return run_query_with_retry(lambda supabase: query_fn(supabase.table(table)))

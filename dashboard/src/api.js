@@ -20,6 +20,9 @@ export const getBtcComposite = () => fetchJSON("/api/btc/composite");
 export const getBtcPortfolio = () => fetchJSON("/api/btc/portfolio");
 export const getBtcStats = () => fetchJSON("/api/stats");
 export const getBtcTrades = () => fetchJSON("/api/trades?limit=20");
+export const getBtcDecisionLog = (limit = 20) =>
+  fetchJSON(`/api/btc/decision-log?limit=${limit}`);
+export const getBtcLogs = () => fetchJSON("/api/logs");
 export const getBtcNews = () => fetchJSON("/api/news");
 export const getBtcSystem = () => fetchJSON("/api/system");
 export const getBtcCandles = (interval = "minute5", count = 100) =>
@@ -78,6 +81,9 @@ export const getUsRealtimeAlt = (symbol) => fetchJSONSafe(`/api/us/realtime/alt/
 // Agents
 export const getAgentDecisions = (limit = 20) =>
   fetchJSONSafe(`/api/agents/decisions?limit=${limit}`);
+export const getAgentPerformance = (period = "weekly") =>
+  fetchJSONSafe(`/api/agent-performance?period=${encodeURIComponent(period)}`);
+export const getRiskMetrics = () => fetchJSONSafe("/api/risk-metrics");
 
 // Health
 export const getHealth = () => fetchJSON("/health");

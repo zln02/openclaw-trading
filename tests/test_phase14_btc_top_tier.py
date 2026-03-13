@@ -3,11 +3,15 @@ from __future__ import annotations
 
 import time
 import unittest
+from unittest.mock import patch
+
+import pandas as pd
 
 from btc.signals.arb_detector import ArbitrageDetector, compute_kimchi_premium
 from btc.signals.orderflow import analyze_trade_batch
 from btc.signals.whale_tracker import classify_whale_activity
 from btc.strategies.funding_carry import build_funding_carry_decision
+from btc import btc_trading_agent as agent
 
 
 class OrderFlowTests(unittest.TestCase):
@@ -78,6 +82,73 @@ class WhaleTrackerTests(unittest.TestCase):
         )
         self.assertEqual(out["signal"], "HODL_SIGNAL")
         self.assertGreater(out["pressure_score"], 0)
+
+
+class BtcTradingAgentSafetyTests(unittest.TestCase):
+    def test_has_valid_market_data_rejects_none(self) -> None:
+        self.assertFalse(agent.has_valid_market_data(None))
+
+    def test_candle_confirmation_requires_breakout_close(self) -> None:
+        df = pd.DataFrame(
+            [
+                {"open": 100, "high": 105, "low": 99, "close": 104, "volume": 1},
+                {"open": 104, "high": 112, "low": 103, "close": 111, "volume": 3},
+                {"open": 111, "high": 113, "low": 110, "close": 112, "volume": 2},
+            ]
+        )
+
+        out = agent.get_candle_confirmation(df)
+
+        self.assertTrue(out["confirmed_breakout"])
+        self.assertTrue(out["bullish_close"])
+        self.assertTrue(out["close_near_high"])
+        self.assertTrue(out["broke_prev_high"])
+
+    def test_execute_trade_blocks_duplicate_buy_when_btc_balance_exists(self) -> None:
+        signal = {"action": "BUY", "confidence": 80, "reason": "test"}
+        indicators = {"price": 100_000_000, "atr": 500_000, "rsi": 50}
+
+        with patch.object(agent.upbit, "get_balance", side_effect=[0.01, 1_000_000]), patch.object(
+            agent, "get_open_position", return_value=None
+        ):
+            out = agent.execute_trade(
+                signal,
+                indicators,
+                fg={"value": 20},
+                volume={"ratio": 1.2},
+                comp={"total": 70},
+                candle_confirmation={"confirmed_breakout": True},
+            )
+
+        self.assertEqual(out["result"], "ALREADY_LONG")
+        self.assertEqual(out["guard"], "already_long_block")
+
+    def test_execute_trade_blocks_volume_spike_buy_without_confirmation(self) -> None:
+        signal = {"action": "BUY", "confidence": 80, "reason": "test"}
+        indicators = {"price": 100_000_000, "atr": 500_000, "rsi": 50}
+
+        with patch.object(agent.upbit, "get_balance", side_effect=[0.0, 1_000_000]), patch.object(
+            agent, "get_open_position", return_value=None
+        ):
+            out = agent.execute_trade(
+                signal,
+                indicators,
+                fg={"value": 25},
+                volume={"ratio": 3.4},
+                comp={"total": 70},
+                candle_confirmation={"confirmed_breakout": False},
+            )
+
+        self.assertEqual(out["result"], "BLOCKED_BREAKOUT_CONFIRMATION")
+        self.assertEqual(out["guard"], "breakout_confirmation_block")
+
+    def test_run_trading_cycle_skips_on_missing_market_data(self) -> None:
+        with patch.object(agent, "check_daily_loss", return_value=False), patch.object(
+            agent, "get_market_data", return_value=None
+        ):
+            out = agent.run_trading_cycle()
+
+        self.assertEqual(out["result"], "MARKET_DATA_UNAVAILABLE")
 
 
 if __name__ == "__main__":

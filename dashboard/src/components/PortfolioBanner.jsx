@@ -14,7 +14,7 @@ function PnlSpan({ val, pct, isKrw = true }) {
   const sign = val >= 0 ? "+" : "−";
   const pctStr = fmtPct(pct);
   return (
-    <span className={`font-mono text-xs ${cls}`}>
+    <span className={`numeric text-xs ${cls}`}>
       {sign}{isKrw ? formatted.slice(1) : `$${Math.abs(val).toFixed(0)}`}
       {pctStr && <span className="opacity-80"> ({pctStr})</span>}
     </span>
@@ -68,12 +68,12 @@ export default function PortfolioBanner() {
           <div className="flex items-baseline gap-3 mb-1.5">
             <div>
               <div className="data-label text-[10px] mb-0.5">총 자산 (KRW)</div>
-              <span className="text-xl font-bold font-mono text-text-primary leading-none">
+              <span className="numeric text-xl font-bold text-text-primary leading-none">
                 {fmtKrw(totalKrw)}
               </span>
             </div>
             {totalKrw > 0 && (
-              <span className={`text-xs font-mono px-1.5 py-0.5 rounded ${
+              <span className={`numeric text-xs px-1.5 py-0.5 rounded ${
                 totalPos ? "bg-profit/15 text-profit" : "bg-loss/15 text-loss"
               }`}>
                 {totalPos ? "+" : ""}{fmtKrw(totalPnl)} ({fmtPct(totalPct)})
@@ -82,7 +82,7 @@ export default function PortfolioBanner() {
           </div>
 
           {/* 트리뷰 */}
-          <div className="font-mono text-xs space-y-0.5">
+          <div className="numeric text-xs space-y-0.5">
             {/* BTC */}
             <div className="flex items-center gap-2 text-text-secondary">
               <span className="text-text-muted select-none">├──</span>
