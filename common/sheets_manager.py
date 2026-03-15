@@ -37,7 +37,9 @@ class AdvancedSheetsManager:
     
     def __init__(self):
         self.supabase = get_supabase()
-        self.gog_path = Path(__file__).resolve().parents[1] / "gog-docker"
+        # gog-docker 로컬 바이너리 우선, 없으면 PATH에서 gog 탐색
+        _local = Path(__file__).resolve().parents[1] / "gog-docker"
+        self.gog_path = _local if _local.exists() else Path("/usr/local/bin/gog")
         self.gog_password = os.getenv("GOG_KEYRING_PASSWORD", "")
         
     def _safe_float(self, value) -> float:

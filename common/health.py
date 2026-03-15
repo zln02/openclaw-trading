@@ -11,7 +11,7 @@ from typing import Any
 
 from common.config import BTC_LOG, DASHBOARD_PORT, DASHBOARD_LOG, LOG_DIR, STOCK_TRADING_LOG, US_TRADING_LOG
 from common.logger import get_logger
-from common.supabase_client import get_supabase
+from common.supabase_client import get_supabase, run_query_with_retry
 from common.telegram import send_telegram
 
 log = get_logger("health")
@@ -40,11 +40,11 @@ async def check_upbit() -> dict[str, Any]:
 
 async def check_supabase() -> dict[str, Any]:
     def _check() -> dict[str, Any]:
-        supabase = get_supabase()
-        if not supabase:
-            raise RuntimeError("Supabase client unavailable")
-        rows = supabase.table("btc_position").select("id").limit(1).execute()
-        return {"rows": len(rows.data or [])}
+        # run_query_with_retry: 연결 끊김 시 자동 재연결 + 3회 재시도
+        result = run_query_with_retry(
+            lambda sb: sb.table("btc_position").select("id").limit(1).execute()
+        )
+        return {"rows": len(result.data or [])}
 
     return await asyncio.to_thread(_check)
 

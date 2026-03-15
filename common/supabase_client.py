@@ -19,6 +19,9 @@ except Exception:  # pragma: no cover - optional dependency fallback
 
 _client = None
 
+# 재연결 트리거 키워드 (httpcore 연결 끊김 에러)
+_RECONNECT_ERRORS = ("Server disconnected", "RemoteProtocolError", "ConnectionError", "Connection reset")
+
 
 def create_supabase_client(url: str, key: str):
     """Create a Supabase client without propagating SDK import/init failures."""
@@ -50,6 +53,12 @@ def create_supabase_client_from_env() -> object | None:
     return create_supabase_client(url, key)
 
 
+def reset_client() -> None:
+    """싱글턴 클라이언트를 초기화하여 다음 호출 시 재연결하게 한다."""
+    global _client
+    _client = None
+
+
 def get_supabase():
     """Supabase 클라이언트를 반환 (지연 초기화, 싱글턴)."""
     global _client
@@ -74,11 +83,19 @@ def get_supabase():
     reraise=True,
 )
 def run_query_with_retry(query_fn):
-    """Execute a Supabase query with retry/backoff."""
+    """Execute a Supabase query with retry/backoff.
+    연결 끊김 에러 발생 시 싱글턴을 리셋하여 재연결 후 재시도한다.
+    """
     supabase = get_supabase()
     if not supabase:
         raise RuntimeError("Supabase client unavailable")
-    return query_fn(supabase)
+    try:
+        return query_fn(supabase)
+    except Exception as exc:
+        # 연결 끊김 에러면 싱글턴 리셋 → tenacity가 재시도 시 새 클라이언트 생성
+        if any(kw in str(exc) for kw in _RECONNECT_ERRORS):
+            reset_client()
+        raise
 
 
 def run_table_query(table: str, query_fn):
