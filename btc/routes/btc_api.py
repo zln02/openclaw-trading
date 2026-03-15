@@ -205,12 +205,24 @@ def _compute_composite_sync():
                        "entry_krw": pos.get("entry_krw", 0),
                        "current_fx_rate": fx_rate}
 
+    buy_threshold = RISK.get("buy_composite_min", 50) if "RISK" in dir() else 50
+    try:
+        from btc.btc_trading_agent import RISK as _BTC_RISK
+        buy_threshold = _BTC_RISK.get("buy_composite_min", 50)
+    except Exception:
+        pass
+
     return {
         "composite": comp,
+        # 프론트엔드 호환을 위한 top-level 편의 키
+        "composite_score": comp.get("total", 0),
+        "bb_score": comp.get("bb", 0),
+        "volume_score": comp.get("vol", 0),
+        "trend_score": comp.get("trend", 0),
         "fg_value": fg_val, "rsi_d": round(rsi_d, 1), "bb_pct": round(bb_pct, 1),
         "vol_ratio_d": round(vol_ratio_d, 2), "trend": trend,
         "ret_7d": round(ret_7d, 1), "ret_30d": round(ret_30d, 1),
-        "buy_threshold": 45,
+        "buy_threshold": buy_threshold,
         "position": pos_pnl,
     }
 

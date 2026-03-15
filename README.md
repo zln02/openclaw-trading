@@ -1,202 +1,206 @@
 # OpenClaw Trading System
 
-<p align="center"><strong>BTC · KR Stocks · US Stocks — Fully Automated Trading Platform with Research-to-Production Loop</strong></p>
+<p align="center"><strong>BTC · KR Stocks · US Stocks — Fully Automated Quantitative Trading Platform</strong></p>
 
 <p align="center">
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/Python-3.11%2B-blue?style=for-the-badge" alt="Python 3.11+" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="MIT License" /></a>
   <img src="https://img.shields.io/badge/BTC-Live%20Trading-orange?style=for-the-badge" alt="BTC Live Trading" />
   <img src="https://img.shields.io/badge/KR-Paper%20Trading-yellow?style=for-the-badge" alt="KR Paper Trading" />
-  <img src="https://img.shields.io/badge/US-DRY--RUN-lightgrey?style=for-the-badge" alt="US DRY-RUN" />
+  <img src="https://img.shields.io/badge/US-Dry--Run-lightgrey?style=for-the-badge" alt="US Dry-Run" />
   <img src="https://img.shields.io/badge/Level%205-Research%20Loop-purple?style=for-the-badge" alt="Level 5 Research Loop" />
   <a href="https://github.com/zln02/openclaw-trading/stargazers"><img src="https://img.shields.io/github/stars/zln02/openclaw-trading?style=for-the-badge&logo=github&label=Stars" alt="GitHub Stars" /></a>
 </p>
 
 <p align="center">
-  <a href="README.ko.md">Korean README</a> ·
+  <a href="README.ko.md">한국어 README</a> ·
   <a href="docs/SCREENSHOT_GUIDE.md">Screenshot Guide</a>
 </p>
 
-- **3-Market Coverage:** BTC (live) + KR Stocks (paper) + US Stocks (dry-run)
-- **Level 5 Research Loop:** Automated alpha discovery → IC/IR validation → parameter auto-tuning
-- **AI Agent Team:** 5 Claude agents support analysis, risk review, and reporting
+---
 
-## Demo
+## Overview
 
-<p align="center">
-  <img src="docs/images/dashboard-btc.png" alt="BTC Dashboard" width="100%" />
-  <br />
-  <strong>BTC Dashboard</strong>
-</p>
-<!-- Add screenshot: docs/screenshots/btc-dashboard.png -->
-<!-- 📸 SCREENSHOT: BTC 대시보드 탭. 캔들차트 + 복합스코어 게이지 + 포지션 카드 + F&G 인디케이터가 보이게 캡처. 브라우저 주소창 제거. 1280x720 권장 -->
+OpenClaw is a production-oriented automated trading platform covering three markets simultaneously:
 
-<p align="center">
-  <img src="docs/images/dashboard-kr.png" alt="KR Stocks" width="100%" />
-  <br />
-  <strong>KR Stocks</strong>
-</p>
-<!-- Add screenshot: docs/screenshots/kr-stocks.png -->
-<!-- 📸 SCREENSHOT: KR 주식 탭. 포트폴리오 원형차트 + 보유종목 테이블 + TOP 모멘텀 랭킹이 보이게 캡처. 1280x720 -->
+| Market | Mode | Broker | Signal Engine |
+|--------|------|--------|---------------|
+| **BTC** | Live | Upbit | 9-factor composite score + regime filter |
+| **KR Stocks** | Paper | Kiwoom | Rule-based + XGBoost ML blend |
+| **US Stocks** | Dry-run | yfinance | Multi-factor momentum ranking |
 
-<p align="center">
-  <img src="docs/images/dashboard-us.png" alt="US Stocks" width="100%" />
-  <br />
-  <strong>US Stocks</strong>
-</p>
-<!-- Add screenshot: docs/screenshots/us-stocks.png -->
-<!-- 📸 SCREENSHOT: US 주식 탭. 시장지수 카드 + 모멘텀 랭킹 테이블 + DRY-RUN 포지션이 보이게 캡처. 1280x720 -->
+The system is self-improving: a weekly research loop evaluates signal IC/IR, auto-tunes parameters, and feeds improvements back into live agents.
+
+---
 
 ## Quick Start
 
 ### Prerequisites
 
-- Python 3.10+
-- Docker & Docker Compose
-- API keys: Upbit, (optional) Kiwoom, Telegram Bot Token
+- Python 3.11+, Docker & Docker Compose
+- Upbit API keys (BTC live trading)
+- Telegram Bot Token (alerts & control)
+- Optional: Kiwoom credentials (KR paper), Supabase project
 
 ```bash
 git clone https://github.com/zln02/openclaw-trading
 cd openclaw-trading
-cp .env.example .env  # Add your API keys
-docker-compose up -d
-open http://localhost:8080
+cp btc/.env.example .env              # Create a base env file
+bash scripts/split_docker_env.sh .env # Generate .env.runtime + .docker-secrets/
+docker compose up -d                  # Launch all services
 ```
+
+The dashboard is available at `http://localhost:8080`. Docker Compose runs 5 services:
+`dashboard`, `btc-agent`, `kr-agent`, `us-agent`, and `telegram-bot`.
+
+---
 
 ## Features
 
 <details>
-<summary><strong>Multi-Market Trading Engine</strong></summary>
+<summary><strong>BTC — Composite Signal Engine</strong></summary>
 
-OpenClaw Trading System runs three market modes in one operational stack:
+The BTC agent runs a 9-factor composite scoring model (0–100 points) on every cycle:
 
-- BTC live trading with composite signals, regime-aware filters, F&G context, and real execution tracking.
-- KR stocks paper trading with rule-based logic, XGBoost overlays, portfolio monitoring, and Kiwoom integration.
-- US stocks dry-run momentum execution with market-state cards, momentum ranking, and simulated order flow.
+| Component | Max Score | Signal Logic |
+|-----------|----------:|-------------|
+| Fear & Greed | 22 | Contrarian — extreme fear = opportunity |
+| RSI (daily) | 20 | Oversold reversal detection |
+| Bollinger Band | 12 | Lower band proximity |
+| Volume (daily) | 10 | Conviction filter |
+| HTF Trend | 12 | EMA-20/50 crossover direction |
+| Funding Rate | 8 | Short crowding = buy signal |
+| News Sentiment | ±8 | Claude/GPT news analysis |
+| Long/Short Ratio | 6 | Contrarian positioning |
+| OI / Whale | 5 | On-chain flow confirmation |
 
-Operational conventions currently used in the repository:
+**Entry conditions:**
+- Composite ≥ 50 (NORMAL regime), ≥ 60 (defensive), ≥ 65 (BEAR/CRISIS)
+- F&G ≤ 15 extreme fear override (bypasses score threshold)
+- Kimchi premium ≥ 5% → buy blocked
+- Funding rate long-crowded → buy blocked
+- Whale signal passed to composite (live)
 
-- BTC runs continuously and is monitored through log freshness and dashboard health probes.
-- KR stock cycles are designed around weekday intraday trading, premarket preparation, and separate check cycles.
-- US flow is intentionally isolated as DRY-RUN while momentum ranking, daily reports, and market APIs are hardened.
+**Risk controls:**
+- Stop-loss: −3% (ATR-based dynamic)
+- Partial TP: +2% → 50%, +3% → 50% remaining, +4% → full exit
+- Trailing stop: adaptive 1.5–2.5%
+- Daily loss limit: −8%
+- Circuit breaker: WARNING at −15%, HALT at −25%, EMERGENCY at −35%
+- Process-level buy lock (thread-safe, 1-hour cooldown)
+- Max 2 trades/day
+
+**Safety fixes applied (2026-03-16):**
+- Upbit order return value validated before DB write
+- All live sell paths now use shared order validation + exception handling
+- `_buy_lock` thread lock properly acquired
+- Circuit breaker imported at module level (always active)
+- `funding_blocked` flag now enforces buy halt
+- Whale signal wired into composite score
+- UTC-aligned timestamps, daily loss checks, and daily buy counters
 
 </details>
 
 <details>
-<summary><strong>Strategy Layer</strong></summary>
+<summary><strong>KR Stocks — Rule + ML Blend</strong></summary>
 
-The system combines multiple signal families rather than a single indicator:
+- **Signal:** Rule-based RSI/BB/MACD score blended with XGBoost ML model (50/50 weight)
+- **ML:** Multi-horizon XGBoost (3d/5d/10d) + LightGBM + CatBoost stacking ensemble
+- **Walk-forward validation:** TimeSeriesSplit CV with SHAP analysis
+- **Regime-aware:** Momentum/quality factor weights adjusted per market regime
+- **Position limits:** Max positions, sector concentration cap, split-buy staging
+- **Risk:** −2.5% stop-loss, +8% take-profit, partial TP at +5%, 60-min cooldown
 
-- BTC composite scoring merges RSI, Bollinger context, regime state, funding, open interest, volatility filters, and market sentiment.
-- KR stocks blend rule-based ranking with ML-assisted selection and portfolio controls such as max positions and sector constraints.
-- US stocks focus on momentum ranking, market regime awareness, volatility gating, and execution discipline before live deployment.
+**Fixes applied (2026-03-16):**
+- STOP_TRADING flag path unified between Telegram bot and agent
+- `entry_price` now persisted to DB for accurate daily loss tracking
+- Kiwoom order retries disabled (prevents duplicate orders)
+- ML `MODEL_DIR` import fixed (was causing silent ML failure every cycle)
+- UTC-aligned cooldown and daily-loss time windows
 
-Risk assumptions are centralized in shared defaults and overridden per agent where needed:
+</details>
 
-- Position sizing and invest ratios
-- Stop-loss / take-profit / trailing stop behavior
-- Max trades per day and cooldown windows
-- Market-specific constraints such as VIX or Kimchi premium filters
+<details>
+<summary><strong>US Stocks — Momentum Ranking</strong></summary>
+
+- **Universe:** ~56 US equities screened for momentum, value, and quality
+- **Signal:** Multi-factor score (RSI, relative strength, BB, volume, PE/PB, ROE)
+- **Market filter:** S&P 500 regime (BULL/CORRECTION/BEAR) gates all buy decisions
+- **ML drift gate:** PSI-based feature drift detection blocks trades when model is stale
+- **Execution:** Market-hour aware, max 3 buys/day, 2-hour cooldown
+
+**Fixes applied (2026-03-16):**
+- `factor_snapshot` DB update now uses row ID (prevents multi-row corruption)
+- `save_trade()` returns inserted row ID
+- UTC-aligned daily buy count
 
 </details>
 
 <details>
 <summary><strong>Level 5 Research Loop</strong></summary>
 
-The repository includes a research-to-production loop that continuously improves live parameters:
+Weekly automated parameter refinement:
 
-- `quant/alpha_researcher.py` explores new signal hypotheses and parameter grids.
-- `quant/signal_evaluator.py` validates IC/IR and tracks whether signals remain production-worthy.
-- `quant/param_optimizer.py` can auto-tune parameters after evaluation and feed results back to runtime agents.
-- Research outputs are designed to influence BTC, KR, and US parameter sets rather than stay trapped in notebooks.
+```
+[Saturday 22:00]  alpha_researcher.py   → brain/alpha/best_params.json
+[Sunday  23:00]   signal_evaluator.py   → IC/IR per signal → weights.json
+[Sunday  23:30]   param_optimizer.py    → auto-apply params + Telegram report
+[Daily   08:30]   ml_model.py retrain   → live trade feedback loop
+```
 
-Road-tested workflow in the repo:
-
-1. Discover candidate features and signal variants.
-2. Validate with walk-forward style checks and IC/IR thresholds.
-3. Auto-update production parameters where improvement exceeds replacement thresholds.
-4. Observe downstream changes through alerts, daily/weekly reports, and dashboard state.
+- **Alpha Researcher:** Grid-search over rule parameters, ranks by IC/IR
+- **Signal Evaluator:** Pearson IC, permutation-test significance, rolling IR
+- **Param Optimizer:** Applies improvements only when IR improvement ≥ threshold
+- **Attribution:** Weekly factor PnL attribution with auto-downweighting of weak factors
 
 </details>
 
 <details>
 <summary><strong>AI Agent Team</strong></summary>
 
-The orchestration layer is built around specialized Claude-based agents:
+The dashboard currently exposes 5 named agents:
 
-| Agent | Role |
-|-------|------|
-| Market Analyst | Real-time market regime classification & signal generation |
-| News Analyst | News sentiment analysis & event-driven alerts |
-| Risk Manager | Position sizing, drawdown monitoring, VaR calculation |
-| Reporter | Daily/weekly report generation & Telegram delivery |
-| Orchestrator | Agent coordination, decision pipeline, conflict resolution |
+| Agent | Model | Role |
+|-------|-------|------|
+| Orchestrator | Claude Opus | Decision coordination, adaptive thinking |
+| Market Analyst | Claude Sonnet | Market regime + signal generation |
+| News Analyst | Claude Sonnet | News sentiment, event detection |
+| Risk Manager | Claude Opus | Drawdown, VaR, position risk |
+| Reporter | Claude Sonnet | Daily/weekly reports, Telegram delivery |
 
-These agents support:
-
-- Regime interpretation
-- Research review and strategy revision
-- Alert generation
-- Daily and weekly reporting
-- Decision traceability through the dashboard and logs
+The decision layer combines market data, fear & greed, kimchi premium, portfolio state, and risk metrics before issuing BUY/SELL/HOLD actions.
 
 </details>
 
 <details>
-<summary><strong>Dashboard, Alerts, and Reporting</strong></summary>
+<summary><strong>Dashboard</strong></summary>
 
-The dashboard stack exposes market-specific views and operating telemetry:
+React + FastAPI dashboard at `http://localhost:8080`:
 
-- BTC dashboard: candles, composite score, positions, sentiment context
-- KR dashboard: holdings, portfolio mix, ranking tables, market summary
-- US dashboard: major index cards, momentum ranking, dry-run positions
+- **BTC tab:** Candlestick chart, composite score gauge, open position card, 9-signal bars, F&G indicator, news feed, decision log
+- **KR tab:** Portfolio pie chart, holdings table, momentum ranking, market summary
+- **US tab:** Index cards (SPY/QQQ/DXY/VIX), momentum ranking, FX rate, open positions
+- **Agents tab:** 5-agent decision history with confidence scores
 
-Alerting and reporting currently include:
-
-- Telegram buy/sell alerts
-- Daily trading reports
-- Weekly strategy reviews
-- Health status snapshots
-- Drawdown / VaR / correlation / volume-spike alerts
+All tabs poll via REST API; auth-protected with rate-limited login.
 
 </details>
 
 <details>
-<summary><strong>Security and Operations</strong></summary>
+<summary><strong>Security & Operations</strong></summary>
 
-This repository is opinionated about local-first operations:
-
-- Runtime paths resolve from `OPENCLAW_CONFIG_DIR`, `OPENCLAW_WORKSPACE_DIR`, `OPENCLAW_LOG_DIR`, and `OPENCLAW_CONFIG_PATH`.
-- `.env` files are parsed as data, not executed with `source`.
-- Health checks now write a machine-readable status snapshot to `~/.openclaw/logs/health_status.json`.
-- Shell wrappers were normalized so cron tasks and manual runs share the same path and env resolution model.
-
-Operational guidance reflected from the existing docs:
-
-- Treat inbound chat surfaces and external market APIs as untrusted.
-- Keep API keys out of git and local-only artifacts out of commits.
-- Add explicit dashboard health endpoints and fallback behavior for rate-limited broker/API integrations.
-- Use paper or dry-run modes before promoting changes to live capital.
+- API keys stored in `.env` files, never committed
+- Docker secrets mounted at `/run/local-secrets/` (or `/run/secrets/`)
+- Dashboard auth: `secrets.compare_digest`, 5-attempt rate limiting, lockout
+- CORS: env-configurable origins, `credentials=False`, GET/OPTIONS only
+- Circuit breaker: 3-level portfolio drawdown guard (WARNING / HALT / EMERGENCY)
+- DrawdownGuard: weekly and monthly stop rules, auto-deleverage
+- `pre-commit` hooks: detect-private-key, flake8, isort
+- Cron + Docker dual-execution prevented: BTC/US run exclusively in Docker
 
 </details>
 
-<details>
-<summary><strong>Core OpenClaw Platform Foundation</strong></summary>
-
-The trading system is built on top of the broader OpenClaw platform:
-
-- Gateway-based local control plane
-- Multi-channel messaging support
-- Dashboard/web surfaces
-- Skill and automation infrastructure
-- Remote operations and daemonized runtime
-
-That means this repository is both:
-
-- A trading operations workspace
-- An application layer running on the OpenClaw runtime
-
-</details>
+---
 
 ## Architecture
 
@@ -204,181 +208,87 @@ That means this repository is both:
 flowchart LR
 
 subgraph Ext["📡 External APIs"]
-
-Upbit["Upbit (BTC Live)"]
-
-Kiwoom["Kiwoom (KR Paper)"]
-
-YF["yfinance (US DRY-RUN)"]
-
-Claude["Claude AI Agents"]
-
+  Upbit["Upbit\nBTC Live"]
+  Kiwoom["Kiwoom\nKR Paper"]
+  YF["yfinance\nUS Dry-Run"]
+  Claude["Claude AI\nAgents"]
 end
 
-subgraph Core["🤖 Engine"]
-
-BTC["BTC Agent"]
-
-KR["KR Stock Agent"]
-
-US["US Stock Agent"]
-
-Exec["Execution (TWAP/VWAP)"]
-
+subgraph Core["🤖 Trading Engine"]
+  BTC["BTC Agent\n9-factor composite"]
+  KR["KR Agent\nRule+ML blend"]
+  US["US Agent\nMomentum rank"]
+  CB["Circuit Breaker\nWARNING/HALT/EMRG"]
 end
 
 subgraph Research["🔬 Level 5 Loop"]
-
-Alpha["Alpha Researcher"]
-
-Eval["Signal Evaluator"]
-
-Opt["Param Optimizer"]
-
+  Alpha["Alpha Researcher\nSat 22:00"]
+  Eval["Signal Evaluator\nSun 23:00"]
+  Opt["Param Optimizer\nSun 23:30"]
 end
 
 subgraph Infra["🗄️ Infrastructure"]
-
-DB["Supabase (PostgreSQL)"]
-
-API["Public Signal API"]
-
-WS["WebSocket Stream"]
-
+  DB["Supabase\nPostgreSQL"]
+  Docker["Docker Compose\n5 containers"]
 end
 
-Output["📊 Dashboard + 📱 Mobile + 🔔 Telegram"]
+Output["📊 Dashboard :8080\n📱 Telegram Bot\n🔔 Alerts"]
 
 Ext --> Core
-
-Core --> Exec --> DB
-
+Core --> CB --> DB
 DB --> Research --> Core
-
-DB --> API & WS
-
-API & WS --> Output
-
+Docker --> Core
 Core --> Output
 ```
 
-```mermaid
-graph TB
-
-subgraph "Data Layer"
-
-U[Upbit API
-BTC Live] --> K[Data Pipeline]
-
-KW[키움증권 API
-KR Paper] --> K
-
-YF[yfinance
-US DRY-RUN] --> K
-
-end
-
-subgraph "Intelligence Layer"
-
-K --> RC[Regime Classifier
-RISK_ON/OFF/TRANSITION/CRISIS]
-
-RC --> BTC[BTC Agent
-Composite Score]
-
-RC --> KR[KR Agent
-Rule 60% + ML 40%]
-
-RC --> US[US Agent
-Momentum Ranking]
-
-ML[XGBoost
-Walk-forward CV + SHAP] --> KR
-
-end
-
-subgraph "Level 5 Research Loop"
-
-AR[Alpha Researcher
-Sat 22:00] --> SE[Signal Evaluator
-Sun 23:00]
-
-SE --> PO[Param Optimizer
-Sun 23:30]
-
-PO -->|auto-update| BTC & KR & US
-
-end
-
-subgraph "AI Agent Team"
-
-ORC[Orchestrator
-Claude Opus] --> MA[Market Analyst]
-
-ORC --> NA[News Analyst]
-
-ORC --> RM[Risk Manager]
-
-ORC --> RP[Reporter]
-
-end
-
-BTC & KR & US --> DB[(Supabase
-PostgreSQL)]
-
-DB --> DASH[FastAPI + React
-Dashboard :8080]
-
-DB --> TG[Telegram Bot]
-
-ORC --> BTC
-```
+---
 
 ## Project Structure
 
-<details>
-<summary><strong>Expand project tree</strong></summary>
-
 ```text
 .
-├── agents/              # AI agent team, alerts, daily reports, weekly reviews
-├── btc/                 # BTC live trading logic, dashboard entrypoints, BTC APIs
-├── common/              # Shared config, env loading, logging, retry, Telegram, Supabase
-├── dashboard/           # Frontend assets for dashboard/web UI
-├── docs/                # Documentation, deployment notes, screenshot guide, audit docs
-├── execution/           # Execution quality, router, TWAP/VWAP, slippage tracking
-├── quant/               # Research loop, factor analysis, risk, portfolio, backtesting
-├── schema/              # SQL schema definitions
-├── scripts/             # Cron wrappers, health checks, dashboard runners, packaging helpers
-├── secretary/           # Autonomous helper utilities and local memory tooling
-├── stocks/              # KR/US trading agents, ML models, broker integration, collectors
-├── supabase/            # Supabase-related schema files
-├── test/                # TypeScript-side tests
-├── tests/               # Python-side unit and phase tests
-├── docker-compose.yml   # Containerized local runtime
-├── README.md            # English README
+├── agents/              # AI agent team (orchestrator, analysts, reporter)
+├── btc/                 # BTC agent, routes (btc/kr/us APIs), signals, strategies
+├── common/              # Config, env loader, logger, Telegram, Supabase, circuit breaker
+├── company/             # AI Software Company (CEO→specialist delegation)
+├── dashboard/           # React frontend (BTC/KR/US/Agents pages)
+├── docs/                # Documentation, audit reports, specs
+├── execution/           # TWAP/VWAP execution, smart routing, slippage
+├── quant/               # Alpha research, signal evaluator, param optimizer, risk, portfolio
+├── scripts/             # Cron wrappers, health checks, agent loop runner
+├── secretary/           # Autonomous helper, Notion integration, memory
+├── stocks/              # KR/US agents, ML model, Kiwoom client, Telegram bot
+├── tests/               # Pytest suite (metrics, utils, trade calculations)
+├── docker-compose.yml   # 5-service runtime (dashboard, btc-agent, kr-agent, us-agent, telegram-bot)
+├── Dockerfile
+├── pytest.ini
+├── README.md            # English README (this file)
 └── README.ko.md         # Korean README
 ```
 
-</details>
+---
 
 ## Roadmap
 
 - [x] Level 3: Adaptive Composite Signals
-- [x] Level 4: Factor Model Operations (IC/IR → Weights)
-- [x] Level 5: Research-to-Production Loop
+- [x] Level 4: Factor Model Operations (IC/IR → live weights)
+- [x] Level 5: Research-to-Production Loop (alpha → signal eval → param opt)
+- [x] Safety hardening: circuit breaker, buy lock, order validation, UTC alignment
 - [ ] Level 6: Multi-Strategy Portfolio (Long-Short + Market Neutral)
+- [ ] ML dead feature cleanup (13 inactive features → AUC improvement target)
+- [ ] KR partial TP quantity tracking fix
+- [ ] Dashboard: async-safe blocking calls, React Context shared state
 - [ ] Level 7: On-chain DEX Arbitrage
-- [ ]  Level 8: Backtest Report Automation & Walk-Forward Validation Pipeline
-- [ ]  Multi-Exchange Support (Binance, Bybit)
-- [ ]  Portfolio Analytics Dashboard (Sharpe, Sortino, Max Drawdown visualization)
-- [ ] Public API for external trader integration
+- [ ] Multi-Exchange Support (Binance, Bybit)
+- [ ] Portfolio Analytics (Sharpe, Sortino, MDD visualization)
 - [ ] Mobile Dashboard (React Native)
+
+---
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md).
+Open an issue or PR if you want to contribute improvements.
 
 ## License
 
-This project is licensed under the MIT License. See [LICENSE](LICENSE).
+MIT License — see [LICENSE](LICENSE).

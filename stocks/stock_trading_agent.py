@@ -15,7 +15,7 @@ import json
 import time
 import sys
 import requests
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -698,8 +698,7 @@ def get_split_stage_for_stock(code: str) -> int:
 def check_cooldown(code: str) -> bool:
     """최근 매도 후 쿨다운 시간 체크 (True = 쿨다운 중)"""
     try:
-        from datetime import timedelta
-        cutoff = (datetime.now() - timedelta(minutes=RISK['cooldown_minutes'])).isoformat()
+        cutoff = (datetime.now(timezone.utc) - timedelta(minutes=RISK['cooldown_minutes'])).isoformat()
         recent = (
             supabase.table('trade_executions')
             .select('created_at')
@@ -721,7 +720,7 @@ def check_cooldown(code: str) -> bool:
 def check_daily_loss() -> bool:
     """오늘 일일 손실 한도 도달 시 True (거래 중단)"""
     try:
-        today = datetime.now().date().isoformat()
+        today = datetime.now(timezone.utc).date().isoformat()  # UTC 기준으로 Supabase 타임스탬프와 일치
         closed_today = (
             supabase.table('trade_executions')
             .select('*')
@@ -1016,6 +1015,9 @@ def analyze_with_ai(
     except Exception as e:
         log(f'AI 분석 실패 → 룰 기반 fallback: {e}', 'WARN')
         dart = _get_dart_score(stock['code'])
+        # momentum이 try 블록 내에서 정의되므로 미정의 시 안전하게 조회
+        if 'momentum' not in dir():
+            momentum = calc_momentum_score(stock['code'])
         result = rule_based_signal(indicators, kospi, weekly, has_position, supply, momentum, dart)
         result['source'] = 'RULE_FALLBACK'
         return result
@@ -1043,8 +1045,8 @@ def get_trading_signal(
 
     # ML 신호 항상 수집
     try:
-        from ml_model import get_ml_signal, MODEL_PATH  # 같은 디렉토리
-        if MODEL_PATH.exists():
+        from ml_model import get_ml_signal, MODEL_DIR  # 같은 디렉토리
+        if (MODEL_DIR / 'horizon_3d').exists():
             ml = get_ml_signal(stock['code'])
             ml_confidence = float(ml.get('confidence', 0))
             ml_source = ml.get('source', 'ML_XGBOOST')
@@ -1373,6 +1375,7 @@ def execute_buy(
         'stock_name': name,
         'quantity': quantity,
         'price': price,
+        'entry_price': price,  # 일일손실 계산을 위해 진입가 명시 저장
         'strategy': signal.get('source', 'AI') + '+RSI+MACD',
         'reason': signal.get('reason', ''),
         'result': 'OPEN',

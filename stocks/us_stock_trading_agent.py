@@ -324,7 +324,8 @@ def count_today_buys() -> int:
     if not supabase:
         return 0
     try:
-        today = datetime.now().strftime("%Y-%m-%d")
+        from datetime import timezone as _tz
+        today = datetime.now(_tz.utc).strftime("%Y-%m-%d")  # UTC 기준으로 Supabase 타임스탬프와 일치
         res = (
             supabase.table(US_TRADE_TABLE)
             .select("id")
@@ -342,9 +343,10 @@ def save_trade(trade_type: str, symbol: str, quantity: float, price: float,
                ml_score: float = 0.0, ml_confidence: float = 0.0,
                composite_score: float = 0.0, signal_source: str = "",
                strategy: str = "", drift_status: str = "",
-               drift_penalty: float = 0.0) -> None:
+               drift_penalty: float = 0.0) -> Optional[int]:
+    """Insert trade record and return the DB row id (None on failure)."""
     if not supabase:
-        return
+        return None
     payload = {
         "trade_type": trade_type,
         "symbol": symbol,
@@ -363,7 +365,9 @@ def save_trade(trade_type: str, symbol: str, quantity: float, price: float,
         "drift_penalty": drift_penalty,
     }
     try:
-        supabase.table(US_TRADE_TABLE).insert(payload).execute()
+        res = supabase.table(US_TRADE_TABLE).insert(payload).execute()
+        rows = res.data or []
+        return rows[0].get("id") if rows else None
     except Exception as e:
         try:
             basic_payload = {
@@ -376,10 +380,13 @@ def save_trade(trade_type: str, symbol: str, quantity: float, price: float,
                 "result": result,
                 "highest_price": price,
             }
-            supabase.table(US_TRADE_TABLE).insert(basic_payload).execute()
+            res = supabase.table(US_TRADE_TABLE).insert(basic_payload).execute()
             log(f"DB 확장필드 저장 실패, 기본필드로 폴백: {e}", "WARN")
+            rows = res.data or []
+            return rows[0].get("id") if rows else None
         except Exception as inner_e:
             log(f"DB 저장 실패: {inner_e}", "ERROR")
+            return None
 
 
 def close_position(symbol: str, exit_price: float, reason: str, pnl_pct: float | None = None) -> None:
@@ -773,7 +780,7 @@ def execute_buy(symbol: str, score: float, indicators: dict, signal: Optional[di
     drift_status = str(signal.get("drift_status", ""))
     drift_penalty = float(signal.get("drift_penalty", 0.0) or 0.0)
 
-    save_trade(
+    _trade_id = save_trade(
         "BUY",
         symbol,
         qty,
@@ -789,12 +796,12 @@ def execute_buy(symbol: str, score: float, indicators: dict, signal: Optional[di
         drift_penalty=drift_penalty,
     )
 
-    # factor_snapshot 컬럼에 별도 저장 (graceful)
-    if _factor_snapshot and supabase:
+    # factor_snapshot 컬럼에 별도 저장 (graceful) — row id로 특정 행만 업데이트
+    if _factor_snapshot and supabase and _trade_id:
         try:
             supabase.table(US_TRADE_TABLE).update(
                 {"factor_snapshot": _factor_snapshot}
-            ).eq("symbol", symbol).eq("result", "OPEN").eq("trade_type", "BUY").execute()
+            ).eq("id", _trade_id).execute()
         except Exception as _ue:
             log(f"  {symbol} 팩터 snapshot upsert 실패 (graceful): {_ue}", "WARN")
 

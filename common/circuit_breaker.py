@@ -9,13 +9,18 @@ from common.supabase_client import get_supabase
 from common.telegram import send_telegram
 
 log = get_logger("circuit_breaker")
+_PERSIST_WARNED = False  # circuit_breaker_events 테이블 없음 경고 1회만 출력
+
+import time as _time
+_TELEGRAM_COOLDOWN = 86400  # 24시간 — 같은 레벨 알림 중복 방지
+_last_telegram_ts: dict[str, float] = {}  # level → 마지막 발송 시각
 
 
 class CircuitBreaker:
     LEVELS = {
-        "WARNING": {"threshold": -0.10, "action": "alert_only"},
-        "HALT": {"threshold": -0.20, "action": "block_new_buys"},
-        "EMERGENCY": {"threshold": -0.30, "action": "liquidate_all"},
+        "WARNING": {"threshold": -0.15, "action": "alert_only"},
+        "HALT": {"threshold": -0.25, "action": "block_new_buys"},
+        "EMERGENCY": {"threshold": -0.35, "action": "liquidate_all"},
     }
 
     def __init__(self) -> None:
@@ -50,13 +55,20 @@ class CircuitBreaker:
                     lambda: supabase.table("circuit_breaker_events").insert(payload).execute()
                 )
             except Exception as exc:
-                log.warning("circuit breaker persist failed", error=str(exc))
+                global _PERSIST_WARNED
+                if not _PERSIST_WARNED:
+                    log.warning("circuit breaker persist failed (이후 동일 오류 무시)", error=str(exc))
+                    _PERSIST_WARNED = True
 
         emoji = {"WARNING": "⚠️", "HALT": "🛑", "EMERGENCY": "🚨"}.get(level, "⚠️")
-        await asyncio.to_thread(
-            send_telegram,
-            f"{emoji} CIRCUIT BREAKER: {level}\nPortfolio Drawdown: {drawdown:.1%}\nAction: {action}",
-        )
+        global _last_telegram_ts
+        now = _time.monotonic()
+        if now - _last_telegram_ts.get(level, 0) >= _TELEGRAM_COOLDOWN:
+            _last_telegram_ts[level] = now
+            await asyncio.to_thread(
+                send_telegram,
+                f"{emoji} CIRCUIT BREAKER: {level}\nPortfolio Drawdown: {drawdown:.1%}\nAction: {action}",
+            )
 
     async def _emergency_liquidation(self, details: dict[str, Any] | None = None) -> None:
         await asyncio.to_thread(send_telegram, "🚨 EMERGENCY: 전량 청산 실행 중...")

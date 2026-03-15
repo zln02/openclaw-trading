@@ -341,7 +341,6 @@ async def api_us_market():
 
 
 @router.get("/api/us/realtime/news")
-
 async def api_us_realtime_news(
     symbol: str = Query("BTC"),
     limit: int = Query(10, ge=1, le=50),

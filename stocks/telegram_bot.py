@@ -119,12 +119,13 @@ def get_status_text() -> str:
 
 
 def set_stop_flag():
-    flag = WORKSPACE / "stocks" / "STOP_TRADING"
+    # stock_trading_agent.py와 동일한 경로 사용 (Path(__file__).parent / 'STOP_TRADING')
+    flag = Path(__file__).parent / "STOP_TRADING"
     flag.write_text(datetime.now().isoformat())
 
 
 def clear_stop_flag():
-    flag = WORKSPACE / "stocks" / "STOP_TRADING"
+    flag = Path(__file__).parent / "STOP_TRADING"
     if flag.exists():
         flag.unlink()
 

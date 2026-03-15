@@ -1106,27 +1106,23 @@ async def get_kr_positions():
 
 
 @router.get("/api/stocks/trades")
-async def get_stocks_trades():
+async def get_stocks_trades(today_only: bool = False):
+    """최근 거래 내역 반환. today_only=true 시 오늘 날짜 필터 적용."""
     try:
         if not supabase:
             return []
-        today = datetime.now().date().isoformat()
         res = (
             supabase.table("trade_executions")
             .select("*")
             .order("trade_id", desc=True)
-            .limit(20)
+            .limit(50)
             .execute()
         )
         data = res.data or []
-        if data and isinstance(data[0], dict) and "created_at" in data[0]:
+        if today_only and data and isinstance(data[0], dict) and "created_at" in data[0]:
+            today = datetime.now().date().isoformat()
             data = [r for r in data if str(r.get("created_at") or "")[:10] == today]
         return data
     except Exception as e:
-        try:
-            res = supabase.table("trade_executions").select("*").order("trade_id", desc=True).limit(20).execute()
-            return res.data or []
-        except Exception:
-            pass
         log.error(f"stocks trades: {e}")
         return []

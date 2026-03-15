@@ -480,7 +480,7 @@ class KiwoomAPIClient:
             endpoint="/api/dostk/ordr",
             body=body,
             extra_headers=extra_headers,
-            retries=1,  # 주문 실패 시 최소 1회 재시도
+            retries=0,  # 주문 재시도 없음 — 네트워크 타임아웃 후 재시도 시 이중주문 위험
         )
 
         order_no = result.get("ord_no", result.get("odno", ""))

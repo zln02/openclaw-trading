@@ -24,6 +24,11 @@ try:
 except ImportError:
     _sheets_append = None
 
+try:
+    from common.circuit_breaker import check_trade_allowed_sync as _check_circuit_breaker
+except ImportError:
+    _check_circuit_breaker = None
+
 load_env()
 log = get_logger("btc_agent", BTC_LOG)
 
@@ -118,8 +123,37 @@ if not all([UPBIT_ACCESS, UPBIT_SECRET]):
 upbit   = pyupbit.Upbit(UPBIT_ACCESS, UPBIT_SECRET)
 supabase = get_supabase()
 client  = OpenAI(api_key=OPENAI_KEY) if OPENAI_KEY else None
+
+# ── 프로세스 내 매수 잠금 (Race condition 방지) ──────
+# Supabase 쓰기 딜레이로 get_open_position()이 None 반환 시에도 중복매수 차단
+import threading as _threading
+_buy_lock = _threading.Lock()
+_last_buy_ts: float = 0.0   # 마지막 매수 완료 시각 (time.monotonic)
 if client is None:
     log.warning("OPENAI_API_KEY 없음 — 룰 기반 fallback 판단으로 동작")
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _utc_today_iso() -> str:
+    return datetime.now(timezone.utc).date().isoformat()
+
+
+def _execute_sell_order(quantity: float, *, context: str) -> tuple[bool, str]:
+    """Execute an Upbit market sell with consistent validation/error handling."""
+    try:
+        result = upbit.sell_market_order("KRW-BTC", quantity)
+        if result is None or not isinstance(result, dict) or "error" in result:
+            log.error(f"Upbit {context} 매도 실패: {result}")
+            send_telegram(f"❌ BTC 매도 주문 실패 ({context})\n응답: {result}")
+            return False, "upbit_sell_error"
+        return True, ""
+    except Exception as exc:
+        log.error(f"Upbit {context} 매도 예외: {exc}")
+        send_telegram(f"❌ BTC 매도 예외 발생 ({context}): {exc}")
+        return False, str(exc)
 
 # ── 리스크 설정 (v6 — Top-tier Quant) ─────────────
 RISK = {
@@ -632,7 +666,7 @@ def get_open_position():
 def open_position(entry_price, quantity, entry_krw) -> bool:
     row = {
         "entry_price": entry_price,
-        "entry_time":  datetime.now().isoformat(),
+        "entry_time":  _utc_now_iso(),
         "quantity":    quantity,
         "entry_krw":   entry_krw,
         "status":      "OPEN",
@@ -675,7 +709,7 @@ def open_position_with_context(
     """
     base_row = {
         "entry_price": entry_price,
-        "entry_time": datetime.now().isoformat(),
+        "entry_time": _utc_now_iso(),
         "quantity": quantity,
         "entry_krw": entry_krw,
         "status": "OPEN",
@@ -713,7 +747,7 @@ def close_all_positions(exit_price, *, exit_reason=None):
             update_row = {
                 "status":     "CLOSED",
                 "exit_price": exit_price,
-                "exit_time":  datetime.now().isoformat(),
+                "exit_time":  _utc_now_iso(),
                 "pnl":        round(pnl, 2),
                 "pnl_pct":    round(pnl_pct, 2),
             }
@@ -726,7 +760,7 @@ def close_all_positions(exit_price, *, exit_reason=None):
                 fallback_row = {
                     "status":     "CLOSED",
                     "exit_price": exit_price,
-                    "exit_time":  datetime.now().isoformat(),
+                    "exit_time":  _utc_now_iso(),
                 }
                 if exit_reason:
                     fallback_row["exit_reason"] = exit_reason
@@ -737,7 +771,7 @@ def close_all_positions(exit_price, *, exit_reason=None):
 # ── 일일 손실 한도 ────────────────────────────────
 def check_daily_loss() -> bool:
     try:
-        today = datetime.now().date().isoformat()
+        today = _utc_today_iso()  # UTC 기준으로 Supabase 타임스탬프와 일치
         res   = supabase.table("btc_position")\
                         .select("pnl, entry_krw")\
                         .eq("status", "CLOSED")\
@@ -907,26 +941,29 @@ def execute_trade(
     vol_ratio_d=None,
     trend=None,
 ) -> dict:
+    global _last_buy_ts
+
     def _result(code: str, **extra) -> dict:
         payload = {"result": code}
         payload.update(extra)
         return payload
 
     if signal["action"] == "BUY":
-        try:
-            from common.circuit_breaker import check_trade_allowed_sync
-
-            breaker = check_trade_allowed_sync("btc")
-            if not breaker.get("allowed", True):
-                log.warning(
-                    "circuit breaker blocked BTC buy",
-                    guard="circuit_breaker",
-                    reason=breaker.get("reason"),
-                    level=breaker.get("level"),
-                )
-                return _result("BLOCKED_CIRCUIT_BREAKER", guard="circuit_breaker", reason=breaker.get("reason"))
-        except Exception as exc:
-            log.warning(f"circuit breaker check failed: {exc}")
+        if _check_circuit_breaker is not None:
+            try:
+                breaker = _check_circuit_breaker("btc")
+                if not breaker.get("allowed", True):
+                    log.warning(
+                        "circuit breaker blocked BTC buy",
+                        guard="circuit_breaker",
+                        reason=breaker.get("reason"),
+                        cb_level=breaker.get("level"),
+                    )
+                    return _result("BLOCKED_CIRCUIT_BREAKER", guard="circuit_breaker", reason=breaker.get("reason"))
+            except Exception as exc:
+                log.warning(f"circuit breaker check failed: {exc}")
+        else:
+            log.warning("circuit_breaker 모듈 없음 — 서킷브레이커 체크 스킵")
 
     # ── 코드 레벨 안전 필터 (복합 스코어 기반) ──
     if signal["action"] == "BUY":
@@ -980,6 +1017,20 @@ def execute_trade(
     price       = indicators["price"]
     log.info(f"잔고 스냅샷: KRW={float(krw_balance):,.0f} | BTC={float(btc_balance):.8f}")
 
+    # 프로세스 내 잠금 체크 (Supabase 딜레이로 get_open_position()이 None인 경우 대비)
+    import time as _t
+    if signal["action"] == "BUY":
+        with _buy_lock:
+            _elapsed = _t.monotonic() - _last_buy_ts
+            if _elapsed < 3600:
+                log.warning(
+                    "프로세스 잠금: 최근 1시간 내 매수 완료 — 중복 매수 차단",
+                    guard="in_process_lock",
+                    result="ALREADY_LONG",
+                    elapsed_sec=int(_elapsed),
+                )
+                return _result("ALREADY_LONG", guard="in_process_lock")
+
     if signal["action"] == "BUY" and (btc_balance > 0.00001 or pos):
         log.warning(
             "실제 BTC 잔고 또는 OPEN 포지션이 존재해 중복 BUY 차단 "
@@ -1024,7 +1075,9 @@ def execute_trade(
                 trail_pct = RISK["trailing_stop"]
             if drop >= trail_pct:
                 if not DRY_RUN:
-                    upbit.sell_market_order("KRW-BTC", btc_balance * 0.9995)
+                    sold, reason = _execute_sell_order(btc_balance * 0.9995, context="TRAILING_STOP")
+                    if not sold:
+                        return _result("SELL_ORDER_FAILED", reason=reason)
                     close_all_positions(price, exit_reason="TRAILING_STOP")
                 send_telegram(
                     f"📉 <b>트레일링 스탑</b>\n"
@@ -1037,7 +1090,9 @@ def execute_trade(
         atr_stop_price = float(pos.get("atr_stop_price") or 0)
         if atr_stop_price and price < atr_stop_price:
             if not DRY_RUN:
-                upbit.sell_market_order("KRW-BTC", btc_balance * 0.9995)
+                sold, reason = _execute_sell_order(btc_balance * 0.9995, context="ATR_STOP_LOSS")
+                if not sold:
+                    return _result("SELL_ORDER_FAILED", reason=reason)
                 close_all_positions(price, exit_reason="ATR_STOP_LOSS")
             send_telegram(
                 f"🛑 <b>ATR 동적 손절</b>\n"
@@ -1050,7 +1105,9 @@ def execute_trade(
         # 고정 % 손절 (fallback)
         if net_change <= RISK["stop_loss"]:
             if not DRY_RUN:
-                upbit.sell_market_order("KRW-BTC", btc_balance * 0.9995)
+                sold, reason = _execute_sell_order(btc_balance * 0.9995, context="STOP_LOSS")
+                if not sold:
+                    return _result("SELL_ORDER_FAILED", reason=reason)
                 close_all_positions(price, exit_reason="STOP_LOSS")
             send_telegram(
                 f"🛑 <b>손절 실행</b>\n"
@@ -1069,7 +1126,9 @@ def execute_trade(
             ratio = RISK.get("partial_tp_ratio", 0.50)
             sell_qty = btc_balance * ratio * 0.9995
             if not DRY_RUN:
-                upbit.sell_market_order("KRW-BTC", sell_qty)
+                sold, reason = _execute_sell_order(sell_qty, context="PARTIAL_TP_1")
+                if not sold:
+                    return _result("SELL_ORDER_FAILED", reason=reason)
                 try:
                     supabase.table("btc_position").update(
                         {"partial_1_sold": True, "partial_sold": True}
@@ -1090,7 +1149,9 @@ def execute_trade(
             ratio2 = RISK.get("partial_tp_2_ratio", 0.50)
             sell_qty = btc_balance * ratio2 * 0.9995
             if not DRY_RUN:
-                upbit.sell_market_order("KRW-BTC", sell_qty)
+                sold, reason = _execute_sell_order(sell_qty, context="PARTIAL_TP_2")
+                if not sold:
+                    return _result("SELL_ORDER_FAILED", reason=reason)
                 try:
                     supabase.table("btc_position").update(
                         {"partial_2_sold": True}
@@ -1108,7 +1169,9 @@ def execute_trade(
         # 최대 익절 전량 (15%)
         if net_change >= RISK["take_profit"]:
             if not DRY_RUN:
-                upbit.sell_market_order("KRW-BTC", btc_balance * 0.9995)
+                sold, reason = _execute_sell_order(btc_balance * 0.9995, context="TAKE_PROFIT")
+                if not sold:
+                    return _result("SELL_ORDER_FAILED", reason=reason)
                 close_all_positions(price, exit_reason="TAKE_PROFIT")
             send_telegram(
                 f"✅ <b>전량 익절</b>\n"
@@ -1136,7 +1199,11 @@ def execute_trade(
 
         if not DRY_RUN:
             result = upbit.buy_market_order("KRW-BTC", invest_krw)
-            qty    = float(result.get("executed_volume", 0)) or (invest_krw / price)
+            if result is None or not isinstance(result, dict) or "error" in result:
+                log.error(f"Upbit 매수 주문 실패: {result}")
+                send_telegram(f"❌ BTC 매수 주문 실패\n응답: {result}")
+                return _result("ORDER_FAILED", reason="upbit_buy_error")
+            qty = float(result.get("executed_volume", 0)) or (invest_krw / price)
             # ATR 기반 손절가 계산 (진입 시점 ATR * 배수만큼 하락 시 손절)
             atr_val = indicators.get("atr", 0)
             atr_stop = round(price - atr_val * RISK["atr_multiplier"]) if atr_val else None
@@ -1161,6 +1228,9 @@ def execute_trade(
                     atr_stop_price=atr_stop,
                 )
                 if ok:
+                    import time as _t2
+                    with _buy_lock:
+                        _last_buy_ts = _t2.monotonic()  # 프로세스 잠금 갱신 (thread-safe)
                     break
                 log.warning(f"포지션 DB 저장 재시도 {_attempt + 1}/3")
                 import time as _time; _time.sleep(2)
@@ -1195,7 +1265,7 @@ def execute_trade(
             f"진입근거: {signal['reason']}\n"
             f"━━━━━━━━━━━━━━\n"
             f"{atr_line}"
-            f"익절1: ₩{tp1_price:,} (+8%) / 익절2: ₩{tp2_price:,} (+12%) / 전량: ₩{tp_price:,} (+15%)\n"
+            f"익절1: ₩{tp1_price:,} (+{RISK.get('partial_tp_pct', 0.08)*100:.0f}%) / 익절2: ₩{tp2_price:,} (+{RISK.get('partial_tp_2_pct', 0.12)*100:.0f}%) / 전량: ₩{tp_price:,} (+{RISK['take_profit']*100:.0f}%)\n"
             f"━━━━━━━━━━━━━━\n"
             f"총자산: ₩{total_asset:,}\n"
             f"BTC 비중: {btc_weight}%",
@@ -1214,7 +1284,9 @@ def execute_trade(
         if pos:
             pnl_pct = (price - pos["entry_price"]) / pos["entry_price"] * 100
         if not DRY_RUN:
-            upbit.sell_market_order("KRW-BTC", btc_balance * 0.9995)
+            sold, reason = _execute_sell_order(btc_balance * 0.9995, context="SELL_SIGNAL")
+            if not sold:
+                return _result("SELL_ORDER_FAILED", reason=reason)
             close_all_positions(price, exit_reason="SELL_SIGNAL")
         send_telegram(
             f"🔴 <b>BTC 매도</b>\n"
@@ -1239,7 +1311,7 @@ def save_log(indicators, signal, result, *, fg=None, volume=None, comp=None, fun
         result_code = result.get("result", "UNKNOWN") if isinstance(result, dict) else str(result)
         guard = result.get("guard") if isinstance(result, dict) else None
         row = {
-            "timestamp":          datetime.now().isoformat(),
+            "timestamp":          _utc_now_iso(),
             "action":             signal.get("action", "HOLD"),
             "price":              indicators["price"],
             "rsi":                indicators["rsi"],
@@ -1283,7 +1355,7 @@ def run_trading_cycle():
         return {"result": "DAILY_LOSS_LIMIT"}
 
     # 오늘 신규 매수 건수 한도 체크 (포지션 보유 중이면 매도 시그널 분석을 위해 스킵하지 않음)
-    today = datetime.now().date().isoformat()
+    today = _utc_today_iso()
     buy_limit_reached = False
     try:
         res = supabase.table("btc_position")\
@@ -1390,6 +1462,7 @@ def run_trading_cycle():
         funding=funding, oi=oi, ls_ratio=ls_ratio, kimchi=kimchi,
         regime=market_regime,
         news_sentiment=news.get("score", 0.0),
+        whale=whale_signal if whale_signal else None,
     )
 
     # Backfill context columns for existing OPEN positions (schema may have been added later)
@@ -1434,7 +1507,7 @@ def run_trading_cycle():
             "fg": fg_value,
             "fg_label": fg.get("label", "중립"),
             "rsi": rsi_d,
-            "updated": datetime.now().isoformat(),
+            "updated": _utc_now_iso(),
         }, ensure_ascii=False), encoding="utf-8")
     except Exception:
         pass
@@ -1483,6 +1556,8 @@ def run_trading_cycle():
         log.info("오늘 BTC 매수 한도 도달 — 추가 매수 차단")
     elif kimchi_blocked:
         log.info(f"김치 프리미엄 {kimchi:+.2f}% 과열 — 매수 차단")
+    elif funding_blocked and not pos:
+        log.info(f"펀딩비 롱 과열 — 매수 차단 (funding_blocked=True)")
     elif comp["total"] >= buy_min and not pos and htf["trend"] != "DOWNTREND":
         conf = min(60 + comp["total"] - buy_min, 90)
         signal = {
@@ -1651,7 +1726,7 @@ def build_hourly_summary() -> str:
         htf = get_hourly_trend()
         pos = get_open_position()
 
-        today = datetime.now().date().isoformat()
+        today = _utc_today_iso()
         try:
             res = supabase.table("btc_position").select("pnl").eq("status", "CLOSED").gte("exit_time", today).execute()
             today_pnl = sum(float(r["pnl"] or 0) for r in (res.data or []))

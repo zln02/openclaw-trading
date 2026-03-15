@@ -26,10 +26,12 @@ OpenClaw Trading System은 OpenClaw 런타임 위에서 동작하는 3시장 자
 ```bash
 git clone https://github.com/zln02/openclaw-trading
 cd openclaw-trading
-cp .env.example .env
-docker-compose up -d
-open http://localhost:8080
+cp btc/.env.example .env
+bash scripts/split_docker_env.sh .env
+docker compose up -d
 ```
+
+대시보드는 `http://localhost:8080`에서 확인할 수 있습니다. Docker Compose는 `dashboard`, `btc-agent`, `kr-agent`, `us-agent`, `telegram-bot` 5개 서비스를 실행합니다.
 
 ## 시장별 운영 요약
 
@@ -116,5 +118,5 @@ tests/       Python 테스트
 
 ## 기여와 라이선스
 
-- 기여 가이드: [CONTRIBUTING.md](CONTRIBUTING.md)
+- 기여: 이슈 또는 PR로 개선 사항을 제안해 주세요.
 - 라이선스: [MIT](LICENSE)

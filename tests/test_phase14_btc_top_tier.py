@@ -85,6 +85,9 @@ class WhaleTrackerTests(unittest.TestCase):
 
 
 class BtcTradingAgentSafetyTests(unittest.TestCase):
+    def test_utc_now_iso_is_timezone_aware(self) -> None:
+        self.assertTrue(agent._utc_now_iso().endswith("+00:00"))
+
     def test_has_valid_market_data_rejects_none(self) -> None:
         self.assertFalse(agent.has_valid_market_data(None))
 
@@ -141,6 +144,24 @@ class BtcTradingAgentSafetyTests(unittest.TestCase):
 
         self.assertEqual(out["result"], "BLOCKED_BREAKOUT_CONFIRMATION")
         self.assertEqual(out["guard"], "breakout_confirmation_block")
+
+    def test_execute_trade_returns_sell_order_failed_on_trailing_stop_error(self) -> None:
+        signal = {"action": "HOLD", "confidence": 80, "reason": "test"}
+        indicators = {"price": 102_000_000, "atr": 500_000, "rsi": 50}
+        pos = {
+            "id": 1,
+            "entry_price": 100_000_000,
+            "highest_price": 105_000_000,
+            "entry_time": "2026-03-16T00:00:00+00:00",
+        }
+
+        with patch.object(agent.upbit, "get_balance", side_effect=[0.01, 1_000_000]), patch.object(
+            agent, "get_open_position", return_value=pos
+        ), patch.object(agent, "_execute_sell_order", return_value=(False, "upbit_sell_error")):
+            out = agent.execute_trade(signal, indicators)
+
+        self.assertEqual(out["result"], "SELL_ORDER_FAILED")
+        self.assertEqual(out["reason"], "upbit_sell_error")
 
     def test_run_trading_cycle_skips_on_missing_market_data(self) -> None:
         with patch.object(agent, "check_daily_loss", return_value=False), patch.object(

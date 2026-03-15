@@ -2,11 +2,11 @@ import { ArrowUpDown, Landmark, PieChart as PieChartIcon, Wallet } from "lucide-
 import { useMemo, useState } from "react";
 import {
   getKrTop,
+  getKrPortfolio,
+  getKrTrades,
   getStockChart,
   getStockMarket,
-  getStockPortfolio,
   getStockStrategy,
-  getStockTrades,
 } from "../api";
 import usePolling from "../hooks/usePolling";
 import { compactTime, krw, num, pct } from "../lib/format";
@@ -37,9 +37,9 @@ function resolvePositionValue(row) {
 }
 
 export default function KrStockPage() {
-  const { data: portfolio, loading: portfolioLoading, error: portfolioError } = usePolling(getStockPortfolio, 30000);
+  const { data: portfolio, loading: portfolioLoading, error: portfolioError } = usePolling(getKrPortfolio, 30000);
   const { data: topStocks, loading: topLoading } = usePolling(getKrTop, 60000);
-  const { data: trades, loading: tradesLoading, error: tradesError } = usePolling(getStockTrades, 30000);
+  const { data: trades, loading: tradesLoading, error: tradesError } = usePolling(getKrTrades, 30000);
   const { data: market } = usePolling(getStockMarket, 60000);
   const { data: strategy } = usePolling(getStockStrategy, 60000);
 
