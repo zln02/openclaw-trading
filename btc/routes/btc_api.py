@@ -9,7 +9,10 @@ import psutil
 import sys as _sys
 _sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from common.supabase_client import get_supabase
-from common.config import BTC_LOG, BRAIN_PATH, MEMORY_PATH
+from common.config import (
+    BTC_LOG, BRAIN_PATH, MEMORY_PATH,
+    UPBIT_BALANCE_CACHE_TTL, BTC_NEWS_CACHE_TTL, BTC_FX_CACHE_TTL,
+)
 from common.logger import get_logger
 
 log = get_logger("btc_api")
@@ -31,14 +34,12 @@ _upbit_cache = {
 _news_cache = {"data": [], "ts": 0}
 _trend_cache = {"value": "SIDEWAYS", "time": 0}
 _fx_cache = {"rate": 1300.0, "time": 0}  # USD to KRW fallback
-NEWS_CACHE_TTL = 300
-FX_CACHE_TTL = 3600
 
 
 def _refresh_upbit_cache():
     # Cache TTL: 60s. However, if we have a KRW value but the extended fields
     # are still missing (e.g. after a hot reload/deploy), refresh immediately.
-    if time.time() - _upbit_cache["time"] <= 60:
+    if time.time() - _upbit_cache["time"] <= UPBIT_BALANCE_CACHE_TTL:
         if _upbit_cache.get("krw") is not None and (
             _upbit_cache.get("krw_locked") is None or _upbit_cache.get("krw_total") is None
         ):
@@ -88,7 +89,7 @@ def _refresh_upbit_cache():
 
 def _get_fx_rate():
     """Fetch real-time USD to KRW exchange rate."""
-    if time.time() - _fx_cache["time"] < FX_CACHE_TTL:
+    if time.time() - _fx_cache["time"] < BTC_FX_CACHE_TTL:
         return _fx_cache["rate"]
     try:
         # Try Upbit first (most reliable for KRW pairs)
@@ -596,7 +597,12 @@ def _fetch_news_sync():
 @router.get("/api/news")
 async def get_news():
     try:
-        return await asyncio.to_thread(_fetch_news_sync)
+        if time.time() - _news_cache["ts"] < BTC_NEWS_CACHE_TTL and _news_cache["data"]:
+            return _news_cache["data"]
+        items = await asyncio.to_thread(_fetch_news_sync)
+        _news_cache["data"] = items
+        _news_cache["ts"] = time.time()
+        return items
     except Exception as e:
         log.error(f"news: {e}")
         return []

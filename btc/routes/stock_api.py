@@ -12,6 +12,7 @@ from common.supabase_client import get_supabase
 from common.config import (
     WORKSPACE, STRATEGY_JSON,
     STOCK_TRADING_LOG, STOCK_CHECK_LOG, STOCK_PREMARKET_LOG, STOCK_COLLECTOR_LOG,
+    MARKET_SUMMARY_CACHE_TTL, STOCK_OVERVIEW_CACHE_TTL,
 )
 from common.logger import get_logger
 
@@ -75,7 +76,6 @@ def _stock_name(code: str) -> str:
 
 # ----- Market summary (TradingView: unified) -----
 _market_summary_cache = {"data": None, "ts": 0}
-MARKET_SUMMARY_TTL = 60
 
 def _fetch_market_summary_dict():
     import yfinance as yf
@@ -111,7 +111,10 @@ def _fetch_market_summary_dict():
 @router.get("/api/stocks/market-summary")
 async def get_market_summary():
     now = _time.time()
-    if _market_summary_cache["data"] is not None and now - _market_summary_cache["ts"] < MARKET_SUMMARY_TTL:
+    if (
+        _market_summary_cache["data"] is not None
+        and now - _market_summary_cache["ts"] < MARKET_SUMMARY_CACHE_TTL
+    ):
         return _market_summary_cache["data"]
     try:
         data = _fetch_market_summary_dict()
@@ -156,7 +159,7 @@ _overview_cache = {"data": [], "ts": 0}
 @router.get("/api/stocks/overview")
 async def get_stocks_overview():
     now = _time.time()
-    if _overview_cache["data"] and now - _overview_cache["ts"] < 10:
+    if _overview_cache["data"] and now - _overview_cache["ts"] < STOCK_OVERVIEW_CACHE_TTL:
         return _overview_cache["data"]
 
     if not supabase:
@@ -193,8 +196,8 @@ async def get_stocks_overview():
                     p = h.get("current_price", 0) or 0
                     if c and p:
                         live_prices[c] = p
-            except Exception:
-                pass
+            except Exception as e:
+                log.warning(f"stocks overview kiwoom fallback: {e}")
 
         result = []
         for s in stocks:

@@ -1,6 +1,6 @@
 # FINAL_OPTIMIZATION_SPEC — 전부 적용할 작업 명세
 
-**대상**: `/home/wlsdud5035/.openclaw/workspace` (OpenClaw Trading)  
+**대상**: `/home/wlsdud5035/openclaw` (실행 코드) + `/home/wlsdud5035/.openclaw` (상태/로그)  
 **기준**: TRADING_AUDIT_AND_IMPROVEMENTS.md 요약 + 미적용 항목
 
 ---
@@ -23,24 +23,30 @@
 
 ```bash
 # KR 주식 10분 매매 (평일 9~15시)
-*/10 9-15 * * 1-5 /home/wlsdud5035/.openclaw/workspace/scripts/run_stock_cron.sh >> /home/wlsdud5035/.openclaw/logs/stock_trading.log 2>&1
+*/10 9-15 * * 1-5 /home/wlsdud5035/openclaw/scripts/run_stock_cron.sh >> /home/wlsdud5035/.openclaw/logs/stock_trading.log 2>&1
 
 # KR 1분 손절/익절 (평일)
-* * * * 1-5 /home/wlsdud5035/.openclaw/workspace/scripts/run_stock_cron.sh check >> /home/wlsdud5035/.openclaw/logs/stock_check.log 2>&1
+* 9-15 * * 1-5 /home/wlsdud5035/openclaw/scripts/run_stock_cron.sh check >> /home/wlsdud5035/.openclaw/logs/stock_check.log 2>&1
 
 # KR 장전 (평일 08:00)
-0 8 * * 1-5 /home/wlsdud5035/.openclaw/workspace/scripts/run_stock_cron.sh >> /home/wlsdud5035/.openclaw/logs/stock_premarket.log 2>&1
+0 8 * * 1-5 /home/wlsdud5035/openclaw/scripts/run_stock_cron.sh premarket >> /home/wlsdud5035/.openclaw/logs/stock_premarket.log 2>&1
 # 주의: 장전은 stock_premarket.py 실행. run_stock_cron.sh에 premarket 모드 추가하거나, 별도 명령으로 python3 stocks/stock_premarket.py 실행하도록 할 것.
 
 # US 장전 (22:30)
-30 22 * * * /home/wlsdud5035/.openclaw/workspace/scripts/run_us_cron.sh >> /home/wlsdud5035/.openclaw/logs/us_premarket.log 2>&1
+30 22 * * 1-5 /home/wlsdud5035/openclaw/scripts/run_us_cron.sh premarket >> /home/wlsdud5035/.openclaw/logs/us_premarket.log 2>&1
 # 주의: US 장전은 us_stock_premarket.py. run_us_cron.sh에 premarket 인자 또는 별도 진입점 필요.
 
+# US 야간 15분 매매 (평일)
+*/15 22-23,0-5 * * 1-5 /home/wlsdud5035/openclaw/scripts/run_us_cron.sh >> /home/wlsdud5035/.openclaw/logs/us_trading.log 2>&1
+
+# US 야간 5분 손절/익절 체크 (평일)
+*/5 22-23,0-5 * * 1-5 /home/wlsdud5035/openclaw/scripts/run_us_cron.sh check >> /home/wlsdud5035/.openclaw/logs/us_check.log 2>&1
+
 # 일봉 수집 (평일 18:00)
-0 18 * * 1-5 cd /home/wlsdud5035/.openclaw/workspace && .venv/bin/python3 stocks/stock_data_collector.py ohlcv >> /home/wlsdud5035/.openclaw/logs/stock_collector.log 2>&1
+0 18 * * 1-5 cd /home/wlsdud5035/openclaw && .venv/bin/python3 stocks/stock_data_collector.py ohlcv >> /home/wlsdud5035/.openclaw/logs/stock_collector.log 2>&1
 ```
 
-- **실제 적용**: `crontab -e`로 위 블록 추가하거나, `(crontab -l 2>/dev/null; echo "위 내용") | crontab -` 형태로 스크립트화.
+- **실제 적용 상태**: 2026-03-15 기준 active crontab에 반영 완료.
 
 ---
 
@@ -94,7 +100,7 @@
 
 - **daily_reports**:  
   `ALTER TABLE daily_reports ADD COLUMN IF NOT EXISTS content JSONB;`  
-  → Supabase SQL Editor에서 실행. (스펙 “전부 적용” 시 코드/크론만 적용하고, DB는 사용자가 실행.)
+  → [supabase/daily_reports_content.sql](/home/wlsdud5035/openclaw/supabase/daily_reports_content.sql) 또는 Supabase SQL Editor에서 실행. (스펙 “전부 적용” 시 코드/크론만 적용하고, DB는 사용자가 실행.)
 
 ---
 
@@ -102,11 +108,11 @@
 
 1. `scripts/run_stock_cron.sh`, `scripts/run_us_cron.sh` 생성 (run_btc_cron.sh 참고).
 2. 필요 시 `run_stock_cron.sh`에 `premarket` 분기로 `stock_premarket.py` 실행, `run_us_cron.sh`에 `premarket` 분기로 `us_stock_premarket.py` 실행.
-3. crontab에 위 항목 추가 (장전은 premarket 인자 또는 별도 명령으로).
+3. crontab에 위 항목 추가 또는 현행 상태 검증 (장전은 `premarket` 인자 사용).
 4. `common/config.py` TTL/상수 정리.
 5. `docs/AGENT_LOG_CRON_AUDIT.md` 작성, 필요 시 `docs/API.md` 작성.
 6. API 폴백 동작 검토 및 필요 시 보강.
 
 ---
 
-*이 스펙대로 전부 적용하면 FINAL_OPTIMIZATION 완료.*
+*2026-03-15 기준 코드/문서/crontab 반영 완료. 남은 작업은 Supabase SQL 수동 실행뿐이다.*

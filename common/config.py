@@ -28,11 +28,14 @@ MEMORY_PATH = Path(
 ).expanduser()
 
 BTC_LOG = LOG_DIR / "btc_trading.log"
+BTC_CHECK_LOG = LOG_DIR / "btc_check.log"
 STOCK_TRADING_LOG = LOG_DIR / "stock_trading.log"
 STOCK_CHECK_LOG = LOG_DIR / "stock_check.log"
 STOCK_PREMARKET_LOG = LOG_DIR / "stock_premarket.log"
 STOCK_COLLECTOR_LOG = LOG_DIR / "stock_collector.log"
 US_TRADING_LOG = LOG_DIR / "us_trading.log"
+US_CHECK_LOG = LOG_DIR / "us_check.log"
+US_PREMARKET_LOG = LOG_DIR / "us_premarket.log"
 DASHBOARD_LOG = LOG_DIR / "dashboard.log"
 
 STRATEGY_JSON = Path(
@@ -46,6 +49,14 @@ OPENCLAW_JSON = Path(
 ).expanduser()
 
 DASHBOARD_PORT = 8080
+
+# ── API/cache TTLs ────────────────────────────────────────────────────────────
+UPBIT_BALANCE_CACHE_TTL = 60
+MARKET_SUMMARY_CACHE_TTL = 60
+STOCK_OVERVIEW_CACHE_TTL = 10
+BTC_NEWS_CACHE_TTL = 300
+BTC_FX_CACHE_TTL = 3600
+US_FX_CACHE_TTL = 300
 
 # ── 기본 리스크 파라미터 (에이전트별 override 가능) ──────────────────
 # 실제 파라미터는 각 에이전트 파일의 RISK 딕셔너리가 우선 적용됨.

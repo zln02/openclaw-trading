@@ -9,7 +9,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 import sys as _sys
 _sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from common.supabase_client import get_supabase
-from common.config import US_TRADING_LOG
+from common.config import US_TRADING_LOG, US_FX_CACHE_TTL
 from common.logger import get_logger
 
 log = get_logger("us_api")
@@ -287,40 +287,57 @@ async def api_us_logs():
 
 @router.get("/api/us/market")
 async def api_us_market():
-    data = _get_us_market_summary()
-    regime = _get_market_regime()
-    top_payload = _fetch_us_signals()
-    flat = {
-        "sp500": 0.0,
-        "sp500_change_pct": 0.0,
-        "nasdaq": 0.0,
-        "nasdaq_change_pct": 0.0,
-        "dji": 0.0,
-        "dji_change_pct": 0.0,
-        "vix": 0.0,
-        "vix_change_pct": 0.0,
-    }
-    for item in data:
-        name = item.get("name")
-        if name == "S&P 500":
-            flat["sp500"] = item.get("price", 0.0)
-            flat["sp500_change_pct"] = item.get("change_pct", 0.0)
-        elif name == "NASDAQ":
-            flat["nasdaq"] = item.get("price", 0.0)
-            flat["nasdaq_change_pct"] = item.get("change_pct", 0.0)
-        elif name == "Dow Jones":
-            flat["dji"] = item.get("price", 0.0)
-            flat["dji_change_pct"] = item.get("change_pct", 0.0)
-        elif name == "VIX":
-            flat["vix"] = item.get("price", 0.0)
-            flat["vix_change_pct"] = item.get("change_pct", 0.0)
-    return {
-        "indices": data,
-        "regime": regime,
-        "top": top_payload.get("items", []),
-        "momentum": top_payload.get("items", []),
-        **flat,
-    }
+    try:
+        data = _get_us_market_summary()
+        regime = _get_market_regime()
+        top_payload = _fetch_us_signals()
+        flat = {
+            "sp500": 0.0,
+            "sp500_change_pct": 0.0,
+            "nasdaq": 0.0,
+            "nasdaq_change_pct": 0.0,
+            "dji": 0.0,
+            "dji_change_pct": 0.0,
+            "vix": 0.0,
+            "vix_change_pct": 0.0,
+        }
+        for item in data:
+            name = item.get("name")
+            if name == "S&P 500":
+                flat["sp500"] = item.get("price", 0.0)
+                flat["sp500_change_pct"] = item.get("change_pct", 0.0)
+            elif name == "NASDAQ":
+                flat["nasdaq"] = item.get("price", 0.0)
+                flat["nasdaq_change_pct"] = item.get("change_pct", 0.0)
+            elif name == "Dow Jones":
+                flat["dji"] = item.get("price", 0.0)
+                flat["dji_change_pct"] = item.get("change_pct", 0.0)
+            elif name == "VIX":
+                flat["vix"] = item.get("price", 0.0)
+                flat["vix_change_pct"] = item.get("change_pct", 0.0)
+        return {
+            "indices": data,
+            "regime": regime,
+            "top": top_payload.get("items", []),
+            "momentum": top_payload.get("items", []),
+            **flat,
+        }
+    except Exception as e:
+        log.error(f"us market: {e}")
+        return {
+            "indices": [],
+            "regime": {"regime": "UNKNOWN", "vix": 0.0, "spy_above_200ma": False},
+            "top": [],
+            "momentum": [],
+            "sp500": 0.0,
+            "sp500_change_pct": 0.0,
+            "nasdaq": 0.0,
+            "nasdaq_change_pct": 0.0,
+            "dji": 0.0,
+            "dji_change_pct": 0.0,
+            "vix": 0.0,
+            "vix_change_pct": 0.0,
+        }
 
 
 @router.get("/api/us/realtime/news")
@@ -386,7 +403,7 @@ def _get_market_regime() -> dict:
 
 @router.get("/api/us/fx")
 async def api_us_fx():
-    if _time.time() - _fx_cache["ts"] < 300 and _fx_cache["rate"] > 0:
+    if _time.time() - _fx_cache["ts"] < US_FX_CACHE_TTL and _fx_cache["rate"] > 0:
         return {"usdkrw": _fx_cache["rate"], "rate": _fx_cache["rate"], "change_pct": 0.0}
     try:
         import yfinance as _yf_fx

@@ -1,9 +1,9 @@
 #!/bin/bash
-# Cron wrapper for KR stock agent.
-# - Loads env from .env + openclaw.json
-# - Supports: trading(default), check, status, premarket
+# Cron용 KR 주식 래퍼.
+# - .env + openclaw.json 로드
+# - trading(default), check, status, premarket 지원
 
-set -u
+set -euo pipefail
 
 source "$(dirname "$0")/load_env.sh"
 load_openclaw_env
