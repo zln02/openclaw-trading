@@ -32,9 +32,9 @@ function scoreBars(comp, filters) {
   const raw = [
     { label: "F&G", value: Number(comp?.fg_value || 0) },
     { label: "RSI", value: Number(comp?.rsi_d || 0) },
-    { label: "Trend", value: Number(comp?.trend_score || comp?.trend_strength || 42) },
-    { label: "BB", value: Number(comp?.bb_score || 68) },
-    { label: "Volume", value: Number(comp?.volume_score || 54) },
+    { label: "Trend", value: Number(comp?.trend_score ?? comp?.trend_strength ?? 0) },
+    { label: "BB", value: Number(comp?.bb_score ?? 0) },
+    { label: "Volume", value: Number(comp?.volume_score ?? 0) },
     { label: "Funding", value: normalizeFunding(filters?.funding_rate ?? comp?.funding_score ?? 0) },
   ];
 

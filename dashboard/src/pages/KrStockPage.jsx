@@ -14,7 +14,7 @@ import Badge from "../components/ui/Badge";
 import Card from "../components/ui/Card";
 import LightweightPriceChart from "../components/ui/LightweightPriceChart";
 import LoadingSkeleton from "../components/ui/LoadingSkeleton";
-import { EmptyState } from "../components/ui/PageState";
+import { EmptyState, ErrorState } from "../components/ui/PageState";
 import PortfolioPieChart from "../components/ui/PortfolioPieChart";
 
 const PIE_COLORS = ["#00d4aa", "#3b82f6", "#f7931a", "#8ea6ff", "#ffa502", "#ff6b81"];
@@ -37,9 +37,9 @@ function resolvePositionValue(row) {
 }
 
 export default function KrStockPage() {
-  const { data: portfolio, loading: portfolioLoading } = usePolling(getStockPortfolio, 30000);
+  const { data: portfolio, loading: portfolioLoading, error: portfolioError } = usePolling(getStockPortfolio, 30000);
   const { data: topStocks, loading: topLoading } = usePolling(getKrTop, 60000);
-  const { data: trades, loading: tradesLoading } = usePolling(getStockTrades, 30000);
+  const { data: trades, loading: tradesLoading, error: tradesError } = usePolling(getStockTrades, 30000);
   const { data: market } = usePolling(getStockMarket, 60000);
   const { data: strategy } = usePolling(getStockStrategy, 60000);
 
@@ -98,6 +98,12 @@ export default function KrStockPage() {
 
   return (
     <div className="space-y-[var(--content-gap)]">
+      {portfolioError && (
+        <ErrorState message={`KR 포트폴리오 API 연결 실패: ${portfolioError}`} />
+      )}
+      {tradesError && (
+        <ErrorState message={`KR 매매 내역 API 연결 실패: ${tradesError}`} />
+      )}
       <div className="grid gap-[var(--content-gap)] xl:grid-cols-[1.6fr_1fr]">
         <Card title="포트폴리오 비중" icon={<PieChartIcon size={14} />} delay={0}>
           {portfolioLoading ? (

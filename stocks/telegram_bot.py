@@ -9,6 +9,7 @@ import asyncio
 import json
 import os
 import time
+from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -350,10 +351,10 @@ def get_risk_summary_text() -> str:
         us = build_portfolio_state_sync("us")
         cross_market = {"risk_level": "UNKNOWN", "correlations": {}}
         try:
-          from quant.cross_market_risk import CrossMarketRisk
-          cross_market = asyncio.run(CrossMarketRisk().check_exposure())
+            from quant.cross_market_risk import CrossMarketRisk
+            cross_market = asyncio.run(CrossMarketRisk().check_exposure())
         except Exception as e:
-          print(f"cross_market_risk 실패: {e}")
+            print(f"cross_market_risk 실패: {e}")
         return (
             "🛡 현재 리스크 상태\n"
             f"- BTC DD: {float(btc.get('current_drawdown', 0)):.2%}\n"

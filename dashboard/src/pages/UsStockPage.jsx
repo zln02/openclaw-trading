@@ -8,12 +8,12 @@ import Card from "../components/ui/Card";
 import LightweightPriceChart from "../components/ui/LightweightPriceChart";
 import LoadingSkeleton from "../components/ui/LoadingSkeleton";
 import MiniSparkline from "../components/ui/MiniSparkline";
-import { EmptyState } from "../components/ui/PageState";
+import { EmptyState, ErrorState } from "../components/ui/PageState";
 
 export default function UsStockPage() {
-  const { data: market, loading: marketLoading } = usePolling(getUsMarket, 60000);
+  const { data: market, loading: marketLoading, error: marketError } = usePolling(getUsMarket, 60000);
   const { data: fx } = usePolling(getUsFx, 60000);
-  const { data: positions, loading: positionsLoading } = usePolling(getUsPositions, 30000);
+  const { data: positions, loading: positionsLoading, error: positionsError } = usePolling(getUsPositions, 30000);
   const { data: trades } = usePolling(getUsTrades, 30000);
 
   const ranking = market?.top || market?.momentum || [];
@@ -49,6 +49,12 @@ export default function UsStockPage() {
 
   return (
     <div className="space-y-[var(--content-gap)]">
+      {marketError && (
+        <ErrorState message={`US 시장 데이터 API 연결 실패: ${marketError}`} />
+      )}
+      {positionsError && (
+        <ErrorState message={`US 포지션 API 연결 실패: ${positionsError}`} />
+      )}
       <div className="grid gap-[var(--content-gap)] lg:grid-cols-2 xl:grid-cols-4">
         {marketCards.map((card, index) => (
           <Card

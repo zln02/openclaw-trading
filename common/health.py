@@ -100,10 +100,14 @@ class HealthMonitor:
         "dashboard": {"check": check_dashboard, "critical": False},
         "cron_jobs": {"check": check_cron_freshness, "critical": True},
     }
+    # Telegram 알림 쿨다운: 컴포넌트별 마지막 발송 시각
+    _ALERT_COOLDOWN_SEC = 30 * 60  # 30분
+    _last_alert: dict[str, float] = {}
 
     async def run_checks(self) -> dict[str, Any]:
         results: dict[str, Any] = {}
         supabase = get_supabase()
+        now = time.time()
 
         for name, config in self.COMPONENTS.items():
             started = time.time()
@@ -111,14 +115,19 @@ class HealthMonitor:
                 details = await config["check"]()
                 latency = int((time.time() - started) * 1000)
                 results[name] = {"status": "healthy", "latency_ms": latency, "details": details}
+                # 복구 시 쿨다운 초기화
+                self._last_alert.pop(name, None)
             except Exception as exc:
                 results[name] = {"status": "down", "error": str(exc)}
                 log.error("health check failed", component=name, error=str(exc))
                 if config.get("critical"):
-                    try:
-                        await asyncio.to_thread(send_telegram, f"🚨 CRITICAL: {name} is DOWN — {str(exc)[:200]}")
-                    except Exception:
-                        pass
+                    last = self._last_alert.get(name, 0)
+                    if now - last >= self._ALERT_COOLDOWN_SEC:
+                        try:
+                            await asyncio.to_thread(send_telegram, f"🚨 CRITICAL: {name} is DOWN — {str(exc)[:200]}")
+                            self._last_alert[name] = now
+                        except Exception:
+                            pass
 
         if supabase:
             await asyncio.to_thread(self._persist_snapshots, supabase, results)

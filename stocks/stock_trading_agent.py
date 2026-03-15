@@ -1179,7 +1179,6 @@ def execute_buy(
     weekly: dict = None,
 ) -> dict:
     """매수 실행 (모든 검증 포함)"""
-    global _kr_buy_blocked
     code = stock['code']
     name = stock['name']
     price = indicators.get('price', 0)

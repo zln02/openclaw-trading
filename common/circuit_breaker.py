@@ -84,17 +84,22 @@ def build_portfolio_state_sync(market: str) -> dict[str, Any]:
 
     market_key = market.lower()
     if market_key == "btc":
-        table = "btc_position"
-        query = lambda: supabase.table(table).select("pnl_pct").eq("status", "CLOSED").order("exit_time", desc=True).limit(200).execute()
+        source_table = "btc_position"
     elif market_key == "kr":
-        table = "trade_executions"
-        query = lambda: supabase.table(table).select("pnl_pct").eq("result", "CLOSED").order("created_at", desc=True).limit(200).execute()
+        source_table = "trade_executions"
     else:
-        table = "us_trade_executions"
-        query = lambda: supabase.table(table).select("pnl_pct").eq("result", "CLOSED").order("created_at", desc=True).limit(200).execute()
+        source_table = "us_trade_executions"
+
+    def _run_query():
+        if market_key == "btc":
+            return supabase.table(source_table).select("pnl_pct").eq("status", "CLOSED").order("exit_time", desc=True).limit(200).execute()
+        elif market_key == "kr":
+            return supabase.table(source_table).select("pnl_pct").eq("result", "CLOSED").order("created_at", desc=True).limit(200).execute()
+        else:
+            return supabase.table(source_table).select("pnl_pct").eq("result", "CLOSED").order("created_at", desc=True).limit(200).execute()
 
     try:
-        rows = query().data or []
+        rows = _run_query().data or []
     except Exception as exc:
         log.warning("drawdown state load failed", market=market, error=str(exc))
         rows = []
@@ -105,7 +110,7 @@ def build_portfolio_state_sync(market: str) -> dict[str, Any]:
         "market": market_key,
         "current_drawdown": drawdown,
         "closed_trades": len(rows),
-        "source_table": table,
+        "source_table": source_table,
     }
 
 

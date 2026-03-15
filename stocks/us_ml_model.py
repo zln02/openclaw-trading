@@ -176,8 +176,8 @@ def _build_feature_frame(symbol: str, period: str = "5y") -> pd.DataFrame:
     spy_ret_daily = spy_close.pct_change()
     stock_ret_daily = close.pct_change()
     beta = (
-        stock_ret_daily.rolling(60).cov(spy_ret_daily) /
-        spy_ret_daily.rolling(60).var().replace(0, np.nan)
+        stock_ret_daily.rolling(60).cov(spy_ret_daily)
+        / spy_ret_daily.rolling(60).var().replace(0, np.nan)
     )
     spy_ma200 = spy_close.rolling(200).mean()
     regime = np.where(spy_close > spy_ma200, 1.0, -1.0)

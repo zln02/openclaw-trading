@@ -209,10 +209,10 @@ def _cli() -> int:
 
     snapshot = None
     if args.snapshot_file:
-      try:
-          snapshot = json.loads(Path(args.snapshot_file).read_text(encoding="utf-8"))
-      except Exception as exc:
-          log.warning("snapshot 파일 로드 실패", error=exc, path=args.snapshot_file)
+        try:
+            snapshot = json.loads(Path(args.snapshot_file).read_text(encoding="utf-8"))
+        except Exception as exc:
+            log.warning("snapshot 파일 로드 실패", error=exc, path=args.snapshot_file)
 
     if snapshot is None:
         snapshot = {

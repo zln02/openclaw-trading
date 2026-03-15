@@ -66,31 +66,36 @@ FEATURE_NAMES = [
     'volume_trend',
 ]
 
+# 실데이터 수집 후 활성화할 피처 (현재 모두 0 → 비활성)
+# 활성화 조건: OpenDART/KRX 수집 파이프라인 구축 후 주석 해제
+_DISABLED_FACTOR_FEATURES = [
+    'momentum_12m',   # 12개월 모멘텀 (importance=0)
+    'pe_ratio',       # OpenDART 미수집
+    'pb_ratio',       # OpenDART 미수집
+    'roe',            # OpenDART 미수집
+    'debt_ratio',     # OpenDART 미수집
+    'revenue_growth', # OpenDART 미수집
+    'earnings_surprise',     # 실적 서프라이즈 미수집
+    'orderbook_imbalance',   # 호가 불균형 미수집
+]
+
 FACTOR_FEATURES = [
-    'momentum_12m',
-    'momentum_1m',
-    'pe_ratio',
-    'pb_ratio',
-    'roe',
-    'debt_ratio',
-    'revenue_growth',
-    'earnings_surprise',
-    'volume_ratio_20d',
-    'orderbook_imbalance',
+    'momentum_1m',       # 1개월 모멘텀 (활성)
+    'volume_ratio_20d',  # 20일 거래량 비율 (활성)
 ]
 
 MARKET_FEATURES = [
     'kospi_rsi_14',
     'kospi_return_5d',
     'vix_level',
-    'fg_index',
-    'regime_encoded',
+    # 'fg_index',       # 공포탐욕지수 미수집 → 비활성
+    # 'regime_encoded', # 레짐 인코딩 미수집 → 비활성
 ]
 
 SUPPLY_FEATURES = [
-    'foreign_net_buy_5d',
-    'inst_net_buy_5d',
-    'short_interest_ratio',
+    # 'foreign_net_buy_5d',  # KRX API 미수집 → 비활성
+    # 'inst_net_buy_5d',     # KRX API 미수집 → 비활성
+    # 'short_interest_ratio',# 공매도 미수집 → 비활성
     'days_to_earnings',
     'sector_momentum_rank',
     'relative_strength_vs_kospi',

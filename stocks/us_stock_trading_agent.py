@@ -631,7 +631,6 @@ def check_exit(symbol: str, position: dict, indicators: dict) -> Optional[str]:
 
 def execute_buy(symbol: str, score: float, indicators: dict, signal: Optional[dict] = None) -> dict:
     """매수 실행."""
-    global _us_buy_blocked
     price = indicators.get("price", 0)
     if not price:
         return {"result": "NO_PRICE"}
