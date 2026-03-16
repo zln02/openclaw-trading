@@ -1,5 +1,5 @@
 import { Newspaper, RefreshCw, ShieldCheck, TrendingUp } from "lucide-react";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import {
   getBtcCandles,
   getBtcComposite,
@@ -19,6 +19,7 @@ import MetricRow, { getSignalColor } from "../components/ui/MetricRow";
 import { EmptyState, ErrorState } from "../components/ui/PageState";
 import ScoreRadial from "../components/ui/ScoreRadial";
 import ValuePair from "../components/ui/ValuePair";
+import { BtcStrategyPanel } from "../components/StrategyPanel";
 
 function normalizeFunding(value) {
   const numeric = Number(value || 0);
@@ -84,9 +85,9 @@ function tradePnl(trade) {
 }
 
 function scoreLabel(score) {
-  if (score <= 30) return "Risk Off";
-  if (score <= 70) return "Neutral";
-  return "Risk On";
+  if (score <= 30) return "리스크 오프";
+  if (score <= 70) return "중립";
+  return "리스크 온";
 }
 
 function CompactSignalRow({ label, value, color }) {
@@ -110,17 +111,95 @@ function DecisionPlaceholder() {
   return (
     <div className="flex items-center gap-2 rounded-xl border border-white/5 bg-white/[0.02] px-3 py-3 text-sm text-[color:var(--text-muted)]">
       <span className="h-2 w-2 animate-pulse rounded-full bg-white/30" />
-      <span>Awaiting next decision...</span>
+      <span>다음 결정 대기 중...</span>
     </div>
   );
 }
 
+function BtcAccountBanner({ summary, loading }) {
+  if (loading) return <LoadingSkeleton height={80} />;
+  if (!summary || !summary.estimated_asset) return null;
+
+  const krwBalance = Number(summary.krw_balance || 0);
+  const totalEval = Number(summary.total_eval || 0);
+  const estimatedAsset = Number(summary.estimated_asset || 0);
+  const unrealizedPnl = Number(summary.unrealized_pnl || 0);
+  const unrealizedPct = Number(summary.unrealized_pnl_pct || 0);
+  const realizedPnl = Number(summary.realized_pnl || 0);
+  const winrate = Number(summary.winrate || 0);
+  const wins = Number(summary.wins || 0);
+  const losses = Number(summary.losses || 0);
+
+  const cells = [
+    { label: "KRW 잔고", value: krw(krwBalance), delta: null },
+    { label: "BTC 평가금액", value: krw(totalEval), delta: null },
+    { label: "총 자산", value: krw(estimatedAsset), delta: null },
+    { label: "미실현 손익", value: krw(unrealizedPnl), delta: unrealizedPct, emphasize: true },
+    { label: "실현 손익 / 승률", value: `${krw(realizedPnl)} / ${winrate.toFixed(1)}%`, delta: null, sub: `${wins}승 ${losses}패` },
+  ];
+
+  return (
+    <div className="rounded-[var(--panel-radius)] border border-white/10 bg-[color:var(--bg-panel)] px-4 py-3 shadow-[var(--shadow-panel)]">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[color:var(--text-muted)]">
+          BTC 계좌 현황 (Upbit)
+        </span>
+        <Badge variant={unrealizedPct >= 0 ? "profit" : "loss"}>
+          {unrealizedPct >= 0 ? "+" : ""}{Number(unrealizedPct).toFixed(2)}%
+        </Badge>
+      </div>
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+        {cells.map((cell) => (
+          <div key={cell.label} className="rounded-xl border border-white/5 bg-white/[0.02] px-3 py-2.5">
+            <div className="text-[11px] uppercase tracking-[0.12em] text-[color:var(--text-muted)]">{cell.label}</div>
+            <div
+              className={`mt-1 numeric text-sm font-semibold ${
+                cell.delta != null
+                  ? cell.delta >= 0
+                    ? "text-[color:var(--color-profit)]"
+                    : "text-[color:var(--color-loss)]"
+                  : "text-[color:var(--text-primary)]"
+              }`}
+            >
+              {cell.value}
+            </div>
+            {cell.delta != null && (
+              <div className={`mt-0.5 numeric text-[11px] ${cell.delta >= 0 ? "text-[color:var(--color-profit)]" : "text-[color:var(--color-loss)]"}`}>
+                {pct(cell.delta)}
+              </div>
+            )}
+            {cell.sub && (
+              <div className="mt-0.5 text-[11px] text-[color:var(--text-muted)]">{cell.sub}</div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+const TIMEFRAMES = [
+  { label: "5분",  interval: "minute5",  count: 120, pollMs: 30000  },
+  { label: "10분", interval: "minute10", count: 144, pollMs: 60000  },
+  { label: "1시간", interval: "minute60", count: 168, pollMs: 60000  },
+  { label: "주봉",  interval: "week",     count: 52,  pollMs: 300000 },
+  { label: "월봉",  interval: "month",    count: 48,  pollMs: 300000 },
+  { label: "연봉",  interval: "day",      count: 365, pollMs: 300000 },
+];
+
 export default function BtcPage() {
+  const [tfIndex, setTfIndex] = useState(0);
+  const tf = TIMEFRAMES[tfIndex];
+
   const { data: composite, error: compositeError, loading: compositeLoading } = usePolling(getBtcComposite, 30000);
   const { data: portfolio, loading: portfolioLoading } = usePolling(getBtcPortfolio, 30000);
   const { data: trades } = usePolling(getBtcTrades, 60000);
   const { data: decisionLog } = usePolling(() => getBtcDecisionLog(8), 30000);
-  const { data: candles, loading: candlesLoading } = usePolling(() => getBtcCandles("minute5", 96), 60000);
+  const { data: candles, loading: candlesLoading } = usePolling(
+    () => getBtcCandles(tf.interval, tf.count),
+    tf.pollMs,
+    [tf.interval],
+  );
   const { data: news } = usePolling(getBtcNews, 120000);
   const { data: filters } = usePolling(getBtcFilters, 30000);
 
@@ -158,7 +237,7 @@ export default function BtcPage() {
 
   const leftRail = (
     <>
-      <Card title="Watchlist" delay={0}>
+      <Card title="시세" delay={0}>
         <div className="space-y-2">
           {watchlist.map((item) => (
             <div
@@ -181,7 +260,7 @@ export default function BtcPage() {
         </div>
       </Card>
 
-      <Card title="Signals" delay={1}>
+      <Card title="신호 지표" delay={1}>
         <div className="space-y-4">
           {signals.map((signal) => (
             <MetricRow
@@ -194,22 +273,85 @@ export default function BtcPage() {
           ))}
         </div>
       </Card>
+
+      <Card title="시장 필터" icon={<ShieldCheck size={14} />} delay={2}>
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-2">
+            <div className="rounded-xl border border-white/5 bg-white/[0.02] px-3 py-3">
+              <div className="text-[11px] uppercase tracking-[0.14em] text-[color:var(--text-muted)]">펀딩비</div>
+              <div className={`mt-1 numeric text-sm ${Number(filters?.funding_rate || 0) >= 0 ? "text-[color:var(--color-profit)]" : "text-[color:var(--color-loss)]"}`}>
+                {Number(filters?.funding_rate || 0).toFixed(4)}%
+              </div>
+            </div>
+            <div className="rounded-xl border border-white/5 bg-white/[0.02] px-3 py-3">
+              <div className="text-[11px] uppercase tracking-[0.14em] text-[color:var(--text-muted)]">롱/숏 비율</div>
+              <div className="mt-1 numeric text-sm text-[color:var(--text-primary)]">
+                {Number(filters?.long_short_ratio || 0).toFixed(2)}x
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-[color:var(--text-muted)]">
+              실행 기록
+            </div>
+            <div className="space-y-2">
+              {decisionRows.slice(0, 4).map((row, index) => (
+                <div key={row.created_at || index} className="rounded-xl border border-white/5 bg-white/[0.02] px-3 py-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <Badge variant={actionVariant(row.action)}>{normalizeAction(row.action)}</Badge>
+                    <span className="numeric text-xs text-[color:var(--text-muted)]">{compactTime(row.created_at || row.timestamp)}</span>
+                  </div>
+                  <div className="mt-2 text-sm text-[color:var(--text-secondary)]">
+                    {row.reason || row.reasoning || "판단 근거 없음"}
+                  </div>
+                </div>
+              ))}
+              {decisionRows.length === 0 ? <DecisionPlaceholder /> : null}
+            </div>
+          </div>
+        </div>
+      </Card>
     </>
   );
 
   if (compositeError) {
-    return <ErrorState message={`BTC API connection failed: ${compositeError}`} />;
+    return <ErrorState message={`BTC API 연결 실패: ${compositeError}`} />;
   }
 
   return (
     <div className="space-y-[var(--content-gap)]">
+      <BtcAccountBanner summary={summary} loading={portfolioLoading} />
       <div className="grid gap-[var(--content-gap)] xl:grid-cols-[240px_minmax(0,1fr)_320px] lg:grid-cols-[minmax(0,1fr)_320px]">
         <aside className="hidden space-y-[var(--content-gap)] xl:block">{leftRail}</aside>
 
         <div className="space-y-[var(--content-gap)]">
           <div className="grid gap-[var(--content-gap)] md:grid-cols-2 xl:hidden">{leftRail}</div>
 
-          <Card accent title="BTC Desk" delay={2} bodyClassName="space-y-4">
+          <Card
+            accent
+            title="BTC 현황"
+            delay={2}
+            bodyClassName="space-y-4"
+            action={
+              <div className="flex gap-0.5">
+                {TIMEFRAMES.map((t, i) => (
+                  <button
+                    key={t.label}
+                    type="button"
+                    onClick={() => setTfIndex(i)}
+                    className={`rounded-full px-2 py-1 text-[11px] transition-colors ${
+                      tfIndex === i
+                        ? "bg-white/10 text-white font-medium"
+                        : "text-[color:var(--text-secondary)] hover:text-white"
+                    }`}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+            }
+          >
             <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
               <div>
                 <div className="text-xs uppercase tracking-[0.16em] text-[color:var(--text-muted)]">BTCKRW</div>
@@ -220,27 +362,27 @@ export default function BtcPage() {
                   <Badge variant={marketTone(portfolioDelta)}>{pct(portfolioDelta)}</Badge>
                 </div>
                 <div className="mt-3 flex flex-wrap gap-2">
-                  <Badge variant="btc">Upbit</Badge>
-                  <Badge variant="neutral">Spot</Badge>
-                  <Badge variant="neutral">5m</Badge>
-                  <Badge variant="info">Live Feed</Badge>
+                  <Badge variant="btc">업비트</Badge>
+                  <Badge variant="neutral">현물</Badge>
+                  <Badge variant="neutral">5분봉</Badge>
+                  <Badge variant="info">실시간</Badge>
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
                 <div className="rounded-xl border border-white/5 bg-white/[0.02] px-3 py-2">
-                  <div className="text-[11px] uppercase tracking-[0.14em] text-[color:var(--text-muted)]">Asset</div>
+                  <div className="text-[11px] uppercase tracking-[0.14em] text-[color:var(--text-muted)]">총 자산</div>
                   <div className="mt-1 numeric text-sm text-[color:var(--text-primary)]">{krw(summary?.estimated_asset || 0)}</div>
                 </div>
                 <div className="rounded-xl border border-white/5 bg-white/[0.02] px-3 py-2">
-                  <div className="text-[11px] uppercase tracking-[0.14em] text-[color:var(--text-muted)]">Cash</div>
+                  <div className="text-[11px] uppercase tracking-[0.14em] text-[color:var(--text-muted)]">원화 잔고</div>
                   <div className="mt-1 numeric text-sm text-[color:var(--text-primary)]">{krw(summary?.krw_balance || 0)}</div>
                 </div>
                 <div className="rounded-xl border border-white/5 bg-white/[0.02] px-3 py-2">
-                  <div className="text-[11px] uppercase tracking-[0.14em] text-[color:var(--text-muted)]">Regime</div>
-                  <div className="mt-1 text-sm text-[color:var(--text-primary)]">{composite?.regime || composite?.trend || "Transition"}</div>
+                  <div className="text-[11px] uppercase tracking-[0.14em] text-[color:var(--text-muted)]">레짐</div>
+                  <div className="mt-1 text-sm text-[color:var(--text-primary)]">{composite?.regime || composite?.trend || "전환"}</div>
                 </div>
                 <div className="rounded-xl border border-white/5 bg-white/[0.02] px-3 py-2">
-                  <div className="text-[11px] uppercase tracking-[0.14em] text-[color:var(--text-muted)]">Composite</div>
+                  <div className="text-[11px] uppercase tracking-[0.14em] text-[color:var(--text-muted)]">종합 점수</div>
                   <div className="mt-1 numeric text-sm text-[color:var(--text-primary)]">{score.toFixed(0)}</div>
                 </div>
               </div>
@@ -249,20 +391,20 @@ export default function BtcPage() {
             {candlesLoading ? (
               <LoadingSkeleton height={460} />
             ) : (
-              <LightweightPriceChart title="Price / Volume" data={candleSeries} height={460} />
+              <LightweightPriceChart title={`가격 / 거래량 (${tf.label})`} data={candleSeries} height={460} />
             )}
           </Card>
 
           <div className="grid gap-[var(--content-gap)] xl:grid-cols-2">
-            <Card title="Recent Trades" delay={3} bodyClassName="p-0">
+            <Card title="최근 거래" delay={3} bodyClassName="p-0">
               <div className="overflow-x-auto scrollbar-subtle px-4 pb-4">
                 <table className="terminal-table">
                   <thead>
                     <tr>
-                      <th>Time</th>
-                      <th>Action</th>
-                      <th>Price</th>
-                      <th>PnL</th>
+                      <th>시각</th>
+                      <th>액션</th>
+                      <th>가격</th>
+                      <th>손익</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -285,7 +427,7 @@ export default function BtcPage() {
                     {tradeRows.length === 0 ? (
                       <tr>
                         <td colSpan="4">
-                          <EmptyState message="No recent BTC trades." />
+                          <EmptyState message="최근 BTC 거래 내역이 없습니다." />
                         </td>
                       </tr>
                     ) : null}
@@ -294,7 +436,7 @@ export default function BtcPage() {
               </div>
             </Card>
 
-            <Card title="News Feed" icon={<Newspaper size={14} />} delay={4}>
+            <Card title="뉴스" icon={<Newspaper size={14} />} delay={4}>
               <div className="space-y-3">
                 {newsRows.slice(0, 6).map((item, index) => (
                   <article
@@ -304,31 +446,31 @@ export default function BtcPage() {
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
                         <div className="line-clamp-2 text-sm font-medium text-[color:var(--text-primary)]">
-                          {item.title || item.headline || "Untitled story"}
+                          {item.title || item.headline || "제목 없음"}
                         </div>
                         <div className="mt-2 text-xs text-[color:var(--text-secondary)]">
-                          {item.source || "Unknown source"}
+                          {item.source || "출처 불명"}
                         </div>
                       </div>
                       <Badge variant={newsVariant(item.sentiment)}>{item.sentiment || "Neutral"}</Badge>
                     </div>
                   </article>
                 ))}
-                {newsRows.length === 0 ? <EmptyState message="No BTC news available." /> : null}
+                {newsRows.length === 0 ? <EmptyState message="BTC 뉴스가 없습니다." /> : null}
               </div>
             </Card>
           </div>
         </div>
 
         <aside className="space-y-[var(--content-gap)]">
-          <Card title="Composite Score" icon={<TrendingUp size={14} />} delay={5}>
+          <Card title="종합 점수" icon={<TrendingUp size={14} />} delay={5}>
             {compositeLoading ? (
               <LoadingSkeleton height={300} />
             ) : (
               <>
                 <ScoreRadial score={score} />
                 <div className="mt-3 rounded-xl border border-white/5 bg-white/[0.02] px-3 py-2 text-center">
-                  <div className="text-[11px] uppercase tracking-[0.14em] text-[color:var(--text-muted)]">Execution Signal</div>
+                  <div className="text-[11px] uppercase tracking-[0.14em] text-[color:var(--text-muted)]">매매 신호</div>
                   <div className="mt-1 text-sm text-[color:var(--text-primary)]">{scoreLabel(score)}</div>
                 </div>
                 <div className="mt-4 space-y-2">
@@ -346,67 +488,30 @@ export default function BtcPage() {
           </Card>
 
           <Card
-            title="Position"
+            title="현재 포지션"
             icon={<RefreshCw size={14} />}
-            action={<Badge variant={currentPosition ? "profit" : "neutral"}>{currentPosition ? "OPEN" : "FLAT"}</Badge>}
+            action={<Badge variant={currentPosition ? "profit" : "neutral"}>{currentPosition ? "보유중" : "미보유"}</Badge>}
             delay={6}
           >
             {portfolioLoading ? (
               <LoadingSkeleton height={220} />
             ) : (
               <div className="divide-y divide-white/5">
-                <ValuePair label="Entry" value={krw(currentPosition?.entry_price || currentPosition?.avg_price || 0)} />
-                <ValuePair label="Current" value={krw(lastPrice)} />
+                <ValuePair label="진입가" value={krw(currentPosition?.entry_price || currentPosition?.avg_price || 0)} />
+                <ValuePair label="현재가" value={krw(lastPrice)} />
                 <ValuePair
-                  label="PnL"
+                  label="손익률"
                   value={pct(portfolioDelta)}
                   tone={marketTone(portfolioDelta)}
                   emphasize
                 />
-                <ValuePair label="Size" value={num(currentPosition?.quantity || currentPosition?.size || 0, 6)} />
-                <ValuePair label="Cash Balance" value={krw(summary?.krw_balance || 0)} />
+                <ValuePair label="수량" value={num(currentPosition?.quantity || currentPosition?.size || 0, 6)} />
+                <ValuePair label="원화 잔고" value={krw(summary?.krw_balance || 0)} />
               </div>
             )}
           </Card>
 
-          <Card title="Sentiment & Filters" icon={<ShieldCheck size={14} />} delay={7}>
-            <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-2">
-                <div className="rounded-xl border border-white/5 bg-white/[0.02] px-3 py-3">
-                  <div className="text-[11px] uppercase tracking-[0.14em] text-[color:var(--text-muted)]">Funding</div>
-                  <div className={`mt-1 numeric text-sm ${Number(filters?.funding_rate || 0) >= 0 ? "text-[color:var(--color-profit)]" : "text-[color:var(--color-loss)]"}`}>
-                    {Number(filters?.funding_rate || 0).toFixed(4)}%
-                  </div>
-                </div>
-                <div className="rounded-xl border border-white/5 bg-white/[0.02] px-3 py-3">
-                  <div className="text-[11px] uppercase tracking-[0.14em] text-[color:var(--text-muted)]">Long/Short</div>
-                  <div className="mt-1 numeric text-sm text-[color:var(--text-primary)]">
-                    {Number(filters?.long_short_ratio || 0).toFixed(2)}x
-                  </div>
-                </div>
-              </div>
-
-              <div>
-                <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-[color:var(--text-muted)]">
-                  Execution Feed
-                </div>
-                <div className="space-y-2">
-                  {decisionRows.slice(0, 4).map((row, index) => (
-                    <div key={row.created_at || index} className="rounded-xl border border-white/5 bg-white/[0.02] px-3 py-3">
-                      <div className="flex items-center justify-between gap-3">
-                        <Badge variant={actionVariant(row.action)}>{normalizeAction(row.action)}</Badge>
-                        <span className="numeric text-xs text-[color:var(--text-muted)]">{compactTime(row.created_at || row.timestamp)}</span>
-                      </div>
-                      <div className="mt-2 text-sm text-[color:var(--text-secondary)]">
-                        {row.reason || row.reasoning || "No reasoning provided."}
-                      </div>
-                    </div>
-                  ))}
-                  {decisionRows.length === 0 ? <DecisionPlaceholder /> : null}
-                </div>
-              </div>
-            </div>
-          </Card>
+          <BtcStrategyPanel composite={composite} filters={filters} decisions={decisionRows} loading={compositeLoading} />
         </aside>
       </div>
     </div>

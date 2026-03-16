@@ -44,4 +44,6 @@
   --topbar-height: 56px;
   --summary-height: 48px;
   --content-gap: 12px;
+  --sidebar-width: 220px;
+  --bg-panel: rgba(18, 18, 26, 0.9);
 }

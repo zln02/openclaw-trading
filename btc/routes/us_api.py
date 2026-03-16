@@ -1,7 +1,7 @@
 """US stock-related API endpoints."""
 import time as _time
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from fastapi import APIRouter, Query
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -73,7 +73,8 @@ async def get_us_composite():
                 # 최신 US 모멘텀 신호 조회
                 res = supabase.table("us_momentum_signals").select("*").order("created_at", desc=True).limit(50).execute()
                 if res.data:
-                    avg_score = sum(item.get("score", 50) for item in res.data) / len(res.data)
+                    scores = [item.get("score", 50) for item in res.data]
+                    avg_score = sum(scores) / len(scores) if scores else 50
                     composite["total"] = int(avg_score)
             except Exception:
                 pass
@@ -159,7 +160,7 @@ async def get_us_system():
             "disk_total": round(disk.total / (1024**3), 1),
             "disk_pct": disk.percent,
             "alpaca_ok": alpaca_ok,
-            "last_cron": f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}][us_agent][INFO]",
+            "last_cron": f"[{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')}][us_agent][INFO]",
         }
     except Exception as e:
         log.error(f"US system error: {e}")
@@ -183,7 +184,7 @@ async def get_us_trades(
             query = query.eq("result", result)
         
         if hours:
-            cutoff = (datetime.now() - timedelta(hours=hours)).isoformat()
+            cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
             query = query.gte("created_at", cutoff)
 
         res = query.order("created_at", desc=True).limit(limit).execute()
@@ -250,17 +251,18 @@ async def api_us_positions():
 
 
 @router.get("/api/us/chart/{symbol}")
-async def api_us_chart(symbol: str, period: str = Query("3mo")):
+async def api_us_chart(symbol: str, period: str = Query("3mo"), interval: str = Query("1d")):
     try:
         import yfinance as _yf_chart
         t = _yf_chart.Ticker(symbol)
-        h = t.history(period=period)
+        h = t.history(period=period, interval=interval)
         if h is None or h.empty:
             return {"candles": [], "symbol": symbol}
+        intraday = interval not in ("1d", "1wk", "1mo")
         candles = []
         for ts, row in h.iterrows():
             candles.append({
-                "time": ts.strftime("%Y-%m-%d"),
+                "time": ts.strftime("%Y-%m-%dT%H:%M") if intraday else ts.strftime("%Y-%m-%d"),
                 "open": round(float(row["Open"]), 2),
                 "high": round(float(row["High"]), 2),
                 "low": round(float(row["Low"]), 2),

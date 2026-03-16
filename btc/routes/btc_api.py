@@ -1,6 +1,6 @@
 """BTC-related API endpoints."""
 import os, time, json, requests, asyncio
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from fastapi import APIRouter, Query
 from fastapi.responses import HTMLResponse
@@ -436,7 +436,7 @@ async def api_btc_filters():
         funding_signal = fr.get("signal", "NEUTRAL")
 
         # 3. 오늘 매매 횟수 (btc_position open today)
-        today = datetime.now().date().isoformat()
+        today = datetime.now(timezone.utc).date().isoformat()
         today_count = 0
         today_pnl_pct = 0.0
         if supabase:
@@ -490,7 +490,7 @@ async def get_stats():
         total_pnl = sum(float(p.get("pnl") or 0) for p in closed)
         total_krw = sum(float(p.get("entry_krw") or 0) for p in closed)
 
-        today = datetime.now().date().isoformat()
+        today = datetime.now(timezone.utc).date().isoformat()
         today_closed = [p for p in closed if (p.get("exit_time") or "")[:10] == today]
         today_trades = len([t for t in trades if (t.get("timestamp") or "")[:10] == today])
         today_pnl = sum(float(p.get("pnl") or 0) for p in today_closed)
@@ -553,8 +553,7 @@ async def get_trades(
         
         # 시간 필터링
         if hours:
-            from datetime import datetime, timedelta
-            cutoff = (datetime.now() - timedelta(hours=hours)).isoformat()
+            cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
             query = query.gte("timestamp", cutoff)
         
         # 정렬 및 제한
@@ -620,9 +619,9 @@ async def get_news():
         return []
 
 
-def _fetch_candles_sync(interval):
+def _fetch_candles_sync(interval, count=100):
     import pyupbit
-    df = pyupbit.get_ohlcv("KRW-BTC", interval=interval, count=100)
+    df = pyupbit.get_ohlcv("KRW-BTC", interval=interval, count=min(count, 500))
     if df is None or df.empty:
         return []
     result = []
@@ -639,9 +638,9 @@ def _fetch_candles_sync(interval):
 
 
 @router.get("/api/candles")
-async def get_candles(interval: str = Query("minute5")):
+async def get_candles(interval: str = Query("minute5"), count: int = Query(100, ge=1, le=500)):
     try:
-        return await asyncio.to_thread(_fetch_candles_sync, interval)
+        return await asyncio.to_thread(_fetch_candles_sync, interval, count)
     except Exception as e:
         log.error(f"candles: {e}")
         return []

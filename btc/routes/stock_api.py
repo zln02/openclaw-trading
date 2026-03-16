@@ -1,6 +1,6 @@
 """Korean stock-related API endpoints."""
 import json, time as _time, asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from collections import defaultdict
 from fastapi import APIRouter, Query
@@ -40,7 +40,7 @@ def _get_kiwoom():
 
 
 def is_market_open_now() -> bool:
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     if now.weekday() >= 5:
         return False
     t = now.hour * 100 + now.minute
@@ -325,7 +325,7 @@ async def get_stock_realtime_alt_data(symbol: str):
 
 
 @router.get("/api/stocks/chart/{code}")
-async def get_stock_chart(code: str, interval: str = Query("1d")):
+async def get_stock_chart(code: str, interval: str = Query("1d"), limit: int = Query(65, ge=10, le=500)):
     db_code = code.lstrip("A") if code.startswith("A") else code
     if not supabase:
         return {"candles": [], "name": "", "code": code}
@@ -361,7 +361,7 @@ async def get_stock_chart(code: str, interval: str = Query("1d")):
                 })
             return {"candles": candles, "name": _stock_name(code), "code": code}
 
-        raw = supabase.table("daily_ohlcv").select("*").eq("stock_code", db_code).order("date", desc=True).limit(60).execute().data or []
+        raw = supabase.table("daily_ohlcv").select("*").eq("stock_code", db_code).order("date", desc=True).limit(limit).execute().data or []
         rows = sorted(raw, key=lambda r: r["date"])
         if not rows:
             return {"candles": [], "name": _stock_name(code), "code": code}
@@ -629,7 +629,7 @@ async def get_stocks_daily_pnl(days: int = Query(7, ge=1, le=31)):
             return {"daily": []}
         results = []
         for i in range(days, -1, -1):
-            d = datetime.now() - timedelta(days=i)
+            d = datetime.now(timezone.utc) - timedelta(days=i)
             date = d.strftime("%Y%m%d")
             try:
                 data = kiwoom.get_daily_balance_pnl(date)
@@ -747,7 +747,7 @@ async def get_kr_composite():
             return composite
 
         # 최근 7일 SELL(체결) 거래 기반 성과 계산
-        cutoff = (datetime.now() - timedelta(days=7)).isoformat()
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
         try:
             res = (
                 supabase.table("trade_executions")
@@ -786,7 +786,7 @@ async def get_kr_composite():
 
         # 오늘 일일 손실 한도 체크
         try:
-            today_iso = datetime.now().date().isoformat()
+            today_iso = datetime.now(timezone.utc).date().isoformat()
             today_rows = (
                 supabase.table("trade_executions")
                 .select("price,entry_price,quantity")
@@ -988,7 +988,7 @@ async def get_kr_system():
             "disk_total": round(disk.total / (1024**3), 1),
             "disk_pct": disk.percent,
             "kiwoom_ok": kiwoom_ok,
-            "last_cron": f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}][kr_agent][INFO]",
+            "last_cron": f"[{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')}][kr_agent][INFO]",
         }
     except Exception as e:
         log.error(f"KR system error: {e}")
@@ -1078,7 +1078,7 @@ async def get_kr_trades(
             query = query.eq("trade_type", action)
 
         if hours:
-            cutoff = (datetime.now() - timedelta(hours=hours)).isoformat()
+            cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
             query = query.gte("created_at", cutoff)
 
         res = query.order("created_at", desc=True).limit(limit).execute()
@@ -1120,7 +1120,7 @@ async def get_stocks_trades(today_only: bool = False):
         )
         data = res.data or []
         if today_only and data and isinstance(data[0], dict) and "created_at" in data[0]:
-            today = datetime.now().date().isoformat()
+            today = datetime.now(timezone.utc).date().isoformat()
             data = [r for r in data if str(r.get("created_at") or "")[:10] == today]
         return data
     except Exception as e:

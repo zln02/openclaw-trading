@@ -63,8 +63,8 @@ export const getStockPortfolio = () => fetchJSON("/api/stocks/portfolio");
 export const getStockTrades = () => fetchJSON("/api/stocks/trades?limit=20");
 export const getStockMarket = () => fetchJSON("/api/stocks/market-summary");
 export const getStockStrategy = () => fetchJSON("/api/stocks/strategy");
-export const getStockChart = (code, interval = "1d") =>
-  fetchJSONSafe(`/api/stocks/chart/${encodeURIComponent(code)}?interval=${interval}`);
+export const getStockChart = (code, interval = "1d", limit = 65) =>
+  fetchJSONSafe(`/api/stocks/chart/${encodeURIComponent(code)}?interval=${interval}&limit=${limit}`);
 export const getStockIndicators = (code) =>
   fetchJSONSafe(`/api/stocks/indicators/${encodeURIComponent(code)}`);
 export const getStockLogs = (source = "all") => fetchJSONSafe(`/api/stocks/logs?source=${source}`);
@@ -79,8 +79,8 @@ export const getUsTrades = () => fetchJSON("/api/us/trades");
 export const getUsMarket = () => fetchJSON("/api/us/market");
 export const getUsFx = () => fetchJSONSafe("/api/us/fx");
 export const getUsSystem = () => fetchJSONSafe("/api/us/system");
-export const getUsChart = (symbol, period = "3mo") =>
-  fetchJSONSafe(`/api/us/chart/${encodeURIComponent(symbol)}?period=${encodeURIComponent(period)}`);
+export const getUsChart = (symbol, period = "3mo", interval = "1d") =>
+  fetchJSONSafe(`/api/us/chart/${encodeURIComponent(symbol)}?period=${encodeURIComponent(period)}&interval=${encodeURIComponent(interval)}`);
 export const getUsRealtimeNews = (symbol = "AAPL", limit = 10) =>
   fetchJSONSafe(`/api/us/realtime/news?symbol=${encodeURIComponent(symbol)}&limit=${limit}`);
 export const getUsRealtimePrice = (symbol) => fetchJSONSafe(`/api/us/realtime/price/${encodeURIComponent(symbol)}`);
