@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import os
+from pathlib import Path
 from typing import Any
 
 from common.logger import get_logger
@@ -13,7 +16,26 @@ _PERSIST_WARNED = False  # circuit_breaker_events 테이블 없음 경고 1회�
 
 import time as _time
 _TELEGRAM_COOLDOWN = 86400  # 24시간 — 같은 레벨 알림 중복 방지
-_last_telegram_ts: dict[str, float] = {}  # level → 마지막 발송 시각
+
+# 파일 기반 쿨다운: 서브프로세스 재시작 후에도 유지
+_COOLDOWN_FILE = Path(os.environ.get("OPENCLAW_LOG_DIR", Path.home() / ".openclaw" / "logs")) / "circuit_breaker_cooldown.json"
+
+
+def _load_cooldown_ts() -> dict[str, float]:
+    try:
+        if _COOLDOWN_FILE.exists():
+            return json.loads(_COOLDOWN_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {}
+
+
+def _save_cooldown_ts(ts_map: dict[str, float]) -> None:
+    try:
+        _COOLDOWN_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _COOLDOWN_FILE.write_text(json.dumps(ts_map), encoding="utf-8")
+    except Exception:
+        pass
 
 
 class CircuitBreaker:
@@ -61,10 +83,11 @@ class CircuitBreaker:
                     _PERSIST_WARNED = True
 
         emoji = {"WARNING": "⚠️", "HALT": "🛑", "EMERGENCY": "🚨"}.get(level, "⚠️")
-        global _last_telegram_ts
-        now = _time.monotonic()
-        if now - _last_telegram_ts.get(level, 0) >= _TELEGRAM_COOLDOWN:
-            _last_telegram_ts[level] = now
+        ts_map = _load_cooldown_ts()
+        now = _time.time()
+        if now - ts_map.get(level, 0) >= _TELEGRAM_COOLDOWN:
+            ts_map[level] = now
+            _save_cooldown_ts(ts_map)
             await asyncio.to_thread(
                 send_telegram,
                 f"{emoji} CIRCUIT BREAKER: {level}\nPortfolio Drawdown: {drawdown:.1%}\nAction: {action}",

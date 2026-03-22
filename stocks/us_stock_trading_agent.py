@@ -657,17 +657,15 @@ def execute_buy(symbol: str, score: float, indicators: dict, signal: Optional[di
     # v2: 섹터 분산 체크
     max_sector = RISK.get("max_sector_positions", 2)
     try:
-        ticker_info = yf.Ticker(symbol).info or {}
-        sym_sector = ticker_info.get("sector", "")
+        def _get_sector_safe(sym: str) -> str:
+            try:
+                info = yf.Ticker(sym).info or {}
+                return info.get("sector", "") or ""
+            except Exception:
+                return ""
+        sym_sector = _get_sector_safe(symbol)
         if sym_sector:
-            sector_count = 0
-            for os_sym in open_symbols:
-                try:
-                    os_info = yf.Ticker(os_sym).info or {}
-                    if os_info.get("sector") == sym_sector:
-                        sector_count += 1
-                except Exception:
-                    pass
+            sector_count = sum(1 for s in open_symbols if _get_sector_safe(s) == sym_sector)
             if sector_count >= max_sector:
                 return {"result": "MAX_SECTOR", "sector": sym_sector}
     except Exception:
