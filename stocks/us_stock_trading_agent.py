@@ -19,7 +19,7 @@ import os
 import sys
 import time
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional, List, Dict
 
@@ -35,6 +35,7 @@ from common.supabase_client import get_supabase
 from common.logger import get_logger
 from common.retry import retry, retry_call
 from common.config import US_TRADING_LOG
+from common.utils import generate_order_id, check_order_idempotency
 from common.equity_loader import (
     append_equity_snapshot,
     get_effective_market_weight,
@@ -45,11 +46,15 @@ from common.equity_loader import (
 )
 from quant.risk.drawdown_guard import DrawdownGuard, DrawdownGuardState
 from quant.risk.position_sizer import KellyPositionSizer
+from execution.smart_router import SmartRouter
 
 try:
     from common.sheets_logger import append_trade as _sheets_append
 except ImportError:
     _sheets_append = None
+
+# v6: SmartRouter 인스턴스 (US 모의투자용 — 슬리피지 추적 + 주문 크기별 라우팅 로깅)
+_smart_router = SmartRouter()
 
 load_env()
 _log = get_logger("us_agent", US_TRADING_LOG)
@@ -87,6 +92,8 @@ RISK = {
     "earnings_filter": True,      # 어닝 5일 전 매수 차단
     "max_sector_positions": 2,    # 동일 섹터 최대 2종목
     "volatility_sizing": True,    # ATR 기반 포지션 사이징
+    "max_hold_days": 20,           # v6: 좀비 포지션 하드 컷오프
+    "indicator_fail_max": 3,       # v6: 지표 N회 연속 실패 시 강제 매도
 }
 
 RULES = {
@@ -203,7 +210,7 @@ def _get_us_regime_adj() -> Dict:
 def log(msg: str, level: str = "INFO"):
     """Backward-compat wrapper routing to structured logger."""
     _dispatch = {
-        "INFO": _log.info, "WARN": _log.warn,
+        "INFO": _log.info, "WARN": _log.warning,
         "ERROR": _log.error, "TRADE": _log.trade,
     }
     _dispatch.get(level, _log.info)(msg)
@@ -324,7 +331,7 @@ def count_today_buys() -> int:
     if not supabase:
         return 0
     try:
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         res = (
             supabase.table(US_TRADE_TABLE)
             .select("id")
@@ -342,7 +349,7 @@ def save_trade(trade_type: str, symbol: str, quantity: float, price: float,
                ml_score: float = 0.0, ml_confidence: float = 0.0,
                composite_score: float = 0.0, signal_source: str = "",
                strategy: str = "", drift_status: str = "",
-               drift_penalty: float = 0.0) -> None:
+               drift_penalty: float = 0.0, order_id: str = "") -> None:
     if not supabase:
         return
     payload = {
@@ -362,6 +369,8 @@ def save_trade(trade_type: str, symbol: str, quantity: float, price: float,
         "drift_status": drift_status,
         "drift_penalty": drift_penalty,
     }
+    if order_id:
+        payload["order_id"] = order_id
     try:
         supabase.table(US_TRADE_TABLE).insert(payload).execute()
     except Exception as e:
@@ -435,13 +444,15 @@ def should_buy(symbol: str, score: float, indicators: dict) -> dict:
     if vol_ratio < RULES["buy_vol_hard_min"]:
         return {"action": "HOLD", "reason": f"거래량 급감 ({vol_ratio:.2f}x)"}
 
+    # 마켓 레짐 (1회 조회 후 재사용)
+    _regime = get_market_regime() if RISK.get("market_regime_filter") else {}
+
     # 마켓 레짐 필터
-    if RISK.get("market_regime_filter"):
-        regime = get_market_regime()
-        if regime["regime"] == "BEAR":
-            return {"action": "HOLD", "reason": f"BEAR 마켓 (SPY < 200MA, VIX: {regime['vix']})"}
-        if regime.get("vix", 20) > RISK.get("vix_max", 35):
-            return {"action": "HOLD", "reason": f"VIX 과열 ({regime['vix']:.0f} > {RISK['vix_max']})"}
+    if _regime:
+        if _regime["regime"] == "BEAR":
+            return {"action": "HOLD", "reason": f"BEAR 마켓 (SPY < 200MA, VIX: {_regime['vix']})"}
+        if _regime.get("vix", 20) > RISK.get("vix_max", 35):
+            return {"action": "HOLD", "reason": f"VIX 과열 ({_regime['vix']:.0f} > {RISK['vix_max']})"}
 
     # v2: 어닝 캘린더 필터
     if RISK.get("earnings_filter"):
@@ -520,12 +531,11 @@ def should_buy(symbol: str, score: float, indicators: dict) -> dict:
         elif rs < 0.8:
             cs -= 3
 
-    # 7) 마켓 레짐 (3점)
-    if RISK.get("market_regime_filter"):
-        regime = get_market_regime()
-        if regime["regime"] == "BULL":
+    # 7) 마켓 레짐 (3점) — 위에서 조회한 _regime 재사용
+    if _regime:
+        if _regime["regime"] == "BULL":
             cs += 3
-        elif regime["regime"] == "CORRECTION":
+        elif _regime["regime"] == "CORRECTION":
             cs -= 2
 
     # 8) v2: 멀티팩터 보너스 (밸류+퀄리티 — 15점 × 레짐 val 배수)
@@ -551,11 +561,40 @@ def should_buy(symbol: str, score: float, indicators: dict) -> dict:
     ml_action = ml.get("action", "HOLD")
     ml_source = ml.get("source", "US_ML_UNKNOWN")
 
+    # v6: 뉴스 감정 게이트
+    try:
+        from agents.news_analyst import get_symbol_sentiment
+        from common.config import (
+            NEWS_SENTIMENT_BLOCK_THRESHOLD, NEWS_SENTIMENT_BONUS_THRESHOLD,
+            NEWS_SENTIMENT_BONUS_POINTS,
+        )
+        _sentiment = get_symbol_sentiment(symbol)
+        if _sentiment < NEWS_SENTIMENT_BLOCK_THRESHOLD:
+            return {"action": "HOLD", "reason": f"뉴스 부정적 ({_sentiment:.2f} < {NEWS_SENTIMENT_BLOCK_THRESHOLD})"}
+        if _sentiment > NEWS_SENTIMENT_BONUS_THRESHOLD:
+            cs += NEWS_SENTIMENT_BONUS_POINTS
+            reasons.append(f"뉴스긍정({_sentiment:.2f})")
+    except Exception:
+        pass
+
     if cs >= RULES["buy_composite_min"]:
         blended_conf = float(min(95, cs))
         if ml_confidence > 0:
-            blended_conf = round(blended_conf * 0.6 + ml_confidence * 0.4, 1)
-            reasons.append(f"USML({ml_action}:{ml_confidence:.0f})")
+            # 정확도 기반 동적 블렌딩 (KR과 동일 방식)
+            try:
+                from stocks.ml_model import load_performance_metrics as _lpm
+                _perf = _lpm()
+                _acc = float(_perf.get("accuracy", 0) or 0)
+            except Exception:
+                _acc = 0.0
+            if _acc >= 0.65:
+                _rule_w, _ml_w = 0.50, 0.50
+            elif _acc >= 0.55:
+                _rule_w, _ml_w = 0.70, 0.30
+            else:
+                _rule_w, _ml_w = 0.90, 0.10
+            blended_conf = round(blended_conf * _rule_w + ml_confidence * _ml_w, 1)
+            reasons.append(f"USML({ml_action}:{ml_confidence:.0f},acc={_acc:.0%})")
         return _apply_us_drift_gate({
             "action": "BUY",
             "confidence": blended_conf,
@@ -578,6 +617,48 @@ def should_buy(symbol: str, score: float, indicators: dict) -> dict:
     })
 
 
+def _get_atr_pct(symbol: str, period: int = 14) -> float:
+    """14일 ATR / 현재가 비율 계산. 실패 시 0.0."""
+    try:
+        ticker = yf.Ticker(symbol)
+        hist = ticker.history(period="60d")
+        if hist is None or len(hist) < period + 1:
+            return 0.0
+        close = hist["Close"]
+        high = hist["High"]
+        low = hist["Low"]
+        tr_list = []
+        for i in range(1, len(close)):
+            tr = max(
+                float(high.iloc[i]) - float(low.iloc[i]),
+                abs(float(high.iloc[i]) - float(close.iloc[i - 1])),
+                abs(float(low.iloc[i]) - float(close.iloc[i - 1])),
+            )
+            tr_list.append(tr)
+        atr = sum(tr_list[-period:]) / min(len(tr_list), period)
+        price = float(close.iloc[-1])
+        return atr / price if price > 0 else 0.0
+    except Exception:
+        return 0.0
+
+
+def _get_dynamic_sl_tp(symbol: str) -> tuple:
+    """ATR 기반 동적 SL/TP 계산. (sl_pct, tp_pct) 반환 (sl은 음수)."""
+    from common.config import (
+        ATR_SL_MULTIPLIER, ATR_TP_MULTIPLIER,
+        ATR_MIN_STOP_LOSS, ATR_MAX_STOP_LOSS,
+        ATR_MIN_TAKE_PROFIT, ATR_MAX_TAKE_PROFIT,
+    )
+    atr_pct = _get_atr_pct(symbol)
+    if atr_pct <= 0:
+        return RISK["stop_loss"], RISK["take_profit"]
+    dynamic_sl = -max(ATR_SL_MULTIPLIER * atr_pct, abs(ATR_MIN_STOP_LOSS))
+    dynamic_sl = max(dynamic_sl, ATR_MAX_STOP_LOSS)  # cap at max
+    dynamic_tp = max(ATR_TP_MULTIPLIER * atr_pct, ATR_MIN_TAKE_PROFIT)
+    dynamic_tp = min(dynamic_tp, ATR_MAX_TAKE_PROFIT)
+    return dynamic_sl, dynamic_tp
+
+
 def check_exit(symbol: str, position: dict, indicators: dict) -> Optional[str]:
     """보유 포지션 청산 조건 체크. 청산 사유 문자열 반환, 없으면 None."""
     entry_price = float(position.get("price", 0))
@@ -589,13 +670,16 @@ def check_exit(symbol: str, position: dict, indicators: dict) -> Optional[str]:
     pnl = (current_price - entry_price) / entry_price
     pnl_net = pnl - RISK["fee_rate"]
 
-    # 손절
-    if pnl_net <= RISK["stop_loss"]:
-        return f"손절 ({pnl_net*100:.1f}%)"
+    # v6: ATR 기반 동적 SL/TP
+    dynamic_sl, dynamic_tp = _get_dynamic_sl_tp(symbol)
 
-    # 익절
-    if pnl_net >= RISK["take_profit"]:
-        return f"익절 ({pnl_net*100:.1f}%)"
+    # 손절 (ATR 동적)
+    if pnl_net <= dynamic_sl:
+        return f"손절 ({pnl_net*100:.1f}%, ATR_SL={dynamic_sl*100:.1f}%)"
+
+    # 익절 (ATR 동적)
+    if pnl_net >= dynamic_tp:
+        return f"익절 ({pnl_net*100:.1f}%, ATR_TP={dynamic_tp*100:.1f}%)"
 
     # 적응형 트레일링 스탑: 수익 구간별 차등
     if highest > 0 and pnl_net >= RISK["trailing_activate"]:
@@ -611,16 +695,19 @@ def check_exit(symbol: str, position: dict, indicators: dict) -> Optional[str]:
         if drop >= ts_pct:
             return f"트레일링 (고점 {highest:.2f} → {current_price:.2f}, -{drop*100:.1f}%)"
 
-    # 타임컷
+    # v6: max_hold_days 하드 컷오프 (좀비 포지션 방지)
+    max_hold = RISK.get("max_hold_days", 20)
     created = position.get("created_at", "")
     if created:
         try:
             created_dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
-            hold_days = (datetime.now(created_dt.tzinfo) - created_dt).days
-            if hold_days >= RISK["timecut_days"]:
+            hold_days = (datetime.now(timezone.utc) - created_dt).days
+            if hold_days >= max_hold:
+                return f"최대보유일 초과 ({hold_days}일 ≥ {max_hold}일)"
+            if hold_days >= RISK.get("timecut_days", 12):
                 return f"타임컷 ({hold_days}일 보유)"
-        except Exception:
-            pass
+        except Exception as e:
+            log(f"  {symbol}: 보유일 계산 실패: {e}", "WARN")
 
     rsi = indicators.get("rsi", 50)
     if rsi >= RULES["sell_rsi_min"] and pnl_net > 0:
@@ -648,24 +735,44 @@ def execute_buy(symbol: str, score: float, indicators: dict, signal: Optional[di
     if len(open_symbols) >= RISK["max_positions"]:
         return {"result": "MAX_POSITIONS"}
 
-    # v2: 섹터 분산 체크
+    # v6: 섹터 분산 체크 (ETF 매핑 포함 + 상관관계 체크)
+    from common.config import ETF_SECTOR_MAP
     max_sector = RISK.get("max_sector_positions", 2)
+
+    def _get_sector(sym: str) -> str:
+        """ETF 매핑 우선, 없으면 yfinance info 조회."""
+        if sym in ETF_SECTOR_MAP:
+            return ETF_SECTOR_MAP[sym]
+        try:
+            return yf.Ticker(sym).info.get("sector", "") or ""
+        except Exception:
+            return ""
+
     try:
-        ticker_info = yf.Ticker(symbol).info or {}
-        sym_sector = ticker_info.get("sector", "")
+        sym_sector = _get_sector(symbol)
         if sym_sector:
-            sector_count = 0
-            for os_sym in open_symbols:
-                try:
-                    os_info = yf.Ticker(os_sym).info or {}
-                    if os_info.get("sector") == sym_sector:
-                        sector_count += 1
-                except Exception:
-                    pass
+            sector_count = sum(1 for os_sym in open_symbols if _get_sector(os_sym) == sym_sector)
             if sector_count >= max_sector:
                 return {"result": "MAX_SECTOR", "sector": sym_sector}
     except Exception:
         pass
+
+    # v6: 상관관계 체크 — 기존 포지션과 20일 상관 > 0.8이면 거부
+    if open_symbols:
+        try:
+            _corr_tickers = [symbol] + open_symbols[:4]
+            _corr_data = yf.download(_corr_tickers, period="25d", progress=False)
+            if _corr_data is not None and not _corr_data.empty and "Close" in _corr_data:
+                _close = _corr_data["Close"]
+                if symbol in _close.columns:
+                    for _os in open_symbols:
+                        if _os in _close.columns:
+                            _corr = _close[symbol].corr(_close[_os])
+                            if _corr is not None and _corr > 0.8:
+                                log(f"  {symbol}: {_os}과 상관관계 {_corr:.2f} > 0.8 — 매수 거부")
+                                return {"result": "HIGH_CORRELATION", "corr_with": _os, "corr": round(_corr, 2)}
+        except Exception:
+            pass
 
     if count_today_buys() >= RISK["max_trades_per_day"]:
         return {"result": "MAX_DAILY_TRADES"}
@@ -686,37 +793,54 @@ def execute_buy(symbol: str, score: float, indicators: dict, signal: Optional[di
         ratio = RISK["invest_ratio_C"]
     invest_usd = RISK["virtual_capital"] * ratio
 
+    # v6: Kelly sizer always called (conservative defaults for < 50 trades)
     recent_trades = load_recent_trades('us', limit=100)
-    if len(recent_trades) >= 50:
+    _n_trades = len(recent_trades)
+    if _n_trades >= 50:
         wins = [t['pnl_pct'] for t in recent_trades if t.get('pnl_pct', 0) > 0]
         losses = [abs(t['pnl_pct']) for t in recent_trades if t.get('pnl_pct', 0) < 0]
-        win_rate = len(wins) / len(recent_trades) if recent_trades else 0.0
+        win_rate = len(wins) / _n_trades if _n_trades else 0.0
         avg_win = sum(wins) / len(wins) if wins else 0.02
         avg_loss = sum(losses) / len(losses) if losses else 0.03
-        atr_pct = 0.0
-        try:
-            ticker = yf.Ticker(symbol)
-            hist = ticker.history(period="30d")
-            if hist is not None and len(hist) >= 14:
-                close = hist["Close"]
-                diffs = [abs(float(close.iloc[i] - close.iloc[i - 1])) for i in range(1, len(close))]
-                atr = sum(diffs[-14:]) / min(len(diffs), 14)
-                atr_pct = atr / price if price > 0 else 0.0
-        except Exception:
-            pass
-        current_exposure = sum(float(p.get("quantity", 0) or 0) * float(p.get("price", 0) or 0) for p in positions) / max(RISK["virtual_capital"], 1)
-        sizing = KellyPositionSizer().size_position(
-            account_equity=RISK["virtual_capital"],
-            price=price,
-            win_rate=win_rate,
-            payoff_ratio=avg_win / max(avg_loss, 0.001),
-            current_total_exposure=current_exposure,
-            atr_pct=atr_pct,
-            conviction=max(0.0, min(1.0, score / 100.0)),
-        )
-        kelly_invest = RISK["virtual_capital"] * float(sizing.get("capped_fraction", 0.0))
-        if kelly_invest > 0:
-            invest_usd = kelly_invest
+    else:
+        # v6: 보수적 기본값 (50건 미만)
+        win_rate = 0.35
+        avg_win = 0.04
+        avg_loss = 0.025
+
+    # v6: Kelly sizer always called (regardless of trade count)
+    atr_pct = _get_atr_pct(symbol)
+    current_exposure = sum(
+        float(p.get("quantity", 0) or 0) * float(p.get("price", 0) or 0)
+        for p in positions
+    ) / max(RISK["virtual_capital"], 1)
+    sizer = KellyPositionSizer()
+    sizing = sizer.size_position(
+        account_equity=RISK["virtual_capital"],
+        price=price,
+        win_rate=win_rate,
+        payoff_ratio=avg_win / max(avg_loss, 0.001),
+        current_total_exposure=current_exposure,
+        atr_pct=atr_pct,
+        conviction=max(0.0, min(1.0, score / 100.0)),
+    )
+    kelly_invest = RISK["virtual_capital"] * float(sizing.get("capped_fraction", 0.0))
+    if kelly_invest > 0:
+        invest_usd = kelly_invest
+    log(f"  {symbol}: Kelly sizing: {sizing.get('capped_fraction', 0)*100:.1f}% → ${invest_usd:.0f}")
+
+    # v6: VaR 체크 — 포트폴리오 VaR 3% 초과 시 거부
+    new_var = sizer.estimate_position_var(
+        position_fraction=sizing.get("capped_fraction", 0.0),
+        daily_vol=atr_pct if atr_pct > 0 else 0.02,
+    )
+    existing_var = sizer.estimate_position_var(
+        position_fraction=current_exposure,
+        daily_vol=0.02,  # portfolio avg volatility estimate
+    )
+    if not sizer.check_portfolio_var(existing_var, new_var):
+        log(f"  {symbol}: VaR 초과 ({(existing_var + new_var)*100:.1f}% > {sizer.config.portfolio_var_limit*100:.0f}%) — 매수 거부")
+        return {"result": "VAR_EXCEEDED"}
 
     # v2: ATR 기반 변동성 사이징
     if RISK.get("volatility_sizing"):
@@ -743,7 +867,24 @@ def execute_buy(symbol: str, score: float, indicators: dict, signal: Optional[di
 
     qty = round(qty, 4)
 
+    # 멱등성 체크: 동일 분 내 중복 매수 방지
+    _order_id = generate_order_id("us", symbol, "buy")
+    if check_order_idempotency(supabase, US_TRADE_TABLE, _order_id):
+        log(f"  {symbol}: 중복 주문 감지 — order_id={_order_id}", "WARN")
+        return {"result": "DUPLICATE_ORDER"}
+
     log(f"🟢 {symbol} 매수: ${price:.2f} × {qty}주 ≈ ${invest_usd:.0f}", "TRADE")
+
+    # v6: SmartRouter 라우팅 결정 로깅
+    try:
+        _route_decision = _smart_router.decide(
+            symbol=symbol, side="BUY", total_qty=qty,
+            market="us", price_hint=price,
+        )
+        _route_name = getattr(_route_decision, 'route', 'MARKET')
+        log(f"  {symbol}: SmartRouter → {_route_name} (${invest_usd:.0f})")
+    except Exception:
+        pass
 
     # 팩터 스냅샷 수집 (Phase Level 4: 팩터 로깅)
     _factor_snapshot: str | None = None
@@ -788,14 +929,27 @@ def execute_buy(symbol: str, score: float, indicators: dict, signal: Optional[di
         strategy=strategy,
         drift_status=drift_status,
         drift_penalty=drift_penalty,
+        order_id=_order_id,
     )
 
-    # factor_snapshot 컬럼에 별도 저장 (graceful)
+    # factor_snapshot 컬럼에 별도 저장 — 가장 최근 OPEN BUY 레코드에만 업데이트 (graceful)
     if _factor_snapshot and supabase:
         try:
-            supabase.table(US_TRADE_TABLE).update(
-                {"factor_snapshot": _factor_snapshot}
-            ).eq("symbol", symbol).eq("result", "OPEN").eq("trade_type", "BUY").execute()
+            _recent = (
+                supabase.table(US_TRADE_TABLE)
+                .select("id")
+                .eq("symbol", symbol)
+                .eq("result", "OPEN")
+                .eq("trade_type", "BUY")
+                .order("created_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+            if _recent.data:
+                _rec_id = _recent.data[0]["id"]
+                supabase.table(US_TRADE_TABLE).update(
+                    {"factor_snapshot": _factor_snapshot}
+                ).eq("id", _rec_id).execute()
         except Exception as _ue:
             log(f"  {symbol} 팩터 snapshot upsert 실패 (graceful): {_ue}", "WARN")
 
@@ -849,21 +1003,68 @@ def execute_sell(symbol: str, position: dict, reason: str, indicators: dict) -> 
 # ─────────────────────────────────────────────
 # 손절/익절 체크 (보유 포지션 순회)
 # ─────────────────────────────────────────────
+def _get_price_fallback(symbol: str) -> Optional[float]:
+    """yf.Ticker fast_info fallback으로 현재가 조회."""
+    try:
+        ticker = yf.Ticker(symbol)
+        fi = ticker.fast_info
+        price = fi.get("lastPrice") or fi.get("last_price")
+        return float(price) if price else None
+    except Exception:
+        return None
+
+
 def check_stop_loss_take_profit():
-    """보유 포지션 전체 손절/익절/트레일링 체크."""
+    """보유 포지션 전체 손절/익절/트레일링 체크 (v6: retry + fallback 강화)."""
     positions = get_open_positions()
     if not positions:
         return
 
     log(f"보유 {len(positions)}개 포지션 체크 중...")
+    indicator_fail_max = RISK.get("indicator_fail_max", 3)
+
     for pos in positions:
         symbol = pos.get("symbol", "")
         if not symbol:
             continue
 
+        # v6: get_us_indicators 실패 시 3초 후 1회 재시도 + fallback
         indicators = get_us_indicators(symbol)
         if not indicators:
-            continue
+            import time as _time
+            _time.sleep(3)
+            _yf_cache.pop(symbol, None)  # 캐시 무효화 후 재시도
+            indicators = get_us_indicators(symbol)
+
+        if not indicators:
+            # fallback: fast_info에서 가격만이라도 가져오기
+            fb_price = _get_price_fallback(symbol)
+            if fb_price:
+                indicators = {"price": fb_price, "rsi": 50, "bb_pos": 50, "vol_ratio": 1.0, "near_high": 50}
+                log(f"  {symbol}: 지표 fallback (fast_info price=${fb_price:.2f})", "WARN")
+            else:
+                # v6: 연속 N회 실패 시 강제 시장가 매도
+                _fail_key = f"_indicator_fail_{symbol}"
+                _fail_count = getattr(check_stop_loss_take_profit, _fail_key, 0) + 1
+                setattr(check_stop_loss_take_profit, _fail_key, _fail_count)
+                log(f"  {symbol}: 지표 조회 실패 ({_fail_count}/{indicator_fail_max})", "WARN")
+                if _fail_count >= indicator_fail_max:
+                    entry_price = float(pos.get("price", 0) or 0)
+                    if entry_price > 0:
+                        log(f"  {symbol}: 지표 {_fail_count}회 연속 실패 → 강제 시장가 매도", "ERROR")
+                        fallback_ind = {"price": entry_price}
+                        execute_sell(symbol, pos, f"지표실패 {_fail_count}회 강제매도", fallback_ind)
+                        send_telegram(
+                            f"🇺🇸🚨 <b>{symbol} 강제매도</b>\n"
+                            f"지표 {_fail_count}회 연속 실패\n"
+                            f"진입가: ${entry_price:.2f}"
+                        )
+                        setattr(check_stop_loss_take_profit, _fail_key, 0)
+                continue
+
+        # 지표 성공 시 실패 카운터 초기화
+        _fail_key = f"_indicator_fail_{symbol}"
+        setattr(check_stop_loss_take_profit, _fail_key, 0)
 
         current_price = indicators["price"]
         update_highest_price(symbol, current_price)
@@ -887,6 +1088,18 @@ def run_trading_cycle():
     _us_drift_cache = {}
     _get_us_regime_adj()               # 사이클 초기에 레짐 로드
 
+    # v6: 레짐별 리스크 파라미터 런타임 오버라이드
+    from common.config import REGIME_RISK_OVERRIDES
+    _current_regime = _us_regime_adj_cache.get("regime", "TRANSITION")
+    _regime_override = REGIME_RISK_OVERRIDES.get(_current_regime, {})
+    if _regime_override:
+        if "max_positions" in _regime_override:
+            RISK["max_positions"] = _regime_override["max_positions"]
+        if not _regime_override.get("allow_new_buys", True):
+            _us_buy_blocked = True
+            log(f"레짐 {_current_regime}: 신규매수 차단")
+        log(f"레짐 리스크 오버라이드: {_current_regime} → max_pos={RISK['max_positions']}, sl_mult={_regime_override.get('sl_mult', 1.0)}")
+
     log("=" * 50)
     log("🇺🇸 US 자동매매 사이클 시작")
 
@@ -908,7 +1121,12 @@ def run_trading_cycle():
 
     if STOP_FLAG.exists():
         log("⛔ US_STOP_TRADING 플래그 감지 — 사이클 스킵")
-        send_telegram("🇺🇸⛔ US 자동매매 중지 플래그 감지 — 이번 사이클 스킵")
+        _stop_cd = Path("/tmp/openclaw_stop_us.ts")
+        import time as _t
+        _last = float(_stop_cd.read_text()) if _stop_cd.exists() else 0.0
+        if _t.time() - _last >= 3600:
+            send_telegram("🇺🇸⛔ US 자동매매 중지 플래그 감지 — 이번 사이클 스킵")
+            _stop_cd.write_text(str(_t.time()))
         return
 
     equity_curve = load_equity_curve('us')

@@ -47,8 +47,8 @@ BTC_RISK_DEFAULTS: dict = {
     "split_rsi":          [55, 45, 35],
     "invest_ratio":        0.30,
     "stop_loss":          -0.03,
-    "take_profit":         0.04,
-    "partial_tp_pct":      0.08,
+    "take_profit":         0.08,
+    "partial_tp_pct":      0.03,
     "partial_tp_ratio":    0.50,
     "trailing_stop":       0.02,
     "trailing_activate":   0.015,
@@ -92,6 +92,7 @@ KR_RISK_DEFAULTS: dict = {
     "min_score":           65,
     "max_positions":       5,
     "max_sector_positions": 2,
+    "max_sector_weight":   0.30,           # v6.1: 단일 섹터 최대 30% 비중
     "volatility_sizing":   True,
     "fee":                 0.0015,
 }
@@ -111,16 +112,52 @@ US_RISK_DEFAULTS: dict = {
     "min_score":           50,
     "max_positions":       5,
     "max_sector_positions": 2,
+    "max_sector_weight":   0.30,           # v6.1: 단일 섹터 최대 30% 비중
     "vix_max":             35,
     "earnings_buffer_days": 5,
     "volatility_sizing":   True,
     "fee":                 0.0,   # Alpaca zero commission
+    "max_hold_days":       20,    # v6: 좀비 포지션 하드 컷오프
+    "indicator_fail_max":  3,     # v6: 지표 N회 연속 실패 시 강제 매도
+}
+
+# ── ATR 기반 동적 손절/익절 (v6) ──────────────────────────────
+ATR_SL_MULTIPLIER: float = 1.5      # SL = 1.5× ATR
+ATR_TP_MULTIPLIER: float = 3.0      # TP = 3.0× ATR (2:1 reward-risk)
+ATR_MIN_STOP_LOSS: float = -0.02    # 바닥 (최소 -2%)
+ATR_MAX_STOP_LOSS: float = -0.08    # 천장 (최대 -8%)
+ATR_MIN_TAKE_PROFIT: float = 0.06   # 최소 +6%
+ATR_MAX_TAKE_PROFIT: float = 0.25   # 최대 +25%
+
+# ── 레짐별 리스크 오버라이드 (v6) ──────────────────────────────
+REGIME_RISK_OVERRIDES: dict = {
+    "RISK_ON":    {"max_positions": 5, "sl_mult": 1.0, "allow_new_buys": True},
+    "TRANSITION": {"max_positions": 4, "sl_mult": 1.0, "allow_new_buys": True},
+    "RISK_OFF":   {"max_positions": 3, "sl_mult": 0.8, "allow_new_buys": True},
+    "CRISIS":     {"max_positions": 1, "sl_mult": 0.6, "allow_new_buys": False},
+}
+
+# ── 뉴스 감정 게이트 (v6) ──────────────────────────────────────
+NEWS_SENTIMENT_BLOCK_THRESHOLD: float = -0.5   # 이 이하 → BUY 차단
+NEWS_SENTIMENT_BONUS_THRESHOLD: float = 0.3    # 이 이상 → composite +5
+NEWS_SENTIMENT_BONUS_POINTS: int = 5
+
+# ── ETF 섹터 매핑 (yfinance에서 sector 미반환하는 ETF용) ────────
+ETF_SECTOR_MAP: dict = {
+    "XLE": "Energy", "XLF": "Financial Services", "XLK": "Technology",
+    "XLV": "Healthcare", "XLI": "Industrials", "XLP": "Consumer Defensive",
+    "XLY": "Consumer Cyclical", "XLU": "Utilities", "XLB": "Basic Materials",
+    "XLRE": "Real Estate", "XLC": "Communication Services",
+    "SPY": "Index", "QQQ": "Index", "IWM": "Index", "DIA": "Index",
+    "GLD": "Commodities", "SLV": "Commodities", "USO": "Energy",
+    "TLT": "Bonds", "HYG": "Bonds",
 }
 
 # 신호 IC 최소 임계값 (이 이하면 신호 비활성 권고)
-SIGNAL_IC_MIN: float = 0.02
-SIGNAL_IC_IR_MIN: float = 0.3
-MAX_PORTFOLIO_VAR: float = 0.05
+SIGNAL_IC_MIN: float = 0.015       # v6.1: 0.02 → 0.015 (초기 부트스트랩 허용)
+SIGNAL_IC_IR_MIN: float = 0.2      # v6.1: 0.3 → 0.2 (데이터 부족기 완화)
+SIGNAL_IC_MIN_SAMPLES: int = 3     # v6.1: 최소 데이터 건수 (기존 5 → 3)
+MAX_PORTFOLIO_VAR: float = 0.03  # v6: 5% → 3% 타이트한 리스크
 MIN_ARB_PROFIT_USD: float = 50.0
 MAX_GAS_GWEI: float = 30.0
 MAX_ARB_SLIPPAGE_BPS: float = 30.0

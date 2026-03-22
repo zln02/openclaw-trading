@@ -3,8 +3,8 @@ version: '3.8'
 services:
   dashboard:
     build: .
-    ports:
-      - "8080:8080"
+    expose:
+      - "8080"
     env_file: .env
     environment:
       - PYTHONPATH=/app
@@ -22,7 +22,7 @@ services:
 
   btc-agent:
     build: .
-    command: ["python", "btc/btc_trading_agent.py"]
+    command: ["bash", "-c", "while true; do python btc/btc_trading_agent.py; sleep 600; done"]
     env_file: .env
     environment:
       - PYTHONPATH=/app
@@ -36,7 +36,7 @@ services:
 
   kr-agent:
     build: .
-    command: ["python", "stocks/stock_trading_agent.py"]
+    command: ["bash", "-c", "while true; do python stocks/stock_trading_agent.py; sleep 600; done"]
     env_file: .env
     environment:
       - PYTHONPATH=/app
@@ -48,7 +48,7 @@ services:
 
   us-agent:
     build: .
-    command: ["python", "stocks/us_stock_trading_agent.py"]
+    command: ["bash", "-c", "while true; do python stocks/us_stock_trading_agent.py; sleep 900; done"]
     env_file: .env
     environment:
       - PYTHONPATH=/app
@@ -57,3 +57,46 @@ services:
       - ./logs:/app/logs
       - /home/wlsdud5035/openclaw/.docker-secrets:/run/secrets/openclaw:ro
     restart: unless-stopped
+
+  us-agent-check:
+    build: .
+    command: ["bash", "-c", "while true; do python stocks/us_stock_trading_agent.py check; sleep 60; done"]
+    env_file: .env
+    environment:
+      - PYTHONPATH=/app
+    volumes:
+      - ./brain:/app/brain
+      - ./logs:/app/logs
+      - /home/wlsdud5035/openclaw/.docker-secrets:/run/secrets/openclaw:ro
+    restart: unless-stopped
+    depends_on:
+      - dashboard
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.retention.time=15d'
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-openclaw}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+
+volumes:
+  prometheus_data:
+  grafana_data:

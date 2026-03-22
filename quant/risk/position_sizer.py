@@ -37,10 +37,11 @@ def half_kelly_fraction(win_rate: float, payoff_ratio: float) -> float:
 
 @dataclass
 class KellySizerConfig:
-    max_single_position: float = 0.05
-    max_total_exposure: float = 0.80
+    max_single_position: float = 0.03   # v6: 5% → 3%
+    max_total_exposure: float = 0.60    # v6: 80% → 60%
     atr_target: float = 0.02
     min_position_value: float = 0.0
+    portfolio_var_limit: float = 0.03   # v6: 포트폴리오 VaR 3% 초과 시 거부
 
 
 class KellyPositionSizer:
@@ -108,6 +109,39 @@ class KellyPositionSizer:
             "max_single_position": self.config.max_single_position,
             "max_total_exposure": self.config.max_total_exposure,
         }
+
+    def estimate_position_var(
+        self,
+        position_fraction: float,
+        daily_vol: float,
+        holding_days: int = 5,
+        confidence: float = 2.33,  # ~99% VaR
+    ) -> float:
+        """Estimate VaR for a single position as fraction of portfolio.
+
+        Args:
+            position_fraction: position size as fraction of portfolio (e.g. 0.03)
+            daily_vol: daily return volatility (e.g. 0.02 for 2%)
+            holding_days: expected holding period
+            confidence: z-score (2.33 = 99%, 1.65 = 95%)
+        Returns:
+            estimated VaR as positive fraction (e.g. 0.012 = 1.2%)
+        """
+        vol = _safe_float(daily_vol, 0.02)
+        days = max(1, holding_days)
+        return abs(position_fraction * vol * (days ** 0.5) * confidence)
+
+    def check_portfolio_var(
+        self,
+        existing_positions_var: float,
+        new_position_var: float,
+    ) -> bool:
+        """Check if adding a new position would exceed portfolio VaR limit.
+
+        Returns True if within limit, False if would exceed.
+        """
+        total_var = existing_positions_var + new_position_var
+        return total_var <= self.config.portfolio_var_limit
 
     def size_batch(
         self,

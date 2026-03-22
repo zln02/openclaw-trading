@@ -17,7 +17,7 @@ import os
 import json
 import sys
 import pickle
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -72,11 +72,7 @@ FACTOR_FEATURES = [
     'pe_ratio',
     'pb_ratio',
     'roe',
-    'debt_ratio',
-    'revenue_growth',
-    'earnings_surprise',
     'volume_ratio_20d',
-    'orderbook_imbalance',
 ]
 
 MARKET_FEATURES = [
@@ -88,19 +84,40 @@ MARKET_FEATURES = [
 ]
 
 SUPPLY_FEATURES = [
-    'foreign_net_buy_5d',
-    'inst_net_buy_5d',
-    'short_interest_ratio',
-    'days_to_earnings',
     'sector_momentum_rank',
     'relative_strength_vs_kospi',
     'avg_spread_bps',
-    'turnover_ratio',
     '52w_high_proximity',
-    'market_cap_log',
 ]
 
-FEATURE_NAMES.extend(FACTOR_FEATURES + MARKET_FEATURES + SUPPLY_FEATURES)
+# OHLCV에서 직접 계산 가능한 피처 (stock_code 불필요, 항상 유효)
+# 제거된 dead features (항상 0이던 것들):
+#   FACTOR: debt_ratio, revenue_growth, earnings_surprise, orderbook_imbalance
+#   SUPPLY: foreign_net_buy_5d, inst_net_buy_5d, short_interest_ratio,
+#           days_to_earnings, turnover_ratio, market_cap_log
+OHLCV_EXTRA_FEATURES = [
+    'close_vs_ma120',       # 120일 이평 대비 (장기 추세)
+    'ma5_vs_ma20',          # 단기/중기 골든크로스 신호
+    'ma20_vs_ma60',         # 중기/장기 추세 신호
+    'vol_zscore_20',        # 거래량 z-score (이상 거래량 탐지)
+    'lower_shadow_ratio',   # 아랫꼬리 비율 (매수세)
+    'upper_shadow_ratio',   # 윗꼬리 비율 (매도세)
+    'close_pos_5d',         # 5일 고저 내 종가 위치 (0~100)
+    'range_expansion',      # 오늘 범위 / 5일 평균 범위
+    'consec_up',            # 연속 상승일 수 (0~5)
+    'price_acceleration',   # 1일 수익률 - 5일 수익률/5 (가속/감속)
+]
+
+# v6: 인터랙션 피처 (모멘텀×거래량, 추세 정렬, BB×거래량, 가속도, 레짐×RSI)
+INTERACTION_FEATURES = [
+    'rsi_x_vol',          # RSI × vol_ratio_5 (모멘텀 + 거래량 확인)
+    'trend_alignment',    # macd_histogram × close_vs_ma20 (추세 정렬)
+    'bb_vol_confirm',     # bb_pos × vol_zscore_20 (BB + 거래량 확인)
+    'return_accel',       # return_1d - return_5d/5 (가격 가속도)
+    'regime_rsi',         # regime_encoded × rsi_14 (레짐×RSI 교차)
+]
+
+FEATURE_NAMES.extend(OHLCV_EXTRA_FEATURES + INTERACTION_FEATURES + FACTOR_FEATURES + MARKET_FEATURES + SUPPLY_FEATURES)
 
 HORIZON_CONFIGS = {
     '1d': {'target_days': 1, 'target_return': 0.01, 'label': 'short'},
@@ -132,7 +149,7 @@ def _horizon_paths(horizon_key: str) -> dict:
 
 
 def _utc_now_iso() -> str:
-    return datetime.utcnow().isoformat() + 'Z'
+    return datetime.now(timezone.utc).isoformat()
 
 
 # ─────────────────────────────────────────────
@@ -423,37 +440,13 @@ def _compute_extra_features(stock_code: str, as_of_date: str, closes, volumes, h
     price = closes[idx]
     factor_vals = _ML_FEATURE_CTX.get_factor_features(stock_code, as_of_date)
     market_vals = _ML_FEATURE_CTX.get_market_features(as_of_date)
-    flow_vals = _ML_FEATURE_CTX.get_flow_5d(stock_code)
-    info = _ML_FEATURE_CTX.get_symbol_info(stock_code)
 
     ret_20d = (closes[idx] / closes[idx - 20] - 1.0) * 100.0 if idx >= 20 and closes[idx - 20] > 0 else 0.0
     kospi_ret_5d = _safe_float(market_vals.get('kospi_return_5d'), 0.0)
     relative_strength = ret_20d - kospi_ret_5d
     high_252 = max(closes[max(0, idx - 251): idx + 1]) if idx >= 1 else price
     proximity_52w = (price / high_252) if high_252 > 0 else 0.0
-    market_cap = _safe_float(info.get('marketCap'), 0.0)
-    turnover_ratio = (volumes[idx] * price / market_cap) if market_cap > 0 else 0.0
     avg_spread_bps = (_tick_size_kr(price) / price * 10000.0) if price > 0 else 0.0
-    short_interest = _safe_float(info.get('sharesShortPriorMonth') or info.get('sharesShort'), 0.0)
-    shares_float = _safe_float(info.get('floatShares') or info.get('sharesOutstanding'), 0.0)
-    short_interest_ratio = (short_interest / shares_float * 100.0) if shares_float > 0 else 0.0
-    market_cap_log = np.log1p(max(market_cap, 0.0)) if market_cap > 0 else 0.0
-
-    days_to_earnings = _ML_FEATURE_CTX.earnings_cache.get(stock_code)
-    if days_to_earnings is None:
-        days_to_earnings = 30.0
-        try:
-            workspace_root = str(Path(__file__).resolve().parents[1])
-            if workspace_root not in sys.path:
-                sys.path.insert(0, workspace_root)
-            from common.market_data import check_earnings_proximity
-            earnings = check_earnings_proximity(f'{stock_code}.KS', days=30)
-            dte = earnings.get('days_to_earnings')
-            if dte is not None:
-                days_to_earnings = float(max(0, min(int(dte), 30)))
-        except Exception:
-            pass
-        _ML_FEATURE_CTX.earnings_cache[stock_code] = days_to_earnings
 
     sector_rank = _ML_FEATURE_CTX.get_sector_momentum_rank(stock_code, ret_20d)
 
@@ -463,26 +456,16 @@ def _compute_extra_features(stock_code: str, as_of_date: str, closes, volumes, h
         'pe_ratio': _safe_float(factor_vals.get('pe_ratio'), 0.0),
         'pb_ratio': _safe_float(factor_vals.get('pb_ratio'), 0.0),
         'roe': _safe_float(factor_vals.get('roe'), 0.0),
-        'debt_ratio': _safe_float(factor_vals.get('debt_ratio'), 0.0),
-        'revenue_growth': _safe_float(factor_vals.get('revenue_growth'), 0.0),
-        'earnings_surprise': _safe_float(factor_vals.get('earnings_surprise'), 0.0),
         'volume_ratio_20d': _safe_float(factor_vals.get('volume_ratio_20d'), 1.0),
-        'orderbook_imbalance': _safe_float(factor_vals.get('orderbook_imbalance'), 0.0),
         'kospi_rsi_14': _safe_float(market_vals.get('kospi_rsi_14'), 50.0),
-        'kospi_return_5d': _safe_float(market_vals.get('kospi_return_5d'), 0.0),
+        'kospi_return_5d': kospi_ret_5d,
         'vix_level': _safe_float(market_vals.get('vix_level'), 20.0),
         'fg_index': _safe_float(market_vals.get('fg_index'), 50.0),
         'regime_encoded': _safe_float(market_vals.get('regime_encoded'), 2.0),
-        'foreign_net_buy_5d': _safe_float(flow_vals.get('foreign_net_buy_5d'), 0.0),
-        'inst_net_buy_5d': _safe_float(flow_vals.get('inst_net_buy_5d'), 0.0),
-        'short_interest_ratio': short_interest_ratio,
-        'days_to_earnings': days_to_earnings,
         'sector_momentum_rank': sector_rank,
         'relative_strength_vs_kospi': relative_strength,
         'avg_spread_bps': avg_spread_bps,
-        'turnover_ratio': turnover_ratio * 100.0,
         '52w_high_proximity': proximity_52w,
-        'market_cap_log': market_cap_log,
     }
     return [extras[name] for name in FACTOR_FEATURES + MARKET_FEATURES + SUPPLY_FEATURES]
 
@@ -557,6 +540,31 @@ def extract_features(closes, volumes, highs, lows, idx, stock_code: str | None =
     # 거래량 추세
     vol_trend = avg_vol_5 / max(avg_vol_20, 1)
 
+    # ── OHLCV 파생 피처 (항상 계산, stock_code 불필요) ──
+    ma120 = sum(c[-120:]) / 120 if len(c) >= 120 else sum(c) / max(len(c), 1)
+    close_vs_ma120 = (price / max(ma120, 1e-8) - 1) * 100
+    ma5_vs_ma20 = (ma5 / max(ma20, 1e-8) - 1) * 100
+    ma20_vs_ma60 = (ma20 / max(ma60, 1e-8) - 1) * 100
+    v20 = list(v[-21:-1]) if len(v) >= 21 else list(v[:-1])
+    vol_mean_20 = sum(v20) / max(len(v20), 1)
+    vol_std_20 = (sum((x - vol_mean_20) ** 2 for x in v20) / max(len(v20), 1)) ** 0.5
+    vol_zscore_20 = (v[-1] - vol_mean_20) / max(vol_std_20, 1e-8)
+    hl_range = max(h[-1] - l[-1], 1e-8)
+    open_approx = c[-2] if len(c) >= 2 else price
+    body_low = min(price, open_approx)
+    body_high = max(price, open_approx)
+    lower_shadow_ratio = (body_low - l[-1]) / hl_range
+    upper_shadow_ratio = (h[-1] - body_high) / hl_range
+    min_5d = min(l[-5:]) if len(l) >= 5 else l[-1]
+    max_5d = max(h[-5:]) if len(h) >= 5 else h[-1]
+    close_pos_5d = (price - min_5d) / max(max_5d - min_5d, 1e-8) * 100
+    h5 = list(h[-6:-1]) if len(h) >= 6 else list(h[:-1])
+    l5 = list(l[-6:-1]) if len(l) >= 6 else list(l[:-1])
+    avg_range_5 = sum(h5[i] - l5[i] for i in range(len(h5))) / max(len(h5), 1)
+    range_expansion = hl_range / max(avg_range_5, 1e-8)
+    consec_up = float(sum(1 for i in range(1, min(6, len(c))) if c[-i] > c[-(i + 1)]))
+    price_acceleration = return_1d - (return_5d / 5.0)
+
     # 일부 피처는 가격으로 정규화
     features = [
         rsi_14,
@@ -579,20 +587,46 @@ def extract_features(closes, volumes, highs, lows, idx, stock_code: str | None =
         close_vs_ma60,
         atr_pct,
         vol_trend,
+        # OHLCV extra (항상 포함)
+        close_vs_ma120,
+        ma5_vs_ma20,
+        ma20_vs_ma60,
+        vol_zscore_20,
+        lower_shadow_ratio,
+        upper_shadow_ratio,
+        close_pos_5d,
+        range_expansion,
+        consec_up,
+        price_acceleration,
+        # v6: 인터랙션 피처
+        rsi_14 * vol_ratio_5 / 100.0,              # rsi_x_vol
+        (macd_hist / price * 100) * close_vs_ma20,  # trend_alignment
+        bb_pos * vol_zscore_20 / 100.0,             # bb_vol_confirm
+        return_1d - (return_5d / 5.0),              # return_accel
+        0.0,  # regime_rsi placeholder — filled below if market features available
     ]
 
+    # regime_rsi will be updated once market features are known
+    _regime_rsi_idx = len(features) - 1
+
     if stock_code and as_of_date:
-        features.extend(
-            _compute_extra_features(
-                stock_code=stock_code,
-                as_of_date=as_of_date,
-                closes=closes,
-                volumes=volumes,
-                highs=highs,
-                lows=lows,
-                idx=idx,
-            )
+        extra = _compute_extra_features(
+            stock_code=stock_code,
+            as_of_date=as_of_date,
+            closes=closes,
+            volumes=volumes,
+            highs=highs,
+            lows=lows,
+            idx=idx,
         )
+        features.extend(extra)
+        # v6: regime_rsi 인터랙션 — market features에서 regime_encoded 추출
+        try:
+            _mkt_offset = len(FACTOR_FEATURES)  # market features start after factor features
+            _regime_val = extra[_mkt_offset + MARKET_FEATURES.index('regime_encoded')]
+            features[_regime_rsi_idx] = _regime_val * rsi_14 / 100.0
+        except (IndexError, ValueError):
+            pass
     else:
         features.extend([0.0] * (len(FACTOR_FEATURES) + len(MARKET_FEATURES) + len(SUPPLY_FEATURES)))
 
@@ -656,7 +690,18 @@ def load_training_data(target_days=3, target_return=0.02):
                 continue
 
             future_return = (closes[i + target_days] - closes[i]) / max(closes[i], 1)
-            label = 1 if future_return >= target_return else 0
+            # v6: 리스크 조정 타겟 — 양의 수익 + 낙폭 제한
+            # 기간 내 최대 낙폭 계산 (max drawdown within target_days)
+            _future_prices = closes[i:i + target_days + 1]
+            _max_dd = 0.0
+            if len(_future_prices) >= 2:
+                _peak = _future_prices[0]
+                for _fp in _future_prices[1:]:
+                    _peak = max(_peak, _fp)
+                    _dd = (_fp - _peak) / _peak
+                    _max_dd = min(_max_dd, _dd)
+            # 리스크 조정: 수익 양수 AND 낙폭 -1.5% 이내
+            label = 1 if (future_return >= target_return and _max_dd > -0.015) else 0
 
             all_X.append(features)
             all_y.append(label)
@@ -901,6 +946,40 @@ def compute_shap_values(model, X_sample: np.ndarray) -> dict:
     return {name: round(val, 6) for name, val in ranking}
 
 
+def save_performance_metrics(
+    horizon_key: str, auc: float, accuracy: float, buy_threshold: float,
+) -> None:
+    """v6: ML 성능 메트릭스를 brain/ml/performance.json에 저장.
+
+    stock_trading_agent의 동적 블렌딩 비율 계산에 사용됨.
+    """
+    perf_path = MODEL_DIR / 'performance.json'
+    try:
+        existing = json.loads(perf_path.read_text(encoding='utf-8')) if perf_path.exists() else {}
+    except Exception:
+        existing = {}
+    existing[horizon_key] = {
+        'auc': round(float(auc), 4),
+        'accuracy': round(float(accuracy), 4),
+        'buy_threshold': round(float(buy_threshold), 2),
+        'updated': _utc_now_iso(),
+    }
+    perf_path.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding='utf-8')
+    print(f'성능 메트릭스 저장: {perf_path}')
+
+
+def load_performance_metrics(horizon_key: str = '3d') -> dict:
+    """v6: brain/ml/performance.json에서 ML 성능 메트릭스 로드."""
+    perf_path = MODEL_DIR / 'performance.json'
+    try:
+        if perf_path.exists():
+            data = json.loads(perf_path.read_text(encoding='utf-8'))
+            return data.get(horizon_key, {})
+    except Exception:
+        pass
+    return {}
+
+
 def train_model(horizon_key: str = '3d'):
     """앙상블 스태킹 학습. LightGBM/CatBoost 없으면 XGBoost 폴백."""
     from sklearn.linear_model import LogisticRegression
@@ -1015,6 +1094,17 @@ def train_model(horizon_key: str = '3d'):
 
     shap_ranking = compute_shap_values(primary_model, X_test)
 
+    # 최적 임계값 자동 계산: Precision >= 55% 기준 가장 낮은 임계값
+    optimal_buy_thresh = 0.65  # default
+    for _t in [0.50, 0.52, 0.55, 0.58, 0.60, 0.62, 0.65]:
+        _mask = ensemble_prob >= _t
+        if _mask.sum() < 3:
+            continue
+        _prec = float(y_test[_mask].mean())
+        if _prec >= 0.55:
+            optimal_buy_thresh = _t
+            break
+
     thresholds = [0.5, 0.6, 0.65, 0.7, 0.8]
     print('\n=== 확률 임계값별 Precision ===')
     for thresh in thresholds:
@@ -1023,6 +1113,7 @@ def train_model(horizon_key: str = '3d'):
             continue
         prec = y_test[mask].sum() / mask.sum() * 100
         print(f'  ≥{thresh:.2f}: {int(mask.sum())}건 → Precision {prec:.1f}%')
+    print(f'  → 자동 선택 임계값: {optimal_buy_thresh:.2f}')
 
     primary_model.save_model(str(paths['xgb']))
     os.chmod(paths['xgb'], 0o644)
@@ -1063,6 +1154,9 @@ def train_model(horizon_key: str = '3d'):
     }
     paths['meta_json'].write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding='utf-8')
 
+    # v6: 성능 메트릭스 저장 (동적 블렌딩 비율 산출용)
+    save_performance_metrics(horizon_key, auc, accuracy_score(y_test, y_pred), optimal_buy_thresh)
+
     print(f'\n모델 저장: {paths["xgb"]}')
     if 'lgbm' in final_models:
         print(f'LightGBM 저장: {paths["lgbm"]}')
@@ -1092,11 +1186,11 @@ def retrain_from_live_trades(min_samples: int = 30, horizon_key: str = '3d') -> 
         print('Supabase 미연결')
         return False
 
-    # 실매매 결과 로드
+    # 실매매 결과 로드 (ml_features_json 포함: look-ahead bias 방지)
     try:
         rows = (
             supabase.table('trade_executions')
-            .select('stock_code,price,result,pnl_pct,created_at')
+            .select('stock_code,price,result,pnl_pct,created_at,ml_features_json')
             .in_('result', ['CLOSED', 'SELL'])
             .order('created_at', desc=False)
             .execute()
@@ -1111,15 +1205,28 @@ def retrain_from_live_trades(min_samples: int = 30, horizon_key: str = '3d') -> 
         return False
 
     # 라이브 라벨 생성: pnl_pct >= 2% → 1(성공)
+    # 매수 시점에 저장된 피처를 우선 사용 → look-ahead bias 방지
     live_X, live_y = [], []
     for r in rows:
         code = r.get('stock_code', '')
+        pnl = float(r.get('pnl_pct') or 0)
+        label = 1 if pnl >= 2.0 else 0
+        # 저장된 피처 우선 사용
+        stored_json = r.get('ml_features_json')
+        if stored_json:
+            try:
+                stored = json.loads(stored_json)
+                features = [float(stored.get(n, 0.0)) for n in FEATURE_NAMES]
+                live_X.append(features)
+                live_y.append(label)
+                continue
+            except Exception:
+                pass
+        # fallback: 현재 데이터로 피처 재계산
         pred = predict_stock(code, horizon_key=horizon_key)
         if 'error' in pred:
             continue
         features = list(pred['features'].values())
-        pnl = float(r.get('pnl_pct') or 0)
-        label = 1 if pnl >= 2.0 else 0
         live_X.append(features)
         live_y.append(label)
 

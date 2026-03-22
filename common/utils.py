@@ -1,8 +1,9 @@
 """Shared utility functions for the OpenClaw trading system."""
+import hashlib
 import json
 import os
 import tempfile
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any, Optional
 
 
@@ -58,6 +59,42 @@ def atomic_write_json(path: str, data: dict, *, ensure_ascii: bool = False) -> N
         except OSError:
             pass
         raise
+
+
+def generate_order_id(market: str, symbol: str, side: str, extra: str = "") -> str:
+    """거래 멱등성 키 생성.
+
+    형식: {market}_{symbol}_{side}_{minute_timestamp}_{hash4}
+    같은 분(minute) 내 동일 심볼+방향 주문은 동일한 order_id를 반환하여
+    네트워크 재시도 시 중복 주문을 방지한다.
+
+    Args:
+        market: 'btc', 'kr', 'us'
+        symbol: 종목코드/심볼
+        side: 'buy' or 'sell'
+        extra: 추가 구분 키 (예: split_stage)
+    """
+    now = datetime.now(timezone.utc)
+    minute_ts = now.strftime("%Y%m%d%H%M")
+    raw = f"{market}_{symbol}_{side}_{minute_ts}_{extra}"
+    short_hash = hashlib.sha256(raw.encode()).hexdigest()[:8]
+    return f"{market}_{symbol}_{side}_{minute_ts}_{short_hash}"
+
+
+def check_order_idempotency(supabase_client, table: str, order_id: str) -> bool:
+    """Supabase에서 동일 order_id가 이미 존재하는지 확인.
+
+    Returns:
+        True if duplicate exists (should skip), False if safe to proceed.
+    """
+    if not supabase_client or not order_id:
+        return False
+    try:
+        result = supabase_client.table(table).select("id").eq("order_id", order_id).limit(1).execute()
+        return bool(result.data)
+    except Exception:
+        # order_id 컬럼이 없는 경우 등 — 안전하게 진행 허용
+        return False
 
 
 def parse_day(value: Optional[Any] = None) -> date:

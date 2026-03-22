@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from common.env_loader import load_env
 from common.metrics import calc_trade_pnl
 from common.supabase_client import get_supabase
-from common.telegram import send_telegram
+from common.telegram import Priority, send_telegram
 
 load_env()
 
@@ -145,14 +145,14 @@ def run() -> dict:
 
     if not losses:
         msg = "📊 **일일 손실 분석** (지난 24h)\n\n손실 거래 없음 ✅"
-        send_telegram(msg)
+        send_telegram(msg, priority=Priority.INFO)
         return {"ok": True, "loss_count": 0, "sent": True}
 
     total_pnl = sum(l.get("pnl", 0) for l in losses)
     has_krw = any(l.get("market") in ("btc", "kr") for l in losses)
     pnl_str = f"{total_pnl:+,.0f}원" if has_krw else f"${total_pnl:+,.0f}"
     lines = [
-        f"📊 **일일 손실 분석** (지난 24h)",
+        "📊 **일일 손실 분석** (지난 24h)",
         f"손실 건수: {len(losses)}건",
         f"총 손실: {pnl_str}",
         "",

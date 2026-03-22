@@ -13,6 +13,19 @@ source .venv/bin/activate
 
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] param_optimizer 시작"
 
+# signal_evaluator 완료 대기: weights.json이 최근 60분 이내에 갱신됐는지 확인
+WEIGHTS_FILE="$WORKSPACE/brain/signal-ic/weights.json"
+if [ -f "$WEIGHTS_FILE" ]; then
+    WEIGHTS_AGE=$(( $(date +%s) - $(stat -c %Y "$WEIGHTS_FILE") ))
+    if [ "$WEIGHTS_AGE" -gt 3600 ]; then
+        echo "[WARN] weights.json 이 ${WEIGHTS_AGE}초 전 갱신 — signal_evaluator 미완료 가능성, 스킵"
+        exit 0
+    fi
+else
+    echo "[WARN] weights.json 없음 — signal_evaluator 미실행, 스킵"
+    exit 0
+fi
+
 python -m quant.param_optimizer \
     --lookback "${PARAM_OPT_LOOKBACK:-7}" \
     "$@"

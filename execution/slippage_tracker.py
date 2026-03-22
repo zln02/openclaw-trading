@@ -158,7 +158,18 @@ class SlippageTracker:
             try:
                 self.supabase.table(self.table_name).insert(row).execute()
             except Exception as exc:
-                log.warning("supabase execution_quality insert failed; fallback local", error=exc)
+                err_str = str(exc)
+                # is_valid 컬럼 미존재(PGRST204) → 해당 필드 제거 후 재시도
+                if "PGRST204" in err_str and "is_valid" in err_str:
+                    row_no_valid = {k: v for k, v in row.items() if k != "is_valid"}
+                    try:
+                        self.supabase.table(self.table_name).insert(row_no_valid).execute()
+                        log.warning("is_valid 컬럼 누락으로 해당 필드 제외 후 저장 성공 (Supabase migration 필요: schema/migration_add_is_valid.sql)")
+                        return row
+                    except Exception as exc2:
+                        log.warning("supabase execution_quality insert failed; fallback local", error=exc2)
+                else:
+                    log.warning("supabase execution_quality insert failed; fallback local", error=exc)
                 self._append_local(row)
         else:
             self._append_local(row)

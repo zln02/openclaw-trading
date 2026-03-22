@@ -25,7 +25,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from common.config import BRAIN_PATH, SIGNAL_IC_MIN, SIGNAL_IC_IR_MIN
+from common.config import BRAIN_PATH, SIGNAL_IC_MIN, SIGNAL_IC_IR_MIN, SIGNAL_IC_MIN_SAMPLES
 from common.env_loader import load_env
 from common.logger import get_logger
 from common.supabase_client import get_supabase
@@ -290,7 +290,7 @@ class SignalEvaluator:
         sigs, rets = self._load_signal_pairs(signal_name)
         n = len(sigs)
 
-        if n < 5:
+        if n < SIGNAL_IC_MIN_SAMPLES:
             return {
                 "signal": signal_name,
                 "n": n,
@@ -405,7 +405,7 @@ class SignalEvaluator:
             ic = _safe_float(r.get("ic"), 0.0)
             ir = _safe_float(r.get("ir"), 0.0)
             n = int(_safe_float(r.get("n"), 0))
-            if not name or n < 5:
+            if not name or n < SIGNAL_IC_MIN_SAMPLES:
                 continue
             raw = max(0.0, ic) * max(0.0, ir)
             scored.append((name, raw))
@@ -417,14 +417,28 @@ class SignalEvaluator:
                 name = str(r.get("signal", "")).strip()
                 ic = _safe_float(r.get("ic"), 0.0)
                 n = int(_safe_float(r.get("n"), 0))
-                if not name or n < 5:
+                if not name or n < SIGNAL_IC_MIN_SAMPLES:
                     continue
                 raw = max(0.0, ic)
                 scored.append((name, raw))
 
         total = sum(v for _, v in scored if v > 0)
+        fallback = False
         if total <= 0:
-            weights = {}
+            # v6: equal-weight fallback — 데이터 충분한 신호에 균등 가중치
+            eligible = [name for name, _ in scored if name]
+            if not eligible:
+                eligible = [name for name in _SIGNAL_SOURCES.keys()]
+            if eligible:
+                equal_w = round(1.0 / len(eligible), 6)
+                weights = {k: equal_w for k in eligible}
+                fallback = True
+                log.warning(
+                    "all IC/IR below threshold — using equal-weight fallback",
+                    n_signals=len(eligible),
+                )
+            else:
+                weights = {}
         else:
             weights = {k: v / total for k, v in scored if v > 0}
 
@@ -441,9 +455,10 @@ class SignalEvaluator:
             "updated": datetime.now(timezone.utc).isoformat(),
             "lookback_days": report.get("lookback_days"),
             "window_days": report.get("window_days"),
-            "method": "max(0,ic)*max(0,ir) -> normalize -> cap -> renormalize",
+            "method": "equal_weight_fallback" if fallback else "max(0,ic)*max(0,ir) -> normalize -> cap -> renormalize",
             "caps": {"min": cap_min, "max": cap_max},
             "weights": weights,
+            "fallback": fallback,
         }
 
         path = EVAL_DIR / "weights.json"

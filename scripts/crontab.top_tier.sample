@@ -83,3 +83,13 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 # US ML 드리프트 모니터 (평일 22:20 — PSI/KS 체크, 위험 시 자동 retrain)
 20 22 * * 1-5 /home/wlsdud5035/.openclaw/workspace/.venv/bin/python /home/wlsdud5035/.openclaw/workspace/stocks/us_ml_drift_monitor.py --auto-retrain >> /home/wlsdud5035/.openclaw/logs/us_ml_drift_monitor.log 2>&1
+
+# --- v6 Phase 5 ---
+# 5-에이전트 팀 BTC 의사결정 (매일 06:00 KST)
+0 6 * * * /home/wlsdud5035/.openclaw/workspace/scripts/run_agent_team.sh >> /home/wlsdud5035/.openclaw/logs/agent_team.log 2>&1
+
+# 스트레스 테스트 (주간 일요일 20:00)
+0 20 * * 0 /home/wlsdud5035/.openclaw/workspace/.venv/bin/python -m quant.stress_test --alert-threshold 15 >> /home/wlsdud5035/.openclaw/logs/stress_test.log 2>&1
+
+# 교차 시장 주간 리밸런싱 (일요일 20:30 — 월간→주간 빈도 증가)
+30 20 * * 0 /home/wlsdud5035/.openclaw/workspace/.venv/bin/python -m quant.portfolio.rebalancer >> /home/wlsdud5035/.openclaw/logs/rebalance_weekly.log 2>&1

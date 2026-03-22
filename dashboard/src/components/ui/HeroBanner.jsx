@@ -2,15 +2,17 @@ import { Bitcoin, Bot, Landmark, Wallet } from "lucide-react";
 import PropTypes from "prop-types";
 import GlassCard from "./GlassCard";
 import AnimatedNumber from "./AnimatedNumber";
+import { useLang } from "../../hooks/useLang";
 
-const ITEMS = [
-  { key: "btc", label: "BTC Total Assets", icon: <Bitcoin size={18} /> },
-  { key: "kr", label: "KR Total Assets", icon: <Landmark size={18} /> },
-  { key: "us", label: "US Total Assets", icon: <Wallet size={18} /> },
-  { key: "total", label: "Global Portfolio", icon: <Bot size={18} /> },
+const ITEM_KEYS = [
+  { key: "btc", labelKey: "BTC Total Assets", icon: <Bitcoin size={18} /> },
+  { key: "kr", labelKey: "KR Total Assets", icon: <Landmark size={18} /> },
+  { key: "us", labelKey: "US Total Assets", icon: <Wallet size={18} /> },
+  { key: "total", labelKey: "Global Portfolio", icon: <Bot size={18} /> },
 ];
 
 export default function HeroBanner({ metrics }) {
+  const { t } = useLang();
   return (
     <GlassCard className="card-pad top-banner glass-card--accent compact-banner status-strip" style={{ marginBottom: 14 }}>
       <div
@@ -23,7 +25,7 @@ export default function HeroBanner({ metrics }) {
         }}
       />
       <div className="banner-grid">
-        {ITEMS.map((item) => {
+        {ITEM_KEYS.map((item) => {
           const current = metrics[item.key] || { value: 0, delta: 0, prefix: "", suffix: "" };
           const tone = current.delta >= 0 ? "profit" : "loss";
           return (
@@ -33,7 +35,7 @@ export default function HeroBanner({ metrics }) {
             >
               <div className="metric-label">
                 {item.icon}
-                <span>{item.label}</span>
+                <span>{t(item.labelKey)}</span>
               </div>
               <div className="number-glow mono" style={{ fontSize: 18, fontWeight: 800, letterSpacing: "-0.04em" }}>
                 <AnimatedNumber

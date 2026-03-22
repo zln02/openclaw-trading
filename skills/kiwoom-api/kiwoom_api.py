@@ -2,7 +2,7 @@ import json
 import os
 import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -61,7 +61,7 @@ def _now_kst() -> datetime:
     if ZoneInfo is not None:
         return datetime.now(ZoneInfo("Asia/Seoul"))
     # tzdata 없으면 UTC+9 근사치
-    return datetime.utcnow() + timedelta(hours=9)
+    return datetime.now(timezone.utc).astimezone(ZoneInfo("Asia/Seoul")).replace(tzinfo=None)
 
 
 def _is_market_hours(now: Optional[datetime] = None) -> bool:

@@ -30,6 +30,24 @@ load_env()
 
 app = FastAPI(title="OpenClaw Trading Dashboard")
 
+try:
+    from prometheus_fastapi_instrumentator import Instrumentator
+    Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
+except ImportError:
+    # Fallback: expose /metrics via prometheus_client directly
+    try:
+        from prometheus_client import make_asgi_app as _make_prom_app
+        _prom_app = _make_prom_app()
+        app.mount("/metrics", _prom_app)
+    except ImportError:
+        pass  # no prometheus support
+
+# Register custom trading metrics (counters/gauges populated by agents)
+try:
+    import common.prometheus_metrics  # noqa: F401 — registers metric objects
+except ImportError:
+    pass
+
 # ── Basic Auth ──────────────────────────────────────────────────────────────
 _security = HTTPBasic(auto_error=False)
 _DASH_USER = os.environ.get("DASHBOARD_USER", "openclaw")
@@ -132,9 +150,16 @@ async def favicon():
 
 @app.get("/health")
 async def health():
-    """헬스 체크 — 인증 불필요."""
+    """간단 헬스 체크 — 인증 불필요."""
     import time
     return {"status": "ok", "service": "openclaw-dashboard", "uptime_placeholder": int(time.time())}
+
+
+@app.get("/api/health")
+async def health_detailed():
+    """상세 헬스 체크 (Upbit/Supabase/Kiwoom/Cron 상태) — 인증 불필요."""
+    from common.health import health_monitor
+    return await health_monitor.run_checks()
 
 
 # Serve built React dashboard (production)

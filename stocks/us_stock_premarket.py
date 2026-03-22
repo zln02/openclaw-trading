@@ -33,7 +33,7 @@ supabase = get_supabase()
 def log(msg: str, level: str = "INFO"):
     """Backward-compat wrapper routing to structured logger."""
     _dispatch = {
-        "INFO": _log.info, "WARN": _log.warn,
+        "INFO": _log.info, "WARN": _log.warning,
         "ERROR": _log.error, "OK": _log.info,
     }
     _dispatch.get(level, _log.info)(msg)

@@ -419,23 +419,21 @@ async def api_btc_portfolio():
         return {"error": "DB 미연결", "open_positions": [], "closed_positions": [], "summary": {}}
     try:
         # NOTE: status values in DB are historically inconsistent in case (OPEN/open, CLOSED/closed)
-        open_rows = (
-            supabase.table("btc_position")
+        open_rows = await asyncio.to_thread(
+            lambda: supabase.table("btc_position")
             .select("*")
             .in_("status", ["OPEN", "open"])
             .execute()
-            .data
-            or []
+            .data or []
         )
-        closed_rows = (
-            supabase.table("btc_position")
+        closed_rows = await asyncio.to_thread(
+            lambda: supabase.table("btc_position")
             .select("*")
             .in_("status", ["CLOSED", "closed"])
             .order("exit_time", desc=True)
             .limit(50)
             .execute()
-            .data
-            or []
+            .data or []
         )
 
         cur_price_krw = 0
@@ -573,13 +571,14 @@ async def api_summary():
     result = {}
     try:
         if supabase:
-            btc_pos = supabase.table("btc_position").select("entry_price,entry_krw,quantity").eq("status", "OPEN").execute().data or []
+            def _sync_summary():
+                btc_pos = supabase.table("btc_position").select("entry_price,entry_krw,quantity").eq("status", "OPEN").execute().data or []
+                kr_open = supabase.table("trade_executions").select("trade_id").eq("result", "OPEN").execute().data or []
+                us_open = supabase.table("us_trade_executions").select("symbol,price,quantity").eq("result", "OPEN").execute().data or []
+                return btc_pos, kr_open, us_open
+            btc_pos, kr_open, us_open = await asyncio.to_thread(_sync_summary)
             result["btc"] = {"positions": len(btc_pos), "invested_krw": sum(float(p.get("entry_krw", 0)) for p in btc_pos)}
-
-            kr_open = supabase.table("trade_executions").select("trade_id").eq("result", "OPEN").execute().data or []
             result["kr"] = {"positions": len(kr_open)}
-
-            us_open = supabase.table("us_trade_executions").select("symbol,price,quantity").eq("result", "OPEN").execute().data or []
             us_invested = sum(float(p.get("price", 0)) * float(p.get("quantity", 0)) for p in us_open)
             result["us"] = {"positions": len(us_open), "invested_usd": round(us_invested, 2),
                             "symbols": [p["symbol"] for p in us_open]}
@@ -618,7 +617,7 @@ async def api_btc_filters():
         funding_signal = fr.get("signal", "NEUTRAL")
 
         # 3. 오늘 매매 횟수 (btc_position open today)
-        today = datetime.now().date().isoformat()
+        today = datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat()
         today_count = 0
         today_pnl_pct = 0.0
         if supabase:
@@ -663,12 +662,15 @@ async def get_stats():
     if not supabase:
         return _empty_stats()
     try:
-        res = supabase.table("btc_trades").select("*").order("timestamp", desc=True).limit(200).execute()
-        trades = res.data or []
+        def _sync_stats():
+            trades = supabase.table("btc_trades").select("*").order("timestamp", desc=True).limit(200).execute().data or []
+            closed = supabase.table("btc_position").select("*").eq("status", "CLOSED").execute().data or []
+            pos_res = supabase.table("btc_position").select("*").eq("status", "OPEN").order("entry_time", desc=True).limit(1).execute()
+            return trades, closed, pos_res.data
+        trades, closed, pos_data = await asyncio.to_thread(_sync_stats)
 
         buys = [t for t in trades if t.get("action") == "BUY"]
         sells = [t for t in trades if t.get("action") == "SELL"]
-        closed = supabase.table("btc_position").select("*").eq("status", "CLOSED").execute().data or []
         closed_summary = _summarize_closed_trade_batches(closed)
         wins = closed_summary["wins"]
         losses_cnt = closed_summary["losses"]
@@ -680,8 +682,7 @@ async def get_stats():
         today_trades = len([t for t in trades if (t.get("timestamp") or "")[:10] == today])
         today_pnl = sum(float(p.get("pnl") or 0) for p in today_closed)
 
-        pos_res = supabase.table("btc_position").select("*").eq("status", "OPEN").order("entry_time", desc=True).limit(1).execute()
-        position = pos_res.data[0] if pos_res.data else None
+        position = pos_data[0] if pos_data else None
 
         last = trades[0] if trades else {}
 
@@ -732,22 +733,16 @@ async def get_trades(
     if not supabase:
         return []
     try:
-        query = supabase.table("btc_trades").select("*")
-        
-        # 액션 필터링
-        if action:
-            query = query.eq("action", action)
-        
-        # 시간 필터링
-        if hours:
-            from datetime import datetime, timedelta
-            cutoff = (datetime.now() - timedelta(hours=hours)).isoformat()
-            query = query.gte("timestamp", cutoff)
-        
-        # 정렬 및 제한
-        res = query.order("timestamp", desc=True).limit(limit).execute()
-        data = res.data or []
-        
+        def _sync_trades():
+            query = supabase.table("btc_trades").select("*")
+            if action:
+                query = query.eq("action", action)
+            if hours:
+                from datetime import timedelta
+                cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+                query = query.gte("timestamp", cutoff)
+            return query.order("timestamp", desc=True).limit(limit).execute().data or []
+        data = await asyncio.to_thread(_sync_trades)
         for t in data:
             if t.get("timestamp"):
                 t["timestamp"] = t["timestamp"][:19]
@@ -981,12 +976,8 @@ async def get_agent_decisions(limit: int = 20):
     """최근 에이전트 팀 결정 이력 반환."""
     try:
         if supabase:
-            rows = (
-                supabase.table("agent_decisions")
-                .select("*")
-                .order("created_at", desc=True)
-                .limit(limit)
-                .execute()
+            rows = await asyncio.to_thread(
+                lambda: supabase.table("agent_decisions").select("*").order("created_at", desc=True).limit(limit).execute()
             )
             if rows.data:
                 return {"decisions": rows.data}
@@ -1033,8 +1024,8 @@ async def get_btc_live_activity(limit: int = 20):
 async def get_decision_log(limit: int = 20):
     """BTC 매매 판단 로그 (AI reason + 지표 스냅샷)."""
     try:
-        rows = (
-            supabase.table("btc_trades")
+        rows = await asyncio.to_thread(
+            lambda: supabase.table("btc_trades")
             .select("created_at, action, confidence, reason, composite_score, fear_greed, rsi")
             .order("created_at", desc=True)
             .limit(limit)
@@ -1045,3 +1036,149 @@ async def get_decision_log(limit: int = 20):
         log.error(f"decision-log 조회 실패: {e}")
         from common.api_utils import api_error
         return api_error("판단 로그 조회 실패")
+
+
+def _compute_risk_portfolio_sync() -> dict:
+    """Blocking helper for /api/risk/portfolio — gather cross-market risk data."""
+    from common.api_utils import api_success
+
+    # ── 1. Total assets across BTC / KR / US ──
+    total_assets = 0.0
+    btc_value = 0.0
+    kr_value = 0.0
+    us_value = 0.0
+
+    try:
+        _refresh_upbit_cache()
+        krw_balance = float(_upbit_cache.get("krw_total") or _upbit_cache.get("krw") or 0)
+        btc_value += krw_balance
+        # Add BTC position value
+        upbit_key = os.environ.get("UPBIT_ACCESS_KEY", "")
+        upbit_secret = os.environ.get("UPBIT_SECRET_KEY", "")
+        if upbit_key and upbit_secret:
+            import pyupbit
+            upbit = pyupbit.Upbit(upbit_key, upbit_secret)
+            btc_bal = float(upbit.get_balance("BTC") or 0)
+            btc_price = float(pyupbit.get_current_price("KRW-BTC") or 0)
+            btc_value += btc_bal * btc_price
+    except Exception as e:
+        log.error(f"risk/portfolio btc value: {e}")
+
+    try:
+        if supabase:
+            kr_rows = (
+                supabase.table("trade_executions")
+                .select("price,quantity")
+                .eq("result", "OPEN")
+                .execute()
+                .data or []
+            )
+            kr_value = sum(
+                float(r.get("price") or 0) * float(r.get("quantity") or 0)
+                for r in kr_rows
+            )
+    except Exception as e:
+        log.error(f"risk/portfolio kr value: {e}")
+
+    try:
+        if supabase:
+            us_rows = (
+                supabase.table("us_trade_executions")
+                .select("price,quantity")
+                .eq("result", "OPEN")
+                .execute()
+                .data or []
+            )
+            fx_rate = _get_fx_rate()
+            us_value = sum(
+                float(r.get("price") or 0) * float(r.get("quantity") or 0)
+                for r in us_rows
+            ) * fx_rate
+    except Exception as e:
+        log.error(f"risk/portfolio us value: {e}")
+
+    total_assets = round(btc_value + kr_value + us_value)
+
+    # ── 2. Daily VaR (placeholder 2% if no real data) ──
+    daily_var = round(total_assets * 0.02) if total_assets > 0 else 0
+
+    # ── 3. MDD from closed BTC positions (equity curve) ──
+    mdd = 0.0
+    try:
+        if supabase:
+            closed = (
+                supabase.table("btc_position")
+                .select("entry_krw,pnl,exit_time")
+                .in_("status", ["CLOSED", "closed"])
+                .order("exit_time", desc=False)
+                .execute()
+                .data or []
+            )
+            if closed:
+                equity = 0.0
+                peak = 0.0
+                max_dd = 0.0
+                for row in closed:
+                    equity += float(row.get("pnl") or 0)
+                    if equity > peak:
+                        peak = equity
+                    dd = (equity - peak) if peak > 0 else 0.0
+                    if dd < max_dd:
+                        max_dd = dd
+                mdd = round((max_dd / peak * 100) if peak > 0 else 0.0, 2)
+    except Exception as e:
+        log.error(f"risk/portfolio mdd: {e}")
+
+    # ── 4. Current market regime ──
+    regime = "UNKNOWN"
+    try:
+        from agents.regime_classifier import get_cached_regime
+        regime = get_cached_regime() or "UNKNOWN"
+    except Exception as e:
+        log.error(f"risk/portfolio regime: {e}")
+
+    # ── 5. ML drift status from brain/ml/drift_report.json ──
+    drift_status = "NO_DATA"
+    try:
+        drift_path = BRAIN_PATH / "ml" / "drift_report.json"
+        if drift_path.exists():
+            drift_data = json.loads(drift_path.read_text(encoding="utf-8"))
+            drift_status = drift_data.get("status", "NO_DATA")
+    except Exception as e:
+        log.error(f"risk/portfolio drift: {e}")
+
+    # ── 6. IC health from brain/signal-ic/weights.json ──
+    ic_health = {"active_weights": 0, "total_weights": 0}
+    try:
+        weights_path = BRAIN_PATH / "signal-ic" / "weights.json"
+        if weights_path.exists():
+            weights_data = json.loads(weights_path.read_text(encoding="utf-8"))
+            if isinstance(weights_data, dict):
+                total = len(weights_data)
+                active = len([v for v in weights_data.values() if float(v or 0) > 0])
+                ic_health = {"active_weights": active, "total_weights": total}
+    except Exception as e:
+        log.error(f"risk/portfolio ic_health: {e}")
+
+    return api_success({
+        "total_assets": total_assets,
+        "btc_value": round(btc_value),
+        "kr_value": round(kr_value),
+        "us_value": round(us_value),
+        "daily_var": daily_var,
+        "mdd": mdd,
+        "regime": regime,
+        "drift_status": drift_status,
+        "ic_health": ic_health,
+    })
+
+
+@router.get("/api/risk/portfolio")
+async def api_risk_portfolio():
+    """Cross-market portfolio risk summary — VaR, MDD, regime, drift, IC health."""
+    try:
+        return await asyncio.to_thread(_compute_risk_portfolio_sync)
+    except Exception as e:
+        log.error(f"risk/portfolio: {e}")
+        from common.api_utils import api_error
+        return api_error("포트폴리오 리스크 조회 실패")

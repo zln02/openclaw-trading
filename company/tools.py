@@ -70,7 +70,10 @@ _BASH_BLOCKLIST = re.compile(
     r"|\bnc\s+.*-e\b|\bncat\b.*-e\b"                         # 리버스쉘
     r"|\bcrontab\s+-"                                          # crontab 수정
     r"|\bat\s+now\b|\bbatch\b"                               # 지연 실행
-    r"|>\s*/etc/|>\s*/bin/|>\s*/usr/",                        # 시스템 디렉토리 쓰기
+    r"|>\s*/etc/|>\s*/bin/|>\s*/usr/"                          # 시스템 디렉토리 쓰기
+    r"|\benv\b|\bprintenv\b|\bset\b"                           # 환경변수 노출
+    r"|\bperl\b|\bruby\b"                                      # 대체 인터프리터
+    r"|/proc/self/environ",                                    # 프로세스 환경변수 접근
     re.IGNORECASE,
 )
 
@@ -260,11 +263,15 @@ def run_bash(command: str, cwd: str = ".") -> str:
         work_dir = _safe_path(cwd)
         # shell=True 대신 bash 명시 호출로 injection surface 최소화
         # --norc/--noprofile: 사용자 프로파일 로드 차단
+        # 시크릿 키(API key/token/secret 패턴)는 자식 프로세스에 전달하지 않음
+        _SECRET_PAT = re.compile(r"(key|token|secret|password|passwd|pwd|credential)", re.IGNORECASE)
         env = {
-            **os.environ,
+            k: v for k, v in os.environ.items() if not _SECRET_PAT.search(k)
+        }
+        env.update({
             "PYTHONPATH": str(_WS),
             "BASH_ENV": "/dev/null",   # non-interactive bash env 파일 로드 차단
-        }
+        })
         result = subprocess.run(
             ["bash", "--norc", "--noprofile", "-c", command],
             capture_output=True, text=True,

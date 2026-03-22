@@ -49,12 +49,20 @@ class AdvancedSheetsManager:
         except (ValueError, TypeError):
             return 0.0
         
+    # OAuth invalid_grant 오류 시 재시도 억제 (30분)
+    _oauth_blocked_until: float = 0.0
+    _oauth_notified: bool = False
+
     def _run_gog(self, args: List[str]) -> bool:
-        """gog CLI 실행"""
+        """gog CLI 실행. OAuth 만료 시 30분 억제하여 로그 스팸 방지."""
+        import time as _time
+        # invalid_grant 쿨다운 중이면 즉시 반환
+        if _time.time() < self.__class__._oauth_blocked_until:
+            return False
         try:
             env = os.environ.copy()
             env["GOG_KEYRING_PASSWORD"] = self.gog_password
-            
+
             cmd = [str(self.gog_path)] + args
             result = subprocess.run(
                 cmd, capture_output=True, text=True, timeout=30, env=env
@@ -62,7 +70,33 @@ class AdvancedSheetsManager:
             if result.returncode != 0:
                 stderr = (result.stderr or "").strip()
                 stdout = (result.stdout or "").strip()
-                log.error(f"gog 실행 실패(rc={result.returncode}): {stderr or stdout or args}")
+                err_msg = stderr or stdout or str(args)
+                if "invalid_grant" in err_msg or "Bad Request" in err_msg:
+                    # OAuth token 만료 — 30분 억제 + 최초 1회만 알림
+                    self.__class__._oauth_blocked_until = _time.time() + 1800
+                    if not self.__class__._oauth_notified:
+                        self.__class__._oauth_notified = True
+                        log.error(
+                            "Google Sheets OAuth token 만료 (invalid_grant) — "
+                            "gog 재인증 필요: GOG_KEYRING_PASSWORD 환경변수 설정 후 "
+                            "`gog-docker auth login --account jei53507@gmail.com` 실행. "
+                            "30분간 Sheets 업데이트 비활성화."
+                        )
+                        try:
+                            from common.telegram import send_telegram
+                            send_telegram(
+                                "⚠️ <b>Google Sheets OAuth 만료</b>\n"
+                                "invalid_grant — 재인증 필요\n"
+                                "<code>gog-docker auth login --account jei53507@gmail.com</code>"
+                            )
+                        except Exception:
+                            pass
+                else:
+                    log.error(f"gog 실행 실패(rc={result.returncode}): {err_msg}")
+            else:
+                # 성공 시 상태 초기화
+                self.__class__._oauth_blocked_until = 0.0
+                self.__class__._oauth_notified = False
             return result.returncode == 0
         except Exception as e:
             log.error(f"gog 실행 실패: {e}")

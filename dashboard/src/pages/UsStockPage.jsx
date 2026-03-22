@@ -2,6 +2,7 @@ import { useState } from "react";
 import { DollarSign, Globe2, Landmark, Sigma, TrendingUp } from "lucide-react";
 import { getUsChart, getUsFx, getUsMarket, getUsPortfolio, getUsPositions, getUsTrades } from "../api";
 import usePolling from "../hooks/usePolling";
+import { useLang } from "../hooks/useLang";
 import { compactTime, pct, usd } from "../lib/format";
 import DeferredRender from "../components/ui/DeferredRender";
 import GlassCard from "../components/ui/GlassCard";
@@ -19,6 +20,7 @@ const factorData = [
 ];
 
 export default function UsStockPage() {
+  const { t } = useLang();
   const { data: market, loading: marketLoading } = usePolling(getUsMarket, 60000);
   const { data: fx } = usePolling(getUsFx, 60000);
   const { data: usPortfolio } = usePolling(getUsPortfolio, 30000);
@@ -72,8 +74,8 @@ export default function UsStockPage() {
     <div className="stack">
       <div className="page-heading">
         <div>
-          <h1>US Momentum Command</h1>
-          <p>Dry-run market monitor for index context, factor-weighted ranking, and simulated portfolio tracking.</p>
+          <h1>{t("US Momentum Command")}</h1>
+          <p>{t("Dry-run market monitor for index context, factor-weighted ranking, and simulated portfolio tracking.")}</p>
         </div>
       </div>
 
@@ -108,7 +110,7 @@ export default function UsStockPage() {
         <aside className="tv-left-rail">
           <GlassCard className="card-pad">
             <div className="panel-title">
-              <h2>Watchlist</h2>
+              <h2>{t("Watchlist")}</h2>
             </div>
             <div className="rail-list">
               {watchRows.map((row) => (
@@ -125,13 +127,13 @@ export default function UsStockPage() {
                   <span className="subtle">{row.tag}</span>
                 </button>
               ))}
-              {watchRows.length === 0 ? <EmptyState message="No US symbols." /> : null}
+              {watchRows.length === 0 ? <EmptyState message={t("No US symbols.")} /> : null}
             </div>
           </GlassCard>
 
           <GlassCard className="card-pad">
             <div className="panel-title">
-              <h2>Market Pulse</h2>
+              <h2>{t("Market Pulse")}</h2>
             </div>
             <div className="tabular-list">
               {marketCards.map((card) => (
@@ -152,7 +154,7 @@ export default function UsStockPage() {
           <DeferredRender height={320}>
             <GlassCard className="card-pad">
               <div className="panel-title">
-                <h2>Momentum Curve</h2>
+                <h2>{t("Momentum Curve")}</h2>
                 <TrendingUp size={18} color="var(--text-secondary)" />
               </div>
               {chartLoading || marketLoading ? (
@@ -179,7 +181,7 @@ export default function UsStockPage() {
 
           <GlassCard className="card-pad">
             <div className="panel-title">
-              <h2>USD/KRW FX</h2>
+              <h2>{t("USD/KRW FX")}</h2>
               <DollarSign size={18} color="var(--text-secondary)" />
             </div>
             <div style={{ fontSize: 34, fontWeight: 800 }}>{Number(fx?.rate || fx?.usdkrw || 0).toLocaleString()}</div>
@@ -193,14 +195,14 @@ export default function UsStockPage() {
               <div>
                 <div className="symbol-code">{activeSymbol}</div>
                 <div className="symbol-meta">
-                  <span className="toolbar-chip">US Universe</span>
-                  <span className="toolbar-chip">Dry Run</span>
+                  <span className="toolbar-chip">{t("US Universe")}</span>
+                  <span className="toolbar-chip">{t("Dry Run")}</span>
                   <span className="toolbar-chip mono">{activeRank?.volume_ratio ? `${Number(activeRank.volume_ratio).toFixed(1)}x vol` : `${ranking.length} Symbols`}</span>
                 </div>
               </div>
             </div>
             <div className="panel-title">
-              <h2>Momentum Ranking</h2>
+              <h2>{t("Momentum Ranking")}</h2>
               <TrendingUp size={18} color="var(--text-secondary)" />
             </div>
             {marketLoading ? (
@@ -210,12 +212,12 @@ export default function UsStockPage() {
                 <table>
                   <thead>
                     <tr>
-                      <th>Symbol</th>
-                      <th>5d</th>
-                      <th>20d</th>
-                      <th>Volume</th>
-                      <th>Near High</th>
-                      <th>Score</th>
+                      <th>{t("Symbol")}</th>
+                      <th>{t("5d")}</th>
+                      <th>{t("20d")}</th>
+                      <th>{t("Volume")}</th>
+                      <th>{t("Near High")}</th>
+                      <th>{t("Score")}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -239,7 +241,7 @@ export default function UsStockPage() {
             <DeferredRender height={320}>
               <GlassCard className="card-pad">
                 <div className="panel-title">
-                  <h2>Market Regime & Factor Weights</h2>
+                  <h2>{t("Market Regime & Factor Weights")}</h2>
                   <Sigma size={18} color="var(--text-secondary)" />
                 </div>
                 <SvgRadarChart data={factorData} size={320} />
@@ -248,7 +250,7 @@ export default function UsStockPage() {
 
             <GlassCard className="card-pad">
               <div className="panel-title">
-                <h2>Recent Simulated Executions</h2>
+                <h2>{t("Recent Simulated Executions")}</h2>
                 <Globe2 size={18} color="var(--text-secondary)" />
               </div>
               <div className="stack" style={{ gap: 12 }}>
@@ -263,7 +265,7 @@ export default function UsStockPage() {
                     </div>
                   </div>
                 ))}
-                {(trades || []).length === 0 ? <EmptyState message="No simulated US trades yet." /> : null}
+                {(trades || []).length === 0 ? <EmptyState message={t("No simulated US trades yet.")} /> : null}
               </div>
             </GlassCard>
           </div>
@@ -272,13 +274,13 @@ export default function UsStockPage() {
         <aside className="tv-side">
           <GlassCard className="card-pad">
             <div className="panel-title">
-              <h2>DRY-RUN Portfolio</h2>
+              <h2>{t("DRY-RUN Portfolio")}</h2>
               <Landmark size={18} color="var(--text-secondary)" />
             </div>
             {positionsLoading ? (
               <LoadingSkeleton height={320} />
             ) : openPositions.length === 0 ? (
-              <EmptyState message="No DRY-RUN positions." />
+              <EmptyState message={t("No DRY-RUN positions.")} />
             ) : (
               <div className="stack" style={{ gap: 12 }}>
                 {openPositions.slice(0, 8).map((row, index) => (
@@ -299,13 +301,13 @@ export default function UsStockPage() {
 
           <GlassCard className="card-pad">
             <div className="panel-title">
-              <h2>Selection Summary</h2>
+              <h2>{t("Selection Summary")}</h2>
             </div>
             <div className="tabular-list">
-              <div className="kv-row"><span className="subtle">Selected</span><span className="mono">{activeSymbol}</span></div>
-              <div className="kv-row"><span className="subtle">Score</span><span className="mono">{Number(activeRank?.score || 0).toFixed(0)}</span></div>
-              <div className="kv-row"><span className="subtle">20d</span><span className={Number(activeRank?.ret_20d || 0) >= 0 ? "profit mono" : "loss mono"}>{pct(activeRank?.ret_20d || 0)}</span></div>
-              <div className="kv-row"><span className="subtle">Position PnL</span><span className={Number(activePosition?.pnl_pct || 0) >= 0 ? "profit mono" : "loss mono"}>{pct(activePosition?.pnl_pct || 0)}</span></div>
+              <div className="kv-row"><span className="subtle">{t("Selected")}</span><span className="mono">{activeSymbol}</span></div>
+              <div className="kv-row"><span className="subtle">{t("Score")}</span><span className="mono">{Number(activeRank?.score || 0).toFixed(0)}</span></div>
+              <div className="kv-row"><span className="subtle">{t("20d")}</span><span className={Number(activeRank?.ret_20d || 0) >= 0 ? "profit mono" : "loss mono"}>{pct(activeRank?.ret_20d || 0)}</span></div>
+              <div className="kv-row"><span className="subtle">{t("Position PnL")}</span><span className={Number(activePosition?.pnl_pct || 0) >= 0 ? "profit mono" : "loss mono"}>{pct(activePosition?.pnl_pct || 0)}</span></div>
             </div>
           </GlassCard>
         </aside>

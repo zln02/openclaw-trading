@@ -162,6 +162,45 @@ class PortfolioRebalancer:
         }
 
 
+# ── v6: 레짐 기반 동적 자산배분 ──────────────────────────────
+REGIME_ALLOCATION: dict[str, dict[str, float]] = {
+    "CRISIS":     {"BTC": 0.05, "KR": 0.15, "US": 0.10, "CASH": 0.70},
+    "RISK_OFF":   {"BTC": 0.10, "KR": 0.25, "US": 0.25, "CASH": 0.40},
+    "TRANSITION": {"BTC": 0.15, "KR": 0.25, "US": 0.30, "CASH": 0.30},
+    "RISK_ON":    {"BTC": 0.20, "KR": 0.30, "US": 0.35, "CASH": 0.15},
+}
+
+
+def get_regime_allocation(regime: str = "TRANSITION") -> dict[str, float]:
+    """레짐에 따른 교차 시장 목표 배분 비율 반환."""
+    return REGIME_ALLOCATION.get(regime, REGIME_ALLOCATION["TRANSITION"])
+
+
+def run_regime_rebalance(
+    current_weights: dict[str, float],
+    portfolio_value: float,
+    regime: str = "TRANSITION",
+    prices: Optional[dict[str, float]] = None,
+    last_rebalance_date: Optional[str] = None,
+) -> dict:
+    """v6: 레짐 기반 교차 시장 리밸런싱 실행.
+
+    주간 자동 실행용. 레짐에 따라 목표 배분 결정 → 리밸런싱 주문 생성.
+    """
+    target = get_regime_allocation(regime)
+    rebalancer = PortfolioRebalancer(RebalanceConfig(drift_threshold=0.03))
+    result = rebalancer.build_rebalance_orders(
+        current_weights=current_weights,
+        target_weights=target,
+        portfolio_value=portfolio_value,
+        prices=prices,
+        last_rebalance_date=last_rebalance_date,
+    )
+    result["regime"] = regime
+    result["target_allocation"] = target
+    return result
+
+
 def _cli() -> int:
     parser = argparse.ArgumentParser(description="Portfolio rebalancer")
     parser.add_argument("--input-file", required=True, help="json with current_weights/target_weights/portfolio_value/prices")

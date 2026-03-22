@@ -28,7 +28,7 @@ if _WS not in sys.path:
 
 from common.env_loader import load_env
 from common.logger import get_logger
-from common.telegram import send_telegram
+from common.telegram import send_telegram, Priority as _TgPriority
 
 load_env()
 log = get_logger("agent_team")
@@ -210,7 +210,8 @@ def send_telegram_report(message: str, priority: str = "normal") -> dict:
         priority: 'high' | 'normal' | 'low'
     """
     try:
-        send_telegram(message, priority=priority)
+        _prio_map = {"high": _TgPriority.URGENT, "normal": _TgPriority.IMPORTANT, "low": _TgPriority.INFO}
+        send_telegram(message, priority=_prio_map.get(priority, _TgPriority.IMPORTANT))
         return {"ok": True}
     except Exception as e:
         log.warning(f"텔레그램 전송 실패: {e}")

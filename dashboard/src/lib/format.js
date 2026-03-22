@@ -15,7 +15,9 @@ export const compactTime = (value) => {
   if (!value) {
     return "—";
   }
-  return new Date(value).toLocaleString("ko-KR", {
+  // DB timestamps are UTC but may lack timezone suffix — force UTC parsing
+  const normalized = String(value).match(/[Z+\-]\d{2}:?\d{2}$|Z$/) ? value : `${value}Z`;
+  return new Date(normalized).toLocaleString("ko-KR", {
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",

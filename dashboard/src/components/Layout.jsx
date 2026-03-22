@@ -1,9 +1,10 @@
 import { Activity, Bot, Bitcoin, Landmark, Globe2, Sparkles } from "lucide-react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import usePolling from "../hooks/usePolling";
-import { getBtcComposite, getBtcPortfolio, getHealth, getStockPortfolio, getUsPositions } from "../api";
+import { getBtcComposite, getBtcPortfolio, getHealth, getStockPortfolio, getUsPositions, getUsFx } from "../api";
 import HeroBanner from "./ui/HeroBanner";
 import StatusBadge from "./ui/StatusBadge";
+import { LangProvider, useLang } from "../hooks/useLang";
 
 const NAV = [
   { to: "/", label: "BTC", icon: Bitcoin },
@@ -22,18 +23,22 @@ const formatTime = (value) =>
       }).format(value)
     : "--:--";
 
-export default function Layout() {
+function LayoutInner() {
   const location = useLocation();
+  const { lang, toggle, t } = useLang();
   const { data: btc } = usePolling(getBtcPortfolio, 30000);
   const { data: kr } = usePolling(getStockPortfolio, 30000);
   const { data: us } = usePolling(getUsPositions, 30000);
+  const { data: fx } = usePolling(getUsFx, 60000);
   const { data: health, updatedAt } = usePolling(getHealth, 30000);
   const { data: composite } = usePolling(getBtcComposite, 30000);
 
+  const fxRate = Number(fx?.rate || fx?.usdkrw || 1300);
   const btcAsset = (btc?.summary?.krw_balance || 0) + (btc?.summary?.total_eval || 0);
   const krAsset = kr?.estimated_asset || 0;
-  const usAsset = us?.summary?.total_current || 0;
-  const totalAsset = btcAsset + krAsset + usAsset;
+  const usAssetUsd = us?.summary?.total_current || 0;
+  const usAssetKrw = Math.round(usAssetUsd * fxRate);
+  const totalAsset = btcAsset + krAsset + usAssetKrw;
 
   const metrics = {
     btc: {
@@ -47,7 +52,7 @@ export default function Layout() {
       prefix: "₩",
     },
     us: {
-      value: usAsset,
+      value: usAssetUsd,
       delta: Number(us?.summary?.total_pnl_pct || 0),
       prefix: "$",
     },
@@ -94,10 +99,10 @@ export default function Layout() {
               </div>
               <div>
                 <div style={{ fontSize: 18, fontWeight: 800, letterSpacing: "-0.04em" }}>
-                  OpenClaw Trading
+                  {t("OpenClaw Trading")}
                 </div>
                 <div className="subtle" style={{ fontSize: 13 }}>
-                  Dark ops dashboard for automated market execution
+                  {t("Dark ops dashboard for automated market execution")}
                 </div>
               </div>
             </div>
@@ -130,11 +135,28 @@ export default function Layout() {
             </nav>
 
             <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <button
+                onClick={toggle}
+                title={lang === "ko" ? "Switch to English" : "한국어로 전환"}
+                style={{
+                  background: "rgba(255,255,255,0.07)",
+                  border: "1px solid rgba(255,255,255,0.12)",
+                  borderRadius: 8,
+                  padding: "4px 10px",
+                  cursor: "pointer",
+                  color: "var(--text-primary)",
+                  fontSize: 13,
+                  fontWeight: 700,
+                  letterSpacing: "0.03em",
+                }}
+              >
+                {lang === "ko" ? "EN" : "KO"}
+              </button>
               <StatusBadge status={regime} />
               <div className="pill live-pill">
                 <span className="live-dot" />
                 <Sparkles size={14} />
-                Last update {formatTime(updatedAt)}
+                {t("Last update")} {formatTime(updatedAt)}
               </div>
             </div>
           </div>
@@ -148,5 +170,13 @@ export default function Layout() {
         </main>
       </div>
     </div>
+  );
+}
+
+export default function Layout() {
+  return (
+    <LangProvider>
+      <LayoutInner />
+    </LangProvider>
   );
 }

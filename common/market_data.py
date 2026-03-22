@@ -313,7 +313,7 @@ def get_dart_financial_score(stock_code: str, supabase_client) -> dict:
         elif op_margin > 0:
             score += 3
         else:
-            score -= 5; details.append(f"영업적자")
+            score -= 5; details.append("영업적자")
 
         # 3) 부채비율 (20점)
         debt_ratio = (total_debt / total_equity * 100) if total_equity > 0 else 999
@@ -419,11 +419,11 @@ def calc_us_multifactor(symbol: str) -> dict:
             score += 3
 
         if 0 < debt_to_equity < 50:
-            score += 10; details.append(f"저부채")
+            score += 10; details.append("저부채")
         elif debt_to_equity < 100:
             score += 5
         elif debt_to_equity > 200:
-            score -= 5; details.append(f"고부채")
+            score -= 5; details.append("고부채")
 
         # Momentum (35점)
         close = hist["Close"]
@@ -433,19 +433,19 @@ def calc_us_multifactor(symbol: str) -> dict:
 
         combined_mom = ret_1m * 0.3 + ret_3m * 0.4 + ret_6m * 0.3
         if combined_mom >= 0.15:
-            score += 25; details.append(f"모멘텀강")
+            score += 25; details.append("모멘텀강")
         elif combined_mom >= 0.08:
-            score += 18; details.append(f"모멘텀양호")
+            score += 18; details.append("모멘텀양호")
         elif combined_mom >= 0.02:
             score += 10
         elif combined_mom >= 0:
             score += 3
         else:
-            score -= 5; details.append(f"모멘텀약")
+            score -= 5; details.append("모멘텀약")
 
         mom_accel = ret_1m - (ret_3m / 3)
         if mom_accel > 0.03:
-            score += 10; details.append(f"가속↑")
+            score += 10; details.append("가속↑")
         elif mom_accel > 0.01:
             score += 5
 

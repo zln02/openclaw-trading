@@ -74,6 +74,12 @@ def _fetch_cryptopanic_news(currencies: str = "BTC", limit: int = 20) -> List[di
     if res is None:
         log.warning("cryptopanic request failed after retries")
         return []
+    if res.status_code == 429:
+        # Rate limit: 30분 캐시로 요청 억제
+        _rate_limit_cache = f"cryptopanic:rate_limit:{currencies}"
+        set_cached(_rate_limit_cache, True, ttl=1800)
+        log.warning("cryptopanic rate limited (429) — 30분 요청 억제", status=429)
+        return []
     if not res.ok:
         log.warning("cryptopanic response not ok", status=res.status_code)
         return []
@@ -152,7 +158,12 @@ def collect_news_once(currencies: str = "BTC", limit: int = 20) -> List[dict]:
     if cached is not None:
         return cached
 
-    rows = _fetch_cryptopanic_news(currencies=currencies, limit=limit)
+    # 429 rate limit 중이면 CryptoPanic 요청 건너뜀
+    _rate_limit_key = f"cryptopanic:rate_limit:{currencies}"
+    if get_cached(_rate_limit_key) is None:
+        rows = _fetch_cryptopanic_news(currencies=currencies, limit=limit)
+    else:
+        rows = []
     if not rows:
         rows = _fetch_coindesk_rss(limit=min(limit, 10))
 

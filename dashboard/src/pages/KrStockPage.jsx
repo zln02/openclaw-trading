@@ -9,6 +9,7 @@ import {
   getStockTrades,
 } from "../api";
 import usePolling from "../hooks/usePolling";
+import { useLang } from "../hooks/useLang";
 import { compactTime, krw, pct } from "../lib/format";
 import DeferredRender from "../components/ui/DeferredRender";
 import GlassCard from "../components/ui/GlassCard";
@@ -21,6 +22,7 @@ import LightweightPriceChart from "../components/ui/LightweightPriceChart";
 const COLORS = ["#8b5cf6", "#3b82f6", "#22c55e", "#f59e0b", "#ef4444", "#14b8a6"];
 
 export default function KrStockPage() {
+  const { t } = useLang();
   const { data: portfolio, loading: portfolioLoading } = usePolling(getStockPortfolio, 30000);
   const { data: krPortfolio } = usePolling(getKrPortfolio, 30000);
   const { data: topStocks, loading: topLoading } = usePolling(getKrTop, 60000);
@@ -85,8 +87,8 @@ export default function KrStockPage() {
     <div className="stack">
       <div className="page-heading">
         <div>
-          <h1>KR Stocks Portfolio Lab</h1>
-          <p>Paper-trading workspace for Kiwoom-connected portfolio control, ML conviction, and ranked momentum selection.</p>
+          <h1>{t("KR Stocks Portfolio Lab")}</h1>
+          <p>{t("Paper-trading workspace for Kiwoom-connected portfolio control, ML conviction, and ranked momentum selection.")}</p>
         </div>
       </div>
 
@@ -123,7 +125,7 @@ export default function KrStockPage() {
         <aside className="tv-left-rail">
           <GlassCard className="card-pad">
             <div className="panel-title">
-              <h2>Watchlist</h2>
+              <h2>{t("Watchlist")}</h2>
             </div>
             <div className="rail-list">
               {watchRows.map((row) => (
@@ -140,19 +142,19 @@ export default function KrStockPage() {
                   <span className="subtle">{row.tag}</span>
                 </button>
               ))}
-              {watchRows.length === 0 ? <EmptyState message="No KR symbols." /> : null}
+              {watchRows.length === 0 ? <EmptyState message={t("No KR symbols.")} /> : null}
             </div>
           </GlassCard>
 
           <GlassCard className="card-pad">
             <div className="panel-title">
-              <h2>Strategy Bias</h2>
+              <h2>{t("Strategy Bias")}</h2>
             </div>
             <div className="tabular-list">
-              <div className="kv-row"><span className="subtle">Rule Weight</span><span className="mono">60%</span></div>
-              <div className="kv-row"><span className="subtle">ML Weight</span><span className="mono">40%</span></div>
-              <div className="kv-row"><span className="subtle">Confidence</span><span className="mono">{Number(strategy?.confidence || 71).toFixed(0)}%</span></div>
-              <div className="kv-row"><span className="subtle">Risk Score</span><span className="mono">{Number(strategy?.risk_score || 38).toFixed(0)}</span></div>
+              <div className="kv-row"><span className="subtle">{t("Rule Weight")}</span><span className="mono">60%</span></div>
+              <div className="kv-row"><span className="subtle">{t("ML Weight")}</span><span className="mono">40%</span></div>
+              <div className="kv-row"><span className="subtle">{t("Confidence")}</span><span className="mono">{Number(strategy?.confidence || 71).toFixed(0)}%</span></div>
+              <div className="kv-row"><span className="subtle">{t("Risk Score")}</span><span className="mono">{Number(strategy?.risk_score || 38).toFixed(0)}</span></div>
             </div>
           </GlassCard>
         </aside>
@@ -161,7 +163,7 @@ export default function KrStockPage() {
           <DeferredRender height={320}>
             <GlassCard className="card-pad">
               <div className="panel-title">
-                <h2>Momentum Curve</h2>
+                <h2>{t("Momentum Curve")}</h2>
                 <ListOrdered size={18} color="var(--text-secondary)" />
               </div>
               {chartLoading ? (
@@ -177,26 +179,26 @@ export default function KrStockPage() {
               <div>
                 <div className="symbol-code">{activeSymbol}</div>
                 <div className="symbol-meta">
-                  <span className="toolbar-chip">KOSPI/KOSDAQ</span>
-                  <span className="toolbar-chip">Paper Trading</span>
+                  <span className="toolbar-chip">{t("KOSPI/KOSDAQ")}</span>
+                  <span className="toolbar-chip">{t("Paper Trading")}</span>
                   <span className="toolbar-chip mono">{activeTop?.grade || "A"}</span>
                 </div>
               </div>
             </div>
             <div className="panel-title">
-              <h2>Current Holdings</h2>
+              <h2>{t("Current Holdings")}</h2>
               <BriefcaseBusiness size={18} color="var(--text-secondary)" />
             </div>
             <div className="table-shell">
               <table>
                 <thead>
                   <tr>
-                    <th>Name</th>
-                    <th>Qty</th>
-                    <th>Avg</th>
-                    <th>Now</th>
-                    <th>PnL</th>
-                    <th>Factor</th>
+                    <th>{t("Name")}</th>
+                    <th>{t("Qty")}</th>
+                    <th>{t("Avg")}</th>
+                    <th>{t("Now")}</th>
+                    <th>{t("PnL")}</th>
+                    <th>{t("Factor")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -225,7 +227,7 @@ export default function KrStockPage() {
           <div className="split-2">
             <GlassCard className="card-pad">
               <div className="panel-title">
-                <h2>Top Momentum Ranking</h2>
+                <h2>{t("Top Momentum Ranking")}</h2>
                 <ListOrdered size={18} color="var(--text-secondary)" />
               </div>
               {topLoading ? (
@@ -254,7 +256,7 @@ export default function KrStockPage() {
 
             <GlassCard className="card-pad">
               <div className="panel-title">
-                <h2>Trade Timeline</h2>
+                <h2>{t("Trade Timeline")}</h2>
                 <History size={18} color="var(--text-secondary)" />
               </div>
               {tradesLoading ? (
@@ -274,7 +276,7 @@ export default function KrStockPage() {
                       </div>
                     );
                   })}
-                  {(trades || []).length === 0 ? <EmptyState message="No KR trade timeline entries." /> : null}
+                  {(trades || []).length === 0 ? <EmptyState message={t("No KR trade timeline entries.")} /> : null}
                 </div>
               )}
             </GlassCard>
@@ -285,13 +287,13 @@ export default function KrStockPage() {
           <DeferredRender height={360}>
             <GlassCard className="card-pad">
               <div className="panel-title">
-                <h2>Portfolio Allocation</h2>
+                <h2>{t("Portfolio Allocation")}</h2>
                 <Landmark size={18} color="var(--text-secondary)" />
               </div>
               {portfolioLoading ? (
                 <LoadingSkeleton height={360} />
               ) : donutData.length === 0 ? (
-                <EmptyState message="No KR positions available." />
+                <EmptyState message={t("No KR positions available.")} />
               ) : (
                 <SvgDonutChart data={donutData} colors={COLORS} />
               )}
@@ -300,7 +302,7 @@ export default function KrStockPage() {
 
           <GlassCard className="card-pad">
             <div className="panel-title">
-              <h2>ML Signals</h2>
+              <h2>{t("ML Signals")}</h2>
               <Brain size={18} color="var(--text-secondary)" />
             </div>
             <div className="tv-section">
@@ -321,13 +323,13 @@ export default function KrStockPage() {
 
           <GlassCard className="card-pad">
             <div className="panel-title">
-              <h2>Selection Summary</h2>
+              <h2>{t("Selection Summary")}</h2>
             </div>
             <div className="tabular-list">
-              <div className="kv-row"><span className="subtle">Selected</span><span className="mono">{activeSymbol}</span></div>
-              <div className="kv-row"><span className="subtle">Grade</span><span className="mono">{activeTop?.grade || "A"}</span></div>
-              <div className="kv-row"><span className="subtle">Score</span><span className="mono">{Number(activeTop?.score || activePosition?.factor_score || 0).toFixed(0)}</span></div>
-              <div className="kv-row"><span className="subtle">PnL</span><span className={Number(activePosition?.pnl_pct || activePosition?.return_pct || activeTop?.momentum || 0) >= 0 ? "profit mono" : "loss mono"}>{pct(activePosition?.pnl_pct || activePosition?.return_pct || activeTop?.momentum || 0)}</span></div>
+              <div className="kv-row"><span className="subtle">{t("Selected")}</span><span className="mono">{activeSymbol}</span></div>
+              <div className="kv-row"><span className="subtle">{t("Grade")}</span><span className="mono">{activeTop?.grade || "A"}</span></div>
+              <div className="kv-row"><span className="subtle">{t("Score")}</span><span className="mono">{Number(activeTop?.score || activePosition?.factor_score || 0).toFixed(0)}</span></div>
+              <div className="kv-row"><span className="subtle">{t("PnL")}</span><span className={Number(activePosition?.pnl_pct || activePosition?.return_pct || activeTop?.momentum || 0) >= 0 ? "profit mono" : "loss mono"}>{pct(activePosition?.pnl_pct || activePosition?.return_pct || activeTop?.momentum || 0)}</span></div>
             </div>
           </GlassCard>
         </aside>

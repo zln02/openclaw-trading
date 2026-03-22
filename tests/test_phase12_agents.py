@@ -62,6 +62,13 @@ class StrategyReviewerTests(unittest.TestCase):
 class NewsAnalystTests(unittest.TestCase):
     def setUp(self) -> None:
         clear_cache()
+        self.tmp = tempfile.TemporaryDirectory()
+        self._state_patch = patch("agents.news_analyst.STATE_DIR", Path(self.tmp.name))
+        self._state_patch.start()
+
+    def tearDown(self) -> None:
+        self._state_patch.stop()
+        self.tmp.cleanup()
 
     def test_aggregate_sentiment(self) -> None:
         analyst = NewsAnalyst(daily_budget_usd=0.0)

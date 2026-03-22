@@ -296,7 +296,10 @@ def fetch_return_matrix(symbols: List[str], lookback_days: int = 252) -> Dict[st
             )
             if hist is None or hist.empty or "Close" not in hist:
                 continue
-            close = [float(v) for v in list(hist["Close"]) if _safe_float(v, 0.0) > 0]
+            close_col = hist["Close"]
+            if close_col is None:
+                continue
+            close = [float(v) for v in list(close_col) if _safe_float(v, 0.0) > 0]
             if len(close) < 3:
                 continue
             rets = []

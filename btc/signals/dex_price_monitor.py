@@ -215,8 +215,16 @@ def save_snapshot(snapshot: dict) -> Path:
     return DEX_REPORT_PATH
 
 
+_DEX_NOTIFY_CD = Path("/tmp/openclaw_dex_arb.ts")
+_DEX_NOTIFY_INTERVAL = 300  # 5분 쿨다운
+
+
 def maybe_notify(snapshot: dict) -> None:
     if str(snapshot.get("status") or "") != "OPPORTUNITY":
+        return
+    import time as _t
+    _last = float(_DEX_NOTIFY_CD.read_text()) if _DEX_NOTIFY_CD.exists() else 0.0
+    if _t.time() - _last < _DEX_NOTIFY_INTERVAL:
         return
     arb = snapshot.get("arb") or {}
     dex = snapshot.get("dex") or {}
@@ -231,6 +239,7 @@ def maybe_notify(snapshot: dict) -> None:
             ]
         )
     )
+    _DEX_NOTIFY_CD.write_text(str(_t.time()))
 
 
 def main() -> int:

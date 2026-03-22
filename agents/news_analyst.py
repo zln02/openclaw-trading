@@ -680,5 +680,34 @@ def _cli() -> int:
     return 0
 
 
+# ── v6: 종목별 감정 캐시 함수 (에이전트에서 매매 게이트로 사용) ──
+_symbol_sentiment_cache: dict = {}
+_symbol_sentiment_ts: float = 0.0
+
+
+def get_symbol_sentiment(symbol: str, ttl: int = 1800) -> float:
+    """종목/시장 감정 점수 반환 (-1 ~ +1). TTL 30분 캐시.
+
+    캐시 미스 시 NewsAnalyst 간이 배치 실행.
+    실패 시 0.0 (중립) 반환.
+    """
+    import time as _time
+    global _symbol_sentiment_cache, _symbol_sentiment_ts
+
+    now_ts = _time.time()
+    if symbol in _symbol_sentiment_cache and now_ts - _symbol_sentiment_ts < ttl:
+        return _symbol_sentiment_cache[symbol]
+
+    try:
+        analyst = NewsAnalyst(model="rule", batch_minutes=60)
+        result = analyst.run_batch([symbol])
+        score = float(result.get("news_sentiment_score", {}).get("sentiment_score", 0.0))
+        _symbol_sentiment_cache[symbol] = score
+        _symbol_sentiment_ts = now_ts
+        return score
+    except Exception:
+        return 0.0
+
+
 if __name__ == "__main__":
     raise SystemExit(_cli())

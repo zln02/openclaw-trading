@@ -4,6 +4,7 @@ import {
   Newspaper,
   Radar,
   ShieldCheck,
+  Activity,
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import {
@@ -13,8 +14,10 @@ import {
   getBtcLiveActivity,
   getBtcNews,
   getBtcPortfolio,
+  getBtcTrades,
 } from "../api";
 import usePolling from "../hooks/usePolling";
+import { useLang } from "../hooks/useLang";
 import { compactTime, krw, pct, sparkline } from "../lib/format";
 import CircularGauge from "../components/ui/CircularGauge";
 import GlassCard from "../components/ui/GlassCard";
@@ -37,19 +40,31 @@ function sectionBarData(comp) {
 
 function sentimentAccent(sentiment) {
   const key = String(sentiment || "neutral").toLowerCase();
-  if (key.includes("bull")) {
-    return "#22c55e";
-  }
-  if (key.includes("bear")) {
-    return "#ef4444";
-  }
+  if (key.includes("bull")) return "#22c55e";
+  if (key.includes("bear")) return "#ef4444";
   return "#6b7280";
 }
 
+function actionClass(action) {
+  const a = String(action || "").toUpperCase();
+  if (a === "BUY") return "badge-buy";
+  if (a === "SELL") return "badge-sell";
+  return "badge-hold";
+}
+
+function resultClass(result) {
+  const r = String(result || "").toUpperCase();
+  if (r === "EXECUTED") return "badge-buy";
+  if (r === "SKIP" || r === "HOLD") return "badge-hold";
+  return "badge-sell";
+}
+
 export default function BtcPage() {
+  const { t } = useLang();
   const { data: composite, error: compositeError, loading: compositeLoading } = usePolling(getBtcComposite, 30000);
   const { data: portfolio, loading: portfolioLoading } = usePolling(getBtcPortfolio, 30000);
-  const { data: trades } = usePolling(getBtcLiveActivity, 10000);
+  const { data: liveActivity } = usePolling(getBtcLiveActivity, 10000);
+  const { data: dbTrades, loading: dbTradesLoading } = usePolling(getBtcTrades, 30000);
   const { data: candles, loading: candlesLoading } = usePolling(() => getBtcCandles("minute5", 72), 60000);
   const { data: news } = usePolling(getBtcNews, 120000);
   const { data: filters } = usePolling(getBtcFilters, 30000);
@@ -71,13 +86,20 @@ export default function BtcPage() {
   const btcSummary = portfolio?.summary || {};
   const scoreBars = sectionBarData(composite);
   const sentimentValue = Number(composite?.fg_value || 0);
-  const tradeRows = trades?.rows || trades?.trades || trades || [];
+
+  // 실행 피드: JSONL 우선, DB fallback
+  const execRows = liveActivity?.rows || [];
+
+  // 체결 내역: btc_trades DB (가격/PnL 있음)
+  const tradeRows = Array.isArray(dbTrades) ? dbTrades : [];
+
   const newsRows = news?.items || news || [];
   const filterStats = [
     { label: "Funding", value: filters?.funding_rate ?? 0, suffix: "%", tone: (filters?.funding_rate ?? 0) >= 0 ? "profit" : "loss" },
     { label: "Long/Short", value: filters?.long_short_ratio ?? 0, suffix: "x", tone: "neutral" },
     { label: "Open Interest", value: filters?.open_interest ?? 0, suffix: "", tone: "neutral" },
   ];
+
   const marketWatch = [
     { symbol: "BTC", last: candleSeries.at(-1)?.close ?? candleSeries.at(-1)?.value ?? 0, delta: currentPosition?.pnl_pct ?? 0, tag: "Live" },
     { symbol: "F&G", last: sentimentValue, delta: composite?.fg_change ?? 0, tag: composite?.fg_label || "Sentiment" },
@@ -86,14 +108,16 @@ export default function BtcPage() {
   ];
   const [selectedWatch, setSelectedWatch] = useState("BTC");
 
+  const compositeTotal = Number(composite?.composite?.total ?? composite?.total ?? 0);
+  const buyThreshold = Number(composite?.buy_threshold ?? 45);
+
   return (
     <div className="stack">
       <div className="page-heading">
         <div>
-          <h1>BTC Live Trading Desk</h1>
+          <h1>{t("BTC Live Trading Desk")}</h1>
           <p>
-            Composite score, on-chain filters, live position context, and execution trace in one dense
-            operator view.
+            {t("Composite score, on-chain filters, live position context, and execution trace in one dense operator view.")}
           </p>
         </div>
         <StatusBadge status={composite?.regime || composite?.trend || "TRANSITION"} />
@@ -123,16 +147,19 @@ export default function BtcPage() {
           <div className="pf-value mono">{krw(btcSummary.krw_balance || 0)}</div>
         </div>
         <div className="pf-tile">
-          <div className="pf-label">승률</div>
-          <div className="pf-value mono">{btcSummary.winrate != null ? `${btcSummary.winrate}%` : "—"}</div>
+          <div className="pf-label">스코어 / 임계</div>
+          <div className={`pf-value mono ${compositeTotal >= buyThreshold ? "profit" : "loss"}`}>
+            {compositeTotal} / {buyThreshold}
+          </div>
         </div>
       </div>
 
       <div className="tv-terminal">
+        {/* ── 좌측 레일 ── */}
         <aside className="tv-left-rail">
           <GlassCard className="card-pad">
             <div className="panel-title">
-              <h2>Watchlist</h2>
+              <h2>{t("Watchlist")}</h2>
             </div>
             <div className="rail-list">
               {marketWatch.map((item) => (
@@ -145,7 +172,7 @@ export default function BtcPage() {
                 >
                   <strong>{item.symbol}</strong>
                   <span className="mono">
-                    {item.symbol === "BTC" ? krw(item.last) : typeof item.last === "number" ? Number(item.last).toLocaleString() : item.last}
+                    {item.symbol === "BTC" ? krw(item.last) : Number(item.last || 0).toLocaleString()}
                   </span>
                   <span className={Number(item.delta || 0) >= 0 ? "profit mono" : "loss mono"}>
                     {pct(item.delta || 0)}
@@ -156,42 +183,55 @@ export default function BtcPage() {
             </div>
           </GlassCard>
 
+          {/* 체결 내역 (btc_trades DB) */}
           <GlassCard className="card-pad">
             <div className="panel-title">
-              <h2>Signal Board</h2>
+              <h2>{t("체결 내역")}</h2>
+              <Activity size={18} color="var(--text-secondary)" />
             </div>
-            <div className="score-list">
-              {scoreBars.map((bar) => (
-                <div key={bar.name}>
-                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6, fontSize: 13 }}>
-                    <span className="subtle">{bar.name}</span>
-                    <span className="mono">{bar.value}</span>
-                  </div>
-                  <div className="signal-bar">
-                    <div
-                      className="signal-bar-fill"
-                      style={{
-                        width: `${Math.min(Math.max(bar.value, 0), 100)}%`,
-                        opacity: bar.value < 35 ? 0.35 : 1,
-                      }}
-                    />
-                  </div>
-                </div>
-              ))}
-            </div>
+            {dbTradesLoading ? (
+              <LoadingSkeleton height={260} />
+            ) : tradeRows.length === 0 ? (
+              <EmptyState message={t("No BTC trades recorded.")} />
+            ) : (
+              <div className="stack" style={{ gap: 8 }}>
+                {tradeRows.slice(0, 10).map((trade, index) => {
+                  const pnl = Number(trade.pnl_pct || 0);
+                  return (
+                    <div key={trade.id || trade.timestamp || index} style={{ fontSize: 13, borderBottom: "1px solid rgba(255,255,255,0.05)", paddingBottom: 8 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                        <span className="mono subtle" style={{ fontSize: 11 }}>
+                          {compactTime(trade.timestamp || trade.created_at)}
+                        </span>
+                        <span className={`trade-badge ${actionClass(trade.action)}`}>
+                          {trade.action || "HOLD"}
+                        </span>
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "space-between" }}>
+                        <span className="mono" style={{ fontSize: 12 }}>{krw(trade.price || 0)}</span>
+                        <span className={`mono ${pnl >= 0 ? "profit" : "loss"}`} style={{ fontSize: 12 }}>
+                          {pct(pnl)}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </GlassCard>
         </aside>
 
+        {/* ── 메인 콘텐츠 ── */}
         <div className="tv-main tv-stack">
           <GlassCard className="card-pad" accent>
             <div className="symbol-header">
               <div>
                 <div className="symbol-code">{selectedWatch === "BTC" ? "BTCKRW" : selectedWatch}</div>
                 <div className="symbol-meta">
-                  <span className="toolbar-chip mono">Upbit</span>
-                  <span className="toolbar-chip">Spot</span>
-                  <span className="toolbar-chip">5m</span>
-                  <span className="toolbar-chip">Live Feed</span>
+                  <span className="toolbar-chip mono">{t("Upbit")}</span>
+                  <span className="toolbar-chip">{t("Spot")}</span>
+                  <span className="toolbar-chip">{t("5m")}</span>
+                  <span className="toolbar-chip">{t("Live Feed")}</span>
                 </div>
               </div>
               <div style={{ textAlign: "right" }}>
@@ -203,68 +243,54 @@ export default function BtcPage() {
                 </div>
               </div>
             </div>
-            {candlesLoading ? <LoadingSkeleton height={420} /> : <LightweightPriceChart title="Price Panel" data={candleSeries} />}
+            {candlesLoading ? <LoadingSkeleton height={420} /> : <LightweightPriceChart title={t("Price Panel")} data={candleSeries} />}
           </GlassCard>
 
           <div className="split-2">
+            {/* 실행 피드 (JSONL) */}
             <GlassCard className="card-pad">
               <div className="panel-title">
-                <h2>Recent Activity</h2>
+                <h2>{t("실행 피드")}</h2>
+                <CandlestickChart size={18} color="var(--text-secondary)" />
               </div>
-              <div className="table-shell">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Time</th>
-                      <th>Action</th>
-                      <th>Result</th>
-                      <th>Confidence</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(tradeRows || []).slice(0, 8).map((trade, index) => (
-                      <tr key={trade.id || index}>
-                        <td>{compactTime(trade.timestamp_kst || trade.created_at || trade.timestamp)}</td>
-                        <td>
-                          <span
-                            className={`trade-badge ${
-                              String(trade.action || trade.trade_type || "").toUpperCase() === "BUY"
-                                ? "badge-buy"
-                                : String(trade.action || trade.trade_type || "").toUpperCase() === "SELL"
-                                  ? "badge-sell"
-                                  : "badge-hold"
-                            }`.trim()}
-                          >
-                            {trade.action || trade.trade_type || "HOLD"}
-                          </span>
-                        </td>
-                        <td>
-                          <span
-                            className={`trade-badge ${
-                              String(trade.result || "").toUpperCase() === "EXECUTED"
-                                ? "badge-buy"
-                                : String(trade.result || "").toUpperCase() === "SKIP"
-                                  ? "badge-hold"
-                                  : "badge-sell"
-                            }`.trim()}
-                            title={trade.message || ""}
-                          >
-                            {trade.result || "UNKNOWN"}
-                          </span>
-                        </td>
-                        <td className="mono">
-                          {typeof trade.confidence === "number" ? `${Math.round(trade.confidence)}%` : "--"}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <div className="stack" style={{ gap: 10 }}>
+                {execRows.slice(0, 8).map((row, index) => (
+                  <div
+                    key={row.id || row.timestamp_kst || index}
+                    style={{
+                      borderRadius: 8,
+                      background: "rgba(255,255,255,0.02)",
+                      border: "1px solid rgba(255,255,255,0.05)",
+                      padding: "10px 12px",
+                    }}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                      <span className="mono subtle" style={{ fontSize: 12 }}>
+                        {compactTime(row.timestamp_kst || row.timestamp || row.created_at)}
+                      </span>
+                      <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                        <span className={`trade-badge ${actionClass(row.action)}`}>{row.action || "HOLD"}</span>
+                        <span className={`trade-badge ${resultClass(row.result)}`}>{row.result || "—"}</span>
+                        {typeof row.confidence === "number" && (
+                          <span className="mono subtle" style={{ fontSize: 11 }}>{Math.round(row.confidence)}%</span>
+                        )}
+                      </div>
+                    </div>
+                    {row.message ? (
+                      <div className="subtle" style={{ fontSize: 12, lineHeight: 1.5 }}>
+                        {row.message}
+                      </div>
+                    ) : null}
+                  </div>
+                ))}
+                {execRows.length === 0 ? <EmptyState message={t("No execution feed data.")} /> : null}
               </div>
             </GlassCard>
 
+            {/* 뉴스 피드 */}
             <GlassCard className="card-pad">
               <div className="panel-title">
-                <h2>News Feed</h2>
+                <h2>{t("News Feed")}</h2>
                 <Newspaper size={18} color="var(--text-secondary)" />
               </div>
               <div className="stack" style={{ gap: 12 }}>
@@ -283,16 +309,18 @@ export default function BtcPage() {
                     </div>
                   </div>
                 ))}
-                {newsRows.length === 0 ? <EmptyState message="No BTC news available." /> : null}
+                {newsRows.length === 0 ? <EmptyState message={t("No BTC news available.")} /> : null}
               </div>
             </GlassCard>
           </div>
         </div>
 
+        {/* ── 우측 사이드바 ── */}
         <aside className="tv-side">
+          {/* 컴포짓 스코어 + 시그널 바 */}
           <GlassCard className="card-pad" accent>
             <div className="panel-title">
-              <h2>Composite Score</h2>
+              <h2>{t("Composite Score")}</h2>
               <Bitcoin size={18} color="var(--text-secondary)" />
             </div>
             {compositeLoading ? (
@@ -300,12 +328,12 @@ export default function BtcPage() {
             ) : (
               <>
                 <CircularGauge
-                  value={Number(composite?.composite?.total ?? composite?.total ?? 0)}
+                  value={compositeTotal}
                   label="Score"
-                  subtitle="Execution signal"
+                  subtitle={`임계 ${buyThreshold}`}
                   size={190}
                 />
-                <div className="score-list">
+                <div className="score-list" style={{ marginTop: 16 }}>
                   {scoreBars.map((bar) => (
                     <div key={bar.name}>
                       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6, fontSize: 13 }}>
@@ -328,11 +356,12 @@ export default function BtcPage() {
             )}
           </GlassCard>
 
+          {/* 포지션 */}
           <GlassCard
             className={`card-pad ${currentPosition ? (Number(currentPosition.pnl_pct || 0) >= 0 ? "glass-card--profit" : "glass-card--loss") : ""}`.trim()}
           >
             <div className="panel-title">
-              <h2>Position</h2>
+              <h2>{t("Position")}</h2>
               <ShieldCheck size={18} color="var(--text-secondary)" />
             </div>
             {portfolioLoading ? (
@@ -346,13 +375,14 @@ export default function BtcPage() {
                 <div className="kv-row"><span className="subtle">Side</span><span className="mono">{currentPosition.side || currentPosition.position_side || "OPEN"}</span></div>
               </div>
             ) : (
-              <EmptyState message="No active BTC position." />
+              <EmptyState message={t("No active BTC position.")} />
             )}
           </GlassCard>
 
+          {/* 센티먼트 & 필터 */}
           <GlassCard className="card-pad">
             <div className="panel-title">
-              <h2>Sentiment & Filters</h2>
+              <h2>{t("Sentiment & Filters")}</h2>
               <Radar size={18} color="var(--text-secondary)" />
             </div>
             <CircularGauge value={sentimentValue} label="F&G" subtitle={composite?.fg_label || "Sentiment"} size={170} />

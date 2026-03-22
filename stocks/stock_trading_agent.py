@@ -15,7 +15,7 @@ import json
 import time
 import sys
 import requests
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -26,6 +26,7 @@ from common.supabase_client import get_supabase
 from common.logger import get_logger
 from common.retry import retry, retry_call
 from common.config import STOCK_TRADING_LOG
+from common.utils import generate_order_id, check_order_idempotency
 from common.equity_loader import (
     append_equity_snapshot,
     get_effective_market_weight,
@@ -104,7 +105,7 @@ RULES = {
 def log(msg: str, level: str = "INFO"):
     """Backward-compat wrapper routing to structured logger."""
     _dispatch = {
-        "INFO": _log.info, "WARN": _log.warn,
+        "INFO": _log.info, "WARN": _log.warning,
         "ERROR": _log.error, "TRADE": _log.trade,
     }
     _dispatch.get(level, _log.info)(msg)
@@ -173,6 +174,51 @@ def is_market_open() -> bool:
         return False
     t = now.hour * 100 + now.minute
     return 900 <= t <= 1530
+
+
+def _get_kr_atr_pct(code: str, period: int = 14) -> float:
+    """KR 종목 ATR%를 kiwoom 일봉 데이터로 계산. 실패 시 0.0."""
+    try:
+        import yfinance as yf
+        # KR 종목은 yfinance에서 {code}.KS 형식
+        suffix = ".KS" if not code.endswith((".KS", ".KQ")) else ""
+        ticker = yf.Ticker(f"{code}{suffix}")
+        hist = ticker.history(period="60d")
+        if hist is None or len(hist) < period + 1:
+            return 0.0
+        close = hist["Close"]
+        high = hist["High"]
+        low = hist["Low"]
+        tr_list = []
+        for i in range(1, len(close)):
+            tr = max(
+                float(high.iloc[i]) - float(low.iloc[i]),
+                abs(float(high.iloc[i]) - float(close.iloc[i - 1])),
+                abs(float(low.iloc[i]) - float(close.iloc[i - 1])),
+            )
+            tr_list.append(tr)
+        atr = sum(tr_list[-period:]) / min(len(tr_list), period)
+        price = float(close.iloc[-1])
+        return atr / price if price > 0 else 0.0
+    except Exception:
+        return 0.0
+
+
+def _get_kr_dynamic_sl_tp(code: str) -> tuple:
+    """KR ATR 기반 동적 SL/TP. (sl_pct, tp_pct) 반환 (sl은 음수)."""
+    from common.config import (
+        ATR_SL_MULTIPLIER, ATR_TP_MULTIPLIER,
+        ATR_MIN_STOP_LOSS, ATR_MAX_STOP_LOSS,
+        ATR_MIN_TAKE_PROFIT, ATR_MAX_TAKE_PROFIT,
+    )
+    atr_pct = _get_kr_atr_pct(code)
+    if atr_pct <= 0:
+        return RISK["stop_loss"], RISK["take_profit"]
+    dynamic_sl = -max(ATR_SL_MULTIPLIER * atr_pct, abs(ATR_MIN_STOP_LOSS))
+    dynamic_sl = max(dynamic_sl, ATR_MAX_STOP_LOSS)
+    dynamic_tp = max(ATR_TP_MULTIPLIER * atr_pct, ATR_MIN_TAKE_PROFIT)
+    dynamic_tp = min(dynamic_tp, ATR_MAX_TAKE_PROFIT)
+    return dynamic_sl, dynamic_tp
 
 
 # ─────────────────────────────────────────────
@@ -452,6 +498,8 @@ def _fetch_live_candles(code: str, period: str = '5d', interval: str = '5m') -> 
         result = {
             'closes': [float(c) for c in hist['Close']],
             'volumes': [float(v) for v in hist['Volume']],
+            'highs': [float(h) for h in hist['High']],
+            'lows': [float(l) for l in hist['Low']],
             'source': f'{interval}_live',
             'last_time': str(hist.index[-1]),
         }
@@ -466,7 +514,7 @@ def _fetch_daily_from_db(code: str) -> dict:
     try:
         rows = (
             supabase.table('daily_ohlcv')
-            .select('close_price,volume,date')
+            .select('close_price,high_price,low_price,volume,date')
             .eq('stock_code', code)
             .order('date', desc=False)
             .limit(30)
@@ -477,6 +525,8 @@ def _fetch_daily_from_db(code: str) -> dict:
             return {}
         return {
             'closes': [float(r['close_price']) for r in rows],
+            'highs': [float(r.get('high_price', r['close_price'])) for r in rows],
+            'lows': [float(r.get('low_price', r['close_price'])) for r in rows],
             'volumes': [float(r.get('volume', 0)) for r in rows],
             'source': 'daily_db',
             'last_date': rows[-1].get('date', 'unknown'),
@@ -590,8 +640,23 @@ def _estimate_atr_pct_kr(code: str, price: float) -> float:
         closes = data.get('closes', []) if data else []
         if len(closes) < 14 or price <= 0:
             return 0.0
-        diffs = [abs(float(closes[i] - closes[i - 1])) for i in range(1, len(closes))]
-        atr = sum(diffs[-14:]) / min(len(diffs), 14) if diffs else 0.0
+        highs = data.get('highs', [])
+        lows = data.get('lows', [])
+        if highs and lows and len(highs) == len(closes) and len(lows) == len(closes):
+            # True Range: max(H-L, |H-prev_C|, |L-prev_C|)
+            trs = []
+            for i in range(1, len(closes)):
+                tr = max(
+                    highs[i] - lows[i],
+                    abs(highs[i] - closes[i - 1]),
+                    abs(lows[i] - closes[i - 1]),
+                )
+                trs.append(tr)
+            atr = sum(trs[-14:]) / min(len(trs), 14) if trs else 0.0
+        else:
+            # fallback: close-to-close
+            diffs = [abs(float(closes[i] - closes[i - 1])) for i in range(1, len(closes))]
+            atr = sum(diffs[-14:]) / min(len(diffs), 14) if diffs else 0.0
         return atr / price if price > 0 else 0.0
     except Exception:
         return 0.0
@@ -699,7 +764,7 @@ def check_cooldown(code: str) -> bool:
     """최근 매도 후 쿨다운 시간 체크 (True = 쿨다운 중)"""
     try:
         from datetime import timedelta
-        cutoff = (datetime.now() - timedelta(minutes=RISK['cooldown_minutes'])).isoformat()
+        cutoff = (datetime.now(timezone.utc) - timedelta(minutes=RISK['cooldown_minutes'])).isoformat()
         recent = (
             supabase.table('trade_executions')
             .select('created_at')
@@ -721,7 +786,7 @@ def check_cooldown(code: str) -> bool:
 def check_daily_loss() -> bool:
     """오늘 일일 손실 한도 도달 시 True (거래 중단)"""
     try:
-        today = datetime.now().date().isoformat()
+        today = datetime.now(timezone.utc).date().isoformat()
         closed_today = (
             supabase.table('trade_executions')
             .select('*')
@@ -922,6 +987,18 @@ def analyze_with_ai(
         dart = _get_dart_score(stock['code'])
         return rule_based_signal(indicators, kospi, weekly, has_position, supply, momentum, dart)
 
+    # quota 초과 캐시 체크 (2시간 억제)
+    try:
+        from common.cache import get_cached
+        if get_cached('openai:quota_exceeded'):
+            momentum = calc_momentum_score(stock['code'])
+            dart = _get_dart_score(stock['code'])
+            result = rule_based_signal(indicators, kospi, weekly, has_position, supply, momentum, dart)
+            result['source'] = 'RULE_QUOTA_EXCEEDED'
+            return result
+    except Exception:
+        pass
+
     try:
         from openai import OpenAI
         client = OpenAI(api_key=OPENAI_KEY)
@@ -1014,7 +1091,12 @@ def analyze_with_ai(
         return out
 
     except Exception as e:
+        err_str = str(e)
         log(f'AI 분석 실패 → 룰 기반 fallback: {e}', 'WARN')
+        # OpenAI quota/billing 오류 — 2시간 동안 재시도 억제
+        if 'insufficient_quota' in err_str or '429' in err_str:
+            from common.cache import set_cached
+            set_cached('openai:quota_exceeded', True, ttl=7200)
         dart = _get_dart_score(stock['code'])
         result = rule_based_signal(indicators, kospi, weekly, has_position, supply, momentum, dart)
         result['source'] = 'RULE_FALLBACK'
@@ -1041,10 +1123,26 @@ def get_trading_signal(
     ml_confidence: float = 0.0
     ml_source: str = 'ML_NA'
 
+    # v6: 뉴스 감정 게이트 (BUY 전 차단 체크)
+    try:
+        from agents.news_analyst import get_symbol_sentiment
+        from common.config import NEWS_SENTIMENT_BLOCK_THRESHOLD
+        _kr_sentiment = get_symbol_sentiment(stock.get('name', stock['code']))
+        if _kr_sentiment < NEWS_SENTIMENT_BLOCK_THRESHOLD:
+            return {
+                'action': 'HOLD',
+                'confidence': 0,
+                'reason': f'뉴스 부정적 ({_kr_sentiment:.2f} < {NEWS_SENTIMENT_BLOCK_THRESHOLD})',
+                'ml_score': 0.0,
+                'ml_confidence': 0.0,
+            }
+    except Exception:
+        pass
+
     # ML 신호 항상 수집
     try:
-        from ml_model import get_ml_signal, MODEL_PATH  # 같은 디렉토리
-        if MODEL_PATH.exists():
+        from ml_model import get_ml_signal, MODEL_DIR  # 같은 디렉토리
+        if MODEL_DIR.exists():
             ml = get_ml_signal(stock['code'])
             ml_confidence = float(ml.get('confidence', 0))
             ml_source = ml.get('source', 'ML_XGBOOST')
@@ -1085,13 +1183,28 @@ def get_trading_signal(
         dart = _get_dart_score(stock['code'])
         base_signal = rule_based_signal(indicators, kospi, weekly, has_position, supply, momentum, dart)
 
-    # ML 블렌딩: BUY 신호일 때만 confidence 조정 (rule 0.5 / ml 0.5)
+    # v6: 동적 ML 블렌딩 — ML 정확도 기반 가중치 적응형
     if base_signal.get('action') == 'BUY' and ml_confidence > 0:
         base_conf = float(base_signal.get('confidence', 0))
-        blended = round(base_conf * 0.5 + ml_confidence * 0.5, 1)
+        # ML 정확도 로드
+        try:
+            from ml_model import load_performance_metrics
+            _ml_perf = load_performance_metrics('3d')
+            _ml_accuracy = float(_ml_perf.get('accuracy', 0.5))
+        except Exception:
+            _ml_accuracy = 0.5
+        # 정확도 기반 가중치
+        if _ml_accuracy >= 0.65:
+            _rule_w, _ml_w = 0.50, 0.50
+        elif _ml_accuracy >= 0.55:
+            _rule_w, _ml_w = 0.70, 0.30
+        else:
+            _rule_w, _ml_w = 0.90, 0.10
+        blended = round(base_conf * _rule_w + ml_confidence * _ml_w, 1)
         base_signal['confidence'] = blended
         base_signal['reason'] = (
-            base_signal.get('reason', '') + f" [ML블렌딩:{ml_confidence:.0f}%→{blended:.0f}%]"
+            base_signal.get('reason', '')
+            + f" [ML블렌딩(acc={_ml_accuracy:.0%}):{_rule_w:.0%}R+{_ml_w:.0%}M→{blended:.0f}%]"
         )
 
     base_signal['ml_score'] = round(ml_confidence, 2)
@@ -1225,7 +1338,8 @@ def execute_buy(
             s = (s or '2000-01-01T00:00:00').replace('Z', '').replace('+00:00', '')[:19]
             return datetime.fromisoformat(s)
         last_buy_time = max(_parse_created(p.get('created_at')) for p in existing)
-        hours_since = (datetime.now() - last_buy_time).total_seconds() / 3600
+        now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+        hours_since = (now_utc - last_buy_time).total_seconds() / 3600
         min_hours = RISK.get('min_hours_between_splits', 4)
         if hours_since < min_hours:
             log(f'{name}: {split_stage}차 매수 대기 ({hours_since:.1f}시간/{min_hours}시간)', 'WARN')
@@ -1262,6 +1376,28 @@ def execute_buy(
             if sector_count >= max_sector:
                 log(f'{name}: 동일 섹터({stock_sector}) {sector_count}개 — 추가 매수 차단', 'WARN')
                 return {'result': 'MAX_SECTOR'}
+
+    # v6.1: 섹터 비중 제한 (30%) — 기존 종목 수 제한에 추가
+    MAX_SECTOR_WEIGHT = RISK.get('max_sector_weight', 0.30)
+    stock_sector = stock.get('sector', '')
+    if stock_sector and all_open:
+        try:
+            total_value = sum(
+                float(p.get('quantity', 0) or 0) * float(p.get('price', 0) or 0)
+                for p in all_open
+            )
+            if total_value > 0:
+                sector_value = sum(
+                    float(p.get('quantity', 0) or 0) * float(p.get('price', 0) or 0)
+                    for p in all_open
+                    if _get_stock_sector(p.get('stock_code', '')) == stock_sector
+                )
+                sector_weight = sector_value / total_value
+                if sector_weight >= MAX_SECTOR_WEIGHT:
+                    log(f'{name}: 섹터({stock_sector}) 비중 {sector_weight:.1%} >= {MAX_SECTOR_WEIGHT:.0%} — 매수 차단', 'WARN')
+                    return {'result': 'SECTOR_OVERWEIGHT', 'sector': stock_sector, 'weight': round(sector_weight, 3)}
+        except Exception:
+            pass
 
     # ── 주문 수량 계산 ──
     try:
@@ -1345,6 +1481,12 @@ def execute_buy(
     if quantity < 1:
         return {'result': 'INSUFFICIENT_KRW'}
 
+    # 멱등성 체크: 동일 분 내 중복 매수 방지
+    _order_id = generate_order_id("kr", code, "buy", str(split_stage))
+    if check_order_idempotency(supabase, 'trade_executions', _order_id):
+        log(f'{name}: 중복 주문 감지 — order_id={_order_id}', 'WARN')
+        return {'result': 'DUPLICATE_ORDER'}
+
     # ── 실제 주문 ──
     try:
         router_result = SmartRouter().route_order(
@@ -1385,7 +1527,17 @@ def execute_buy(
         'drift_status': signal.get('drift_status', ''),
         'drift_penalty': signal.get('drift_penalty', 0.0),
         'rsi': indicators.get('rsi', 0.0),
+        'order_id': _order_id,
     }
+
+    # ML 피처 벡터 저장 (look-ahead bias 방지: 매수 시점 피처를 DB에 저장)
+    try:
+        from ml_model import predict_stock as _predict_stock, FEATURE_NAMES as _FEATURE_NAMES
+        _ml_pred = _predict_stock(code, horizon_key='3d')
+        if 'features' in _ml_pred:
+            insert_data['ml_features_json'] = json.dumps(_ml_pred['features'], ensure_ascii=False)
+    except Exception as _mfe:
+        log(f'{name} ML 피처 저장 건너뜀: {_mfe}', 'WARN')
 
     # 팩터 스냅샷 수집 (Phase Level 4: 팩터 로깅)
     try:
@@ -1408,9 +1560,9 @@ def execute_buy(
     try:
         supabase.table('trade_executions').insert(insert_data).execute()
     except Exception as e:
-        # factor_snapshot 컬럼 없을 경우 제외 후 재시도
-        if 'factor_snapshot' in insert_data:
-            del insert_data['factor_snapshot']
+        # 신규 컬럼 없을 경우 제외 후 재시도
+        for _col in ('factor_snapshot', 'ml_features_json'):
+            insert_data.pop(_col, None)
         try:
             supabase.table('trade_executions').insert(insert_data).execute()
         except Exception as e2:
@@ -1666,14 +1818,15 @@ def check_stop_loss_take_profit():
                     time.sleep(0.3)
                     continue
 
-            # ── 손절 ──
-            if net_pnl_pct <= RISK['stop_loss']:
-                log(f'{name} 손절: {net_pnl_pct*100:.2f}%', 'TRADE')
+            # ── 손절 (v6: ATR 동적) ──
+            _dyn_sl, _dyn_tp = _get_kr_dynamic_sl_tp(code)
+            if net_pnl_pct <= _dyn_sl:
+                log(f'{name} 손절: {net_pnl_pct*100:.2f}% (ATR_SL={_dyn_sl*100:.1f}%)', 'TRADE')
                 execute_sell(
                     {'code': code, 'name': name},
                     {},
                     {'price': price},
-                    reason_prefix=f'🛑 손절({net_pnl_pct*100:.2f}%): ',
+                    reason_prefix=f'🛑 손절({net_pnl_pct*100:.2f}%, ATR_SL={_dyn_sl*100:.1f}%): ',
                 )
                 time.sleep(0.3)
                 continue
@@ -1687,9 +1840,22 @@ def check_stop_loss_take_profit():
                     log(f'{name} 부분 익절: {net_pnl_pct*100:.2f}%, {sell_qty}주 매도', 'TRADE')
                     try:
                         kiwoom.place_order(stock_code=code, order_type='sell', quantity=sell_qty, price=0)
-                        for t in trades[:1]:
+                        # 첫 번째 레코드의 수량을 차감하여 잔여 수량 반영
+                        remaining_to_deduct = sell_qty
+                        for t in trades:
                             tid = t.get('trade_id')
-                            if tid:
+                            if not tid:
+                                continue
+                            if remaining_to_deduct > 0:
+                                orig_qty = int(t.get('quantity') or 0)
+                                deduct = min(orig_qty, remaining_to_deduct)
+                                new_qty = orig_qty - deduct
+                                remaining_to_deduct -= deduct
+                                supabase.table('trade_executions').update(
+                                    {'partial_sold': True, 'quantity': new_qty}
+                                ).eq('trade_id', tid).execute()
+                            else:
+                                # 수량 차감은 끝났지만 partial_sold 플래그는 모든 레코드에 세움
                                 supabase.table('trade_executions').update(
                                     {'partial_sold': True}
                                 ).eq('trade_id', tid).execute()
@@ -1703,14 +1869,14 @@ def check_stop_loss_take_profit():
                     time.sleep(0.3)
                     continue
 
-            # ── 최대 익절 ──
-            if net_pnl_pct >= RISK['take_profit']:
-                log(f'{name} 최대 익절: {net_pnl_pct*100:.2f}%', 'TRADE')
+            # ── 최대 익절 (v6: ATR 동적) ──
+            if net_pnl_pct >= _dyn_tp:
+                log(f'{name} 최대 익절: {net_pnl_pct*100:.2f}% (ATR_TP={_dyn_tp*100:.1f}%)', 'TRADE')
                 execute_sell(
                     {'code': code, 'name': name},
                     {},
                     {'price': price},
-                    reason_prefix=f'🎯 최대익절({net_pnl_pct*100:.2f}%): ',
+                    reason_prefix=f'🎯 최대익절({net_pnl_pct*100:.2f}%, ATR_TP={_dyn_tp*100:.1f}%): ',
                 )
                 time.sleep(0.3)
                 continue
@@ -1725,7 +1891,7 @@ def check_stop_loss_take_profit():
                     )
                     for t in trades
                 )
-                holding_days = (datetime.now() - oldest_buy).days
+                holding_days = (datetime.now(timezone.utc).replace(tzinfo=None) - oldest_buy).days
             except Exception:
                 holding_days = 0
 
@@ -1794,11 +1960,28 @@ def run_trading_cycle():
     _kr_buy_blocked = False
     _regime_adj_cache = _get_regime_factor_adj()  # 레짐별 팩터 가중치 사이클 초기 로드
 
+    # v6: 레짐별 리스크 파라미터 런타임 오버라이드
+    from common.config import REGIME_RISK_OVERRIDES
+    _current_regime = _regime_adj_cache.get("regime", "TRANSITION")
+    _regime_override = REGIME_RISK_OVERRIDES.get(_current_regime, {})
+    if _regime_override:
+        if "max_positions" in _regime_override:
+            RISK["max_positions"] = _regime_override["max_positions"]
+        if not _regime_override.get("allow_new_buys", True):
+            _kr_buy_blocked = True
+            log(f"레짐 {_current_regime}: 신규매수 차단")
+        log(f"레짐 리스크 오버라이드: {_current_regime} → max_pos={RISK['max_positions']}, sl_mult={_regime_override.get('sl_mult', 1.0)}")
+
     # STOP 플래그 체크 (텔레그램 /stop 명령으로 생성)
     stop_flag = Path(__file__).parent / 'STOP_TRADING'
     if stop_flag.exists():
         log('⛔ STOP_TRADING 플래그 감지 → 매매 사이클 스킵', 'WARN')
-        send_telegram('⛔ STOP_TRADING 플래그 감지 → 이번 사이클 스킵됨\n/resume 으로 재개')
+        _stop_cd = Path('/tmp/openclaw_stop_kr.ts')
+        import time as _t
+        _last = float(_stop_cd.read_text()) if _stop_cd.exists() else 0.0
+        if _t.time() - _last >= 3600:
+            send_telegram('⛔ STOP_TRADING 플래그 감지 → 이번 사이클 스킵됨\n/resume 으로 재개')
+            _stop_cd.write_text(str(_t.time()))
         return
 
     if not is_market_open():
@@ -1841,7 +2024,7 @@ def run_trading_cycle():
         return
 
     # 오늘 신규 매수 건수 한도 체크
-    today = datetime.now().date().isoformat()
+    today = datetime.now(timezone.utc).date().isoformat()
     try:
         today_buys = (
             supabase.table('trade_executions')

@@ -5,7 +5,7 @@ Usage:
     log = get_logger("btc_agent")
     log.info("매매 사이클 시작")
     log.trade("BTC 매수", price=142000000, qty=0.001)
-    log.warn("거래량 급감")
+    log.warning("거래량 급감")
 """
 from __future__ import annotations
 
@@ -97,10 +97,10 @@ class AgentLogger:
         ch.setFormatter(formatter)
         self._log.addHandler(ch)
 
-        # File handler — stdout이 터미널일 때만 (cron 리다이렉트 시 중복 방지)
+        # File handler — 항상 활성화 (Docker 컨테이너 포함)
         if log_file is None:
             log_file = LOG_DIR / f"{name}.log"
-        if sys.stdout.isatty():
+        if True:
             try:
                 if log_file.exists() and not os.access(log_file, os.W_OK):
                     try:
@@ -139,26 +139,26 @@ class AgentLogger:
 
     # ── convenience methods ──
 
-    def debug(self, msg: str, **kw):
-        self._log.debug(self._fmt(msg, "DEBUG", **kw), extra=kw)
+    def debug(self, msg: str, *args, **kw):
+        self._log.debug(self._fmt(msg % args if args else msg, "DEBUG", **kw), extra=kw)
 
-    def info(self, msg: str, **kw):
-        self._log.info(self._fmt(msg, "INFO", **kw), extra=kw)
+    def info(self, msg: str, *args, **kw):
+        self._log.info(self._fmt(msg % args if args else msg, "INFO", **kw), extra=kw)
 
-    def trade(self, msg: str, **kw):
-        self._log.log(TRADE_LEVEL, self._fmt(msg, "TRADE", **kw), extra=kw)
+    def trade(self, msg: str, *args, **kw):
+        self._log.log(TRADE_LEVEL, self._fmt(msg % args if args else msg, "TRADE", **kw), extra=kw)
 
-    def warn(self, msg: str, **kw):
-        self._log.warning(self._fmt(msg, "WARNING", **kw), extra=kw)
+    def warn(self, msg: str, *args, **kw):
+        self._log.warning(self._fmt(msg % args if args else msg, "WARNING", **kw), extra=kw)
 
     # Python logging 표준 메서드명 호환
     warning = warn
 
-    def error(self, msg: str, **kw):
-        self._log.error(self._fmt(msg, "ERROR", **kw), extra=kw)
+    def error(self, msg: str, *args, **kw):
+        self._log.error(self._fmt(msg % args if args else msg, "ERROR", **kw), extra=kw)
 
-    def critical(self, msg: str, **kw):
-        self._log.critical(self._fmt(msg, "CRITICAL", **kw), extra=kw)
+    def critical(self, msg: str, *args, **kw):
+        self._log.critical(self._fmt(msg % args if args else msg, "CRITICAL", **kw), extra=kw)
 
     @classmethod
     def _fmt(cls, msg: str, level: str, **kw) -> str:

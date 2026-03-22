@@ -2,6 +2,7 @@ import { Bot, BrainCircuit, FileSearch, GitBranch, Shield, TimerReset } from "lu
 import { useMemo, useState } from "react";
 import { getAgentDecisions } from "../api";
 import usePolling from "../hooks/usePolling";
+import { useLang } from "../hooks/useLang";
 import { compactTime } from "../lib/format";
 import GlassCard from "../components/ui/GlassCard";
 import LoadingSkeleton from "../components/ui/LoadingSkeleton";
@@ -17,6 +18,7 @@ const AGENTS = [
 ];
 
 export default function AgentsPage() {
+  const { t } = useLang();
   const { data, loading } = usePolling(() => getAgentDecisions(20), 30000);
   const [expanded, setExpanded] = useState(null);
   const decisions = useMemo(() => data?.decisions || [], [data]);
@@ -25,8 +27,8 @@ export default function AgentsPage() {
     <div className="stack">
       <div className="page-heading">
         <div>
-          <h1>AI Agent Operations</h1>
-          <p>Specialist-agent orchestration, decision traces, and research loop visibility for trading supervision.</p>
+          <h1>{t("AI Agent Operations")}</h1>
+          <p>{t("Specialist-agent orchestration, decision traces, and research loop visibility for trading supervision.")}</p>
         </div>
       </div>
 
@@ -35,16 +37,16 @@ export default function AgentsPage() {
           <GlassCard className="card-pad">
             <div className="symbol-header">
               <div>
-                <div className="symbol-code">AGENT DESK</div>
+                <div className="symbol-code">{t("AGENT DESK")}</div>
                 <div className="symbol-meta">
-                  <span className="toolbar-chip">Decision Feed</span>
-                  <span className="toolbar-chip">Last 20</span>
+                  <span className="toolbar-chip">{t("Decision Feed")}</span>
+                  <span className="toolbar-chip">{t("Last 20")}</span>
                   <span className="toolbar-chip mono">{decisions.length} Events</span>
                 </div>
               </div>
             </div>
             <div className="panel-title">
-              <h2>Decision Timeline</h2>
+              <h2>{t("Decision Timeline")}</h2>
               <TimerReset size={18} color="var(--text-secondary)" />
             </div>
             {loading ? (
@@ -74,20 +76,20 @@ export default function AgentsPage() {
                         <div>
                           <strong>{decision.market?.toUpperCase?.() || "MARKET"}</strong>
                           <div className="subtle" style={{ marginTop: 8 }}>
-                            {decision.reasoning || "No reasoning attached."}
+                            {decision.reasoning || t("No reasoning attached.")}
                           </div>
                         </div>
                       </div>
                       {isOpen ? (
                         <div style={{ marginTop: 14, paddingTop: 14, borderTop: "1px solid rgba(255,255,255,0.06)" }}>
-                          <div className="subtle">Confidence: {decision.confidence ?? "—"}%</div>
-                          <div style={{ marginTop: 8 }}>{decision.details || decision.reasoning || "No extra agent details."}</div>
+                          <div className="subtle">{t("Confidence:")} {decision.confidence ?? "—"}%</div>
+                          <div style={{ marginTop: 8 }}>{decision.details || decision.reasoning || t("No extra agent details.")}</div>
                         </div>
                       ) : null}
                     </button>
                   );
                 })}
-                {decisions.length === 0 ? <EmptyState message="No agent decisions recorded." /> : null}
+                {decisions.length === 0 ? <EmptyState message={t("No agent decisions recorded.")} /> : null}
               </div>
             )}
           </GlassCard>
@@ -96,7 +98,7 @@ export default function AgentsPage() {
         <aside className="tv-side">
           <GlassCard className="card-pad">
             <div className="panel-title">
-              <h2>Agent Team Topology</h2>
+              <h2>{t("Agent Team Topology")}</h2>
               <Bot size={18} color="var(--text-secondary)" />
             </div>
             <div className="agent-topology">
@@ -104,9 +106,9 @@ export default function AgentsPage() {
                 <div key={name} className="agent-node">
                   <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
                     <Icon size={18} />
-                    <strong>{name}</strong>
+                    <strong>{t(name)}</strong>
                   </div>
-                  <div className="subtle">{model}</div>
+                  <div className="subtle">{t(model)}</div>
                   <div style={{ marginTop: 12 }}>
                     <StatusBadge status={index === 3 ? "RISK_ON" : "TRANSITION"} />
                   </div>
@@ -117,7 +119,7 @@ export default function AgentsPage() {
 
           <GlassCard className="card-pad">
             <div className="panel-title">
-              <h2>Level 5 Research Loop</h2>
+              <h2>{t("Level 5 Research Loop")}</h2>
               <GitBranch size={18} color="var(--text-secondary)" />
             </div>
             <div className="stack" style={{ gap: 14 }}>
@@ -127,12 +129,12 @@ export default function AgentsPage() {
                 ["Param Optimizer", "Sun 23:30"],
               ].map(([name, time]) => (
                 <div key={name} className="agent-node">
-                  <div style={{ fontWeight: 700 }}>{name}</div>
-                  <div className="subtle" style={{ marginTop: 6 }}>Last scheduled run: {time}</div>
+                  <div style={{ fontWeight: 700 }}>{t(name)}</div>
+                  <div className="subtle" style={{ marginTop: 6 }}>{t("Last scheduled run:")} {time}</div>
                 </div>
               ))}
               <div className="agent-node">
-                <div style={{ fontWeight: 700, marginBottom: 8 }}>weights.json snapshot</div>
+                <div style={{ fontWeight: 700, marginBottom: 8 }}>{t("weights.json snapshot")}</div>
                 <div className="subtle mono" style={{ whiteSpace: "pre-wrap", fontSize: 12 }}>
                   {`btc_momentum: 0.34\nkr_ml_overlay: 0.22\nus_breakout: 0.18\nrisk_overlay: 0.26`}
                 </div>

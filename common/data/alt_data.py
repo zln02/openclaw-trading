@@ -93,7 +93,13 @@ def get_google_trend(symbol: str, window_days: int = 7) -> Dict:
         out["source"] = "pytrends_unavailable"
         log.warning("pytrends is not installed; trend fallback used")
     except Exception as exc:
+        err_str = str(exc)
         out["source"] = "pytrends_error"
+        if "429" in err_str or "rate" in err_str.lower():
+            # Google 429 rate limit → 2시간 캐시로 요청 억제
+            set_cached(cache_key, out, ttl=7200)
+            log.warning("pytrends rate limited (429) — 2시간 요청 억제", error=err_str[:80])
+            return out
         log.warning("pytrends fetch failed", error=exc)
 
     set_cached(cache_key, out, ttl=900)

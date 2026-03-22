@@ -18,6 +18,7 @@ from common.supabase_client import get_supabase
 from common.logger import get_logger
 from common.retry import retry, retry_call
 from common.config import BTC_LOG
+from common.utils import generate_order_id, check_order_idempotency
 from common.equity_loader import (
     append_equity_snapshot,
     get_effective_market_weight,
@@ -28,6 +29,7 @@ from common.equity_loader import (
 )
 from quant.risk.drawdown_guard import DrawdownGuard, DrawdownGuardState
 from quant.risk.position_sizer import KellyPositionSizer
+from execution.smart_router import SmartRouter
 
 try:
     from common.sheets_logger import append_trade as _sheets_append
@@ -74,12 +76,13 @@ def _apply_weighted_score(components: dict, *, weights: dict) -> int:
         "fg_index": "fg",
         "rsi_signal": "rsi",
         "funding_rate": "funding",
+        "whale_signal": "whale",
         "btc_composite": "total",
         "composite_score": "total",
     }
 
     # Use weights to scale the main components; keep bonus/regime adjustments as-is.
-    base_parts = ["fg", "rsi", "bb", "vol", "trend", "funding", "ls", "oi"]
+    base_parts = ["fg", "rsi", "bb", "vol", "trend", "funding", "ls", "oi", "whale"]
     # Default weights fallback (legacy proportions)
     default_w = {
         "fg": 22,
@@ -90,6 +93,7 @@ def _apply_weighted_score(components: dict, *, weights: dict) -> int:
         "funding": 8,
         "ls": 6,
         "oi": 5,
+        "whale": 3,
     }
     denom = float(sum(default_w.values())) or 1.0
     w_comp = {k: default_w[k] / denom for k in base_parts}
@@ -781,6 +785,9 @@ RSI: {rsi_d:.1f} | BB%: {mom.get('bb_pct', 50):.1f}% | 7일수익: {mom.get('ret
 [출력 형식 - JSON만]
 {{"action":"BUY또는SELL또는HOLD","confidence":0~100,"reason":"한줄근거"}}"""
 
+    if client is None:
+        return {"action": "HOLD", "confidence": 0, "reason": "OpenAI 미설정"}
+
     try:
         res = client.chat.completions.create(
             model="gpt-4o-mini",
@@ -1006,6 +1013,25 @@ def execute_trade(
 
         if invest_krw < 5000:
             return {"result": "INSUFFICIENT_KRW"}
+
+        # 멱등성 체크: 동일 분 내 중복 BTC 매수 방지
+        _order_id = generate_order_id("btc", "BTC", "buy", str(stage))
+        if check_order_idempotency(get_supabase(), "btc_position", _order_id):
+            log.warning(f"중복 주문 감지 — order_id={_order_id}")
+            return {"result": "DUPLICATE_ORDER"}
+
+        # SmartRouter 라우팅 결정 로깅 (BTC는 직접 주문 유지, 로깅만)
+        try:
+            _btc_router = SmartRouter()
+            _btc_qty = invest_krw / price if price > 0 else 0
+            _route_dec = _btc_router.decide(
+                symbol="KRW-BTC", side="buy", total_qty=_btc_qty,
+                market="btc", price_hint=price,
+            )
+            log.info(f"SmartRouter: {getattr(_route_dec, 'route', 'MARKET')} "
+                     f"(spread={getattr(_route_dec, 'spread_bps', 0):.1f}bps)")
+        except Exception:
+            pass
 
         if not DRY_RUN:
             result = upbit.buy_market_order("KRW-BTC", invest_krw)
@@ -1307,6 +1333,7 @@ def run_trading_cycle():
         funding=funding, oi=oi, ls_ratio=ls_ratio, kimchi=kimchi,
         regime=market_regime,
         news_sentiment=news.get("score", 0.0),
+        whale=whale_signal,
     )
 
     # Backfill context columns for existing OPEN positions (schema may have been added later)
@@ -1389,6 +1416,8 @@ def run_trading_cycle():
     # 1) 복합 스코어 매수 (핵심 로직) — 일일 한도 도달 시 매수 차단
     if buy_limit_reached and not pos:
         log.info("오늘 BTC 매수 한도 도달 — 추가 매수 차단")
+    elif funding_blocked:
+        log.info(f"펀딩비 롱 과열 — 매수 차단")
     elif kimchi_blocked:
         log.info(f"김치 프리미엄 {kimchi:+.2f}% 과열 — 매수 차단")
     elif comp["total"] >= buy_min and not pos and htf["trend"] != "DOWNTREND":

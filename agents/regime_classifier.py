@@ -194,7 +194,10 @@ def _fetch_close(
 
         if hist is None or hist.empty or "Close" not in hist:
             return []
-        return [float(v) for v in list(hist["Close"]) if _safe_float(v, 0.0) > 0]
+        close_col = hist["Close"]
+        if close_col is None:
+            return []
+        return [float(v) for v in list(close_col.dropna()) if _safe_float(v, 0.0) > 0]
     except Exception as exc:
         log.warning("fetch close failed", symbol=symbol, error=str(exc))
         return []

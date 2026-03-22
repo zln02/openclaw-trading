@@ -17,3 +17,5 @@ secretary/.venv/
 *.backup
 .pytest_cache
 tests/
+.env.runtime
+.docker-secrets/

@@ -45,6 +45,7 @@ class DrawdownGuardConfig:
     monthly_loss_limit: float = -0.10
     weekly_reduce_ratio: float = 0.50
     cooldown_days: int = 7
+    intraday_loss_limit: float = -0.015  # v6: 실시간 1.5% 일중 손실 제한
 
 
 @dataclass
@@ -93,6 +94,11 @@ class DrawdownGuard:
         d = _safe_float(daily_return)
         w = _safe_float(weekly_return)
         m = _safe_float(monthly_return)
+
+        # v6: intraday loss limit (실시간 체크, daily보다 타이트)
+        if d <= self.config.intraday_loss_limit:
+            decision["allow_new_buys"] = False
+            decision["triggered_rules"].append("INTRADAY_LOSS_BLOCK")
 
         # severity order: monthly > weekly > daily
         if m <= self.config.monthly_loss_limit:

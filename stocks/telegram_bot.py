@@ -40,7 +40,6 @@ TG_CHAT = os.environ.get("TELEGRAM_CHAT_ID", "")
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_KEY = os.environ.get("SUPABASE_SECRET_KEY", "")
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
-WORKSPACE = Path("/home/wlsdud5035/.openclaw/workspace")
 
 
 def send_message(text: str, chat_id: str | None = None, reply_markup: dict | None = None):

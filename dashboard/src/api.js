@@ -1,9 +1,15 @@
 const API_BASE = import.meta.env.VITE_API_URL || "";
 
 async function fetchJSON(path) {
-  const res = await fetch(`${API_BASE}${path}`);
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-  return res.json();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  try {
+    const res = await fetch(`${API_BASE}${path}`, { signal: controller.signal, credentials: 'include' });
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    return res.json();
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** 네트워크/API 오류 시 null 반환 (폴링에 유용) */

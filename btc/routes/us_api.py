@@ -70,8 +70,9 @@ async def get_us_composite():
         # 실제 데이터가 있다면 업데이트
         if supabase:
             try:
-                # 최신 US 모멘텀 신호 조회
-                res = supabase.table("us_momentum_signals").select("*").order("created_at", desc=True).limit(50).execute()
+                res = await asyncio.to_thread(
+                    lambda: supabase.table("us_momentum_signals").select("*").order("created_at", desc=True).limit(50).execute()
+                )
                 if res.data:
                     avg_score = sum(item.get("score", 50) for item in res.data) / len(res.data)
                     composite["total"] = int(avg_score)
@@ -91,17 +92,14 @@ async def get_us_portfolio():
         if not supabase:
             return {"open_positions": [], "closed_positions": [], "summary": {}}
         
-        # US 오픈 포지션 조회
-        open_res = supabase.table("us_trade_executions").select("*").eq("result", "OPEN").execute()
-        open_positions = open_res.data or []
-        
-        # US 체결 내역 조회
-        closed_res = supabase.table("us_trade_executions").select("*").eq("result", "CLOSED").order("created_at", desc=True).limit(100).execute()
-        closed_positions = closed_res.data or []
-        
-        # 현재 가격 계산 (배치 조회로 N+1 방지)
-        symbols = list({p.get("symbol", "") for p in open_positions if p.get("symbol")})
-        batch_prices = _batch_fetch_prices(symbols)
+        # US 포지션/내역 조회 + 현재가 배치 조회 (모두 to_thread)
+        def _sync_portfolio():
+            open_pos = supabase.table("us_trade_executions").select("*").eq("result", "OPEN").execute().data or []
+            closed_pos = supabase.table("us_trade_executions").select("*").eq("result", "CLOSED").order("created_at", desc=True).limit(100).execute().data or []
+            syms = list({p.get("symbol", "") for p in open_pos if p.get("symbol")})
+            prices = _batch_fetch_prices(syms)
+            return open_pos, closed_pos, prices
+        open_positions, closed_positions, batch_prices = await asyncio.to_thread(_sync_portfolio)
         total_invested = 0
         total_current = 0
 
@@ -176,18 +174,16 @@ async def get_us_trades(
     try:
         if not supabase:
             return []
-        
-        query = supabase.table("us_trade_executions").select("*")
-        
-        if result:
-            query = query.eq("result", result)
-        
-        if hours:
-            cutoff = (datetime.now() - timedelta(hours=hours)).isoformat()
-            query = query.gte("created_at", cutoff)
 
-        res = query.order("created_at", desc=True).limit(limit).execute()
-        return res.data or []
+        def _sync_trades():
+            query = supabase.table("us_trade_executions").select("*")
+            if result:
+                query = query.eq("result", result)
+            if hours:
+                cutoff = (datetime.now() - timedelta(hours=hours)).isoformat()
+                query = query.gte("created_at", cutoff)
+            return query.order("created_at", desc=True).limit(limit).execute().data or []
+        return await asyncio.to_thread(_sync_trades)
     except Exception as e:
         log.error(f"US trades error: {e}")
         return []
@@ -195,7 +191,7 @@ async def get_us_trades(
 
 @router.get("/api/us/top", response_class=JSONResponse)
 async def api_us_top():
-    return _fetch_us_signals()
+    return await asyncio.to_thread(_fetch_us_signals)
 
 
 @router.get("/api/us/positions")
@@ -203,36 +199,24 @@ async def api_us_positions():
     try:
         if not supabase:
             return {"positions": [], "summary": {}}
-        res = supabase.table("us_trade_executions").select("*").eq("result", "OPEN").execute()
-        positions = res.data or []
-        import yfinance as _yf_pos
-        total_invested = 0
-        total_current = 0
+        positions = await asyncio.to_thread(
+            lambda: supabase.table("us_trade_executions").select("*").eq("result", "OPEN").execute().data or []
+        )
+        symbols = [p.get("symbol", "") for p in positions if p.get("symbol")]
+        batch_prices = await asyncio.to_thread(lambda: _batch_fetch_prices(symbols))
+        total_invested = 0.0
+        total_current = 0.0
         for p in positions:
             sym = p.get("symbol", "")
             entry = float(p.get("price", 0))
             qty = float(p.get("quantity", 0))
             invested = entry * qty
             total_invested += invested
-            try:
-                t = _yf_pos.Ticker(sym)
-                h = t.history(period="2d")
-                if not h.empty:
-                    cur = float(h["Close"].iloc[-1])
-                    p["current_price"] = round(cur, 2)
-                    p["pnl_pct"] = round((cur / entry - 1) * 100, 2) if entry else 0
-                    p["pnl_usd"] = round((cur - entry) * qty, 2)
-                    total_current += cur * qty
-                else:
-                    p["current_price"] = entry
-                    p["pnl_pct"] = 0
-                    p["pnl_usd"] = 0
-                    total_current += invested
-            except Exception:
-                p["current_price"] = entry
-                p["pnl_pct"] = 0
-                p["pnl_usd"] = 0
-                total_current += invested
+            cur = batch_prices.get(sym, entry)
+            p["current_price"] = round(cur, 2)
+            p["pnl_pct"] = round((cur / entry - 1) * 100, 2) if entry else 0
+            p["pnl_usd"] = round((cur - entry) * qty, 2)
+            total_current += cur * qty
         total_pnl_pct = round((total_current / total_invested - 1) * 100, 2) if total_invested > 0 else 0
         return {
             "positions": positions,
@@ -358,11 +342,15 @@ async def api_us_fx():
     if _time.time() - _fx_cache["ts"] < 300 and _fx_cache["rate"] > 0:
         return {"usdkrw": _fx_cache["rate"]}
     try:
-        import yfinance as _yf_fx
-        t = _yf_fx.Ticker("USDKRW=X")
-        h = t.history(period="5d")
-        if h is not None and not h.empty:
-            rate = round(float(h["Close"].iloc[-1]), 2)
+        def _sync_fx():
+            import yfinance as _yf_fx
+            t = _yf_fx.Ticker("USDKRW=X")
+            h = t.history(period="5d")
+            if h is not None and not h.empty:
+                return round(float(h["Close"].iloc[-1]), 2)
+            return None
+        rate = await asyncio.to_thread(_sync_fx)
+        if rate:
             _fx_cache["ts"] = _time.time()
             _fx_cache["rate"] = rate
             return {"usdkrw": rate}
