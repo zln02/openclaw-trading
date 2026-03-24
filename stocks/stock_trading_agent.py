@@ -77,7 +77,8 @@ RISK = {
     "min_order_krw": 30000,
     "cooldown_minutes": 10,
     "min_hours_between_splits": 3,
-    "max_sector_positions": 2,           # 동일 섹터 최대 2종목
+    "max_sector_positions": 2,           # 동일 섹터 최대 2종목 (count)
+    "max_sector_weight": 0.30,           # 동일 섹터 최대 비중 30% (weight)
     "fee_buy": 0.00015,
     "fee_sell": 0.00015,
     "tax_sell": 0.0018,
@@ -1260,19 +1261,31 @@ def execute_buy(
     if code not in open_codes and len(open_codes) >= RISK['max_positions']:
         return {'result': 'MAX_POSITIONS'}
 
-    # v3: 섹터 분산 체크 (동일 섹터 max_sector_positions 제한)
+    # v3: 섹터 분산 체크 (count + weight 이중 제한)
     max_sector = RISK.get('max_sector_positions', 2)
+    max_sector_weight = RISK.get('max_sector_weight', 0.30)
     if code not in open_codes:
         stock_sector = stock.get('sector', '')
         if stock_sector:
             sector_count = 0
-            for oc in open_codes:
-                s = _get_stock_sector(oc)
-                if s == stock_sector:
+            sector_invested = 0.0
+            total_invested = 0.0
+            for p in all_open:
+                p_price = float(p.get('price', 0) or 0)
+                p_qty = int(p.get('quantity', 0) or 0)
+                p_val = p_price * p_qty
+                total_invested += p_val
+                if _get_stock_sector(p.get('stock_code', '')) == stock_sector:
                     sector_count += 1
+                    sector_invested += p_val
             if sector_count >= max_sector:
-                log(f'{name}: 동일 섹터({stock_sector}) {sector_count}개 — 추가 매수 차단', 'WARN')
+                log(f'{name}: 동일 섹터({stock_sector}) {sector_count}개 — count 초과 차단', 'WARN')
                 return {'result': 'MAX_SECTOR'}
+            if total_invested > 0:
+                sector_weight = sector_invested / total_invested
+                if sector_weight >= max_sector_weight:
+                    log(f'{name}: 섹터({stock_sector}) 비중 {sector_weight*100:.1f}% ≥ {max_sector_weight*100:.0f}% — weight 초과 차단', 'WARN')
+                    return {'result': 'MAX_SECTOR_WEIGHT'}
 
     # ── 주문 수량 계산 ──
     try:

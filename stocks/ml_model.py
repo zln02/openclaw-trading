@@ -668,15 +668,20 @@ def load_training_data(target_days=3, target_return=0.02):
 # ─────────────────────────────────────────────
 # 모델 학습
 # ─────────────────────────────────────────────
-def _build_model(scale_pos_weight: float = 1.0):
+def _build_model(scale_pos_weight: float = 1.0, hpo_params: dict | None = None):
     """XGBClassifier 인스턴스 공통 생성."""
     from xgboost import XGBClassifier
+    p = hpo_params or {}
     return XGBClassifier(
-        n_estimators=200,
-        max_depth=5,
-        learning_rate=0.05,
-        subsample=0.8,
-        colsample_bytree=0.8,
+        n_estimators=p.get('n_estimators', 200),
+        max_depth=p.get('max_depth', 5),
+        learning_rate=p.get('learning_rate', 0.05),
+        subsample=p.get('subsample', 0.8),
+        colsample_bytree=p.get('colsample_bytree', 0.8),
+        min_child_weight=p.get('min_child_weight', 1),
+        gamma=p.get('gamma', 0),
+        reg_alpha=p.get('reg_alpha', 0),
+        reg_lambda=p.get('reg_lambda', 1),
         scale_pos_weight=scale_pos_weight,
         eval_metric='logloss',
         random_state=42,
@@ -684,32 +689,38 @@ def _build_model(scale_pos_weight: float = 1.0):
     )
 
 
-def _build_lgbm_model(scale_pos_weight: float = 1.0):
+def _build_lgbm_model(scale_pos_weight: float = 1.0, hpo_params: dict | None = None):
     try:
         from lightgbm import LGBMClassifier
     except ImportError:
         return None
+    p = hpo_params or {}
     return LGBMClassifier(
-        n_estimators=300,
-        num_leaves=31,
-        learning_rate=0.03,
-        subsample=0.8,
-        colsample_bytree=0.8,
+        n_estimators=p.get('n_estimators', 300),
+        num_leaves=p.get('num_leaves', 31),
+        learning_rate=p.get('learning_rate', 0.03),
+        subsample=p.get('subsample', 0.8),
+        colsample_bytree=p.get('colsample_bytree', 0.8),
+        min_child_samples=p.get('min_child_samples', 20),
+        reg_alpha=p.get('reg_alpha', 0),
+        reg_lambda=p.get('reg_lambda', 1),
         random_state=42,
         class_weight={0: 1.0, 1: max(scale_pos_weight, 1.0)},
         verbose=-1,
     )
 
 
-def _build_catboost_model(scale_pos_weight: float = 1.0):
+def _build_catboost_model(scale_pos_weight: float = 1.0, hpo_params: dict | None = None):
     try:
         from catboost import CatBoostClassifier
     except ImportError:
         return None
+    p = hpo_params or {}
     return CatBoostClassifier(
-        iterations=300,
-        depth=6,
-        learning_rate=0.03,
+        iterations=p.get('iterations', 300),
+        depth=p.get('depth', 6),
+        learning_rate=p.get('learning_rate', 0.03),
+        l2_leaf_reg=p.get('l2_leaf_reg', 3),
         loss_function='Logloss',
         eval_metric='AUC',
         random_seed=42,
@@ -772,10 +783,11 @@ def _available_base_model_names() -> list[str]:
     return names
 
 
-def _build_base_models(scale_pos_weight: float = 1.0) -> dict:
-    models = {'xgb': _build_model(scale_pos_weight=scale_pos_weight)}
-    lgbm = _build_lgbm_model(scale_pos_weight=scale_pos_weight)
-    cat = _build_catboost_model(scale_pos_weight=scale_pos_weight)
+def _build_base_models(scale_pos_weight: float = 1.0, hpo_params: dict | None = None) -> dict:
+    hp = hpo_params or {}
+    models = {'xgb': _build_model(scale_pos_weight=scale_pos_weight, hpo_params=hp.get('xgb'))}
+    lgbm = _build_lgbm_model(scale_pos_weight=scale_pos_weight, hpo_params=hp.get('lgbm'))
+    cat = _build_catboost_model(scale_pos_weight=scale_pos_weight, hpo_params=hp.get('catboost'))
     if lgbm is not None:
         models['lgbm'] = lgbm
     if cat is not None:
@@ -891,6 +903,156 @@ def compute_shap_values(model, X_sample: np.ndarray) -> dict:
     return {name: round(val, 6) for name, val in ranking}
 
 
+# ─────────────────────────────────────────────
+# Optuna HPO
+# ─────────────────────────────────────────────
+
+def _optuna_hpo(X_train: np.ndarray, y_train: np.ndarray, n_trials: int = 40) -> dict:
+    """Optuna로 XGB/LGBM/CatBoost 최적 하이퍼파라미터 탐색.
+
+    Returns:
+        {'xgb': {...}, 'lgbm': {...}, 'catboost': {...}}
+    """
+    try:
+        import optuna
+        from sklearn.model_selection import TimeSeriesSplit
+        from sklearn.metrics import roc_auc_score
+        optuna.logging.set_verbosity(optuna.logging.WARNING)
+    except ImportError as e:
+        print(f'optuna 미설치: {e}')
+        return {}
+
+    pos = max(int(y_train.sum()), 1)
+    neg = max(len(y_train) - pos, 1)
+    spw = neg / pos
+    tscv = TimeSeriesSplit(n_splits=3)
+    best_params: dict = {}
+
+    def _cv_auc(model):
+        aucs = []
+        for tr_idx, val_idx in tscv.split(X_train):
+            Xtr, Xval = X_train[tr_idx], X_train[val_idx]
+            ytr, yval = y_train[tr_idx], y_train[val_idx]
+            if len(np.unique(yval)) < 2:
+                continue
+            _fit_model(model, Xtr, ytr, Xval, yval)
+            prob = _predict_proba(model, Xval)
+            if prob is not None:
+                aucs.append(roc_auc_score(yval, prob))
+        return float(np.mean(aucs)) if aucs else 0.0
+
+    # ── XGBoost ──
+    def _xgb_objective(trial):
+        from xgboost import XGBClassifier
+        params = dict(
+            n_estimators=trial.suggest_int('n_estimators', 100, 500),
+            max_depth=trial.suggest_int('max_depth', 3, 8),
+            learning_rate=trial.suggest_float('learning_rate', 0.01, 0.15, log=True),
+            subsample=trial.suggest_float('subsample', 0.6, 1.0),
+            colsample_bytree=trial.suggest_float('colsample_bytree', 0.5, 1.0),
+            min_child_weight=trial.suggest_int('min_child_weight', 1, 10),
+            gamma=trial.suggest_float('gamma', 0.0, 1.0),
+            scale_pos_weight=spw,
+            eval_metric='logloss',
+            random_state=42,
+            use_label_encoder=False,
+        )
+        return _cv_auc(XGBClassifier(**params))
+
+    study = optuna.create_study(direction='maximize')
+    study.optimize(_xgb_objective, n_trials=n_trials, show_progress_bar=False)
+    best_params['xgb'] = study.best_params
+    print(f'  XGB HPO 최적 AUC={study.best_value:.4f} params={study.best_params}')
+
+    # ── LightGBM ──
+    try:
+        from lightgbm import LGBMClassifier
+
+        def _lgbm_objective(trial):
+            params = dict(
+                n_estimators=trial.suggest_int('n_estimators', 100, 500),
+                num_leaves=trial.suggest_int('num_leaves', 15, 63),
+                learning_rate=trial.suggest_float('learning_rate', 0.01, 0.15, log=True),
+                subsample=trial.suggest_float('subsample', 0.6, 1.0),
+                colsample_bytree=trial.suggest_float('colsample_bytree', 0.5, 1.0),
+                min_child_samples=trial.suggest_int('min_child_samples', 5, 50),
+                class_weight={0: 1.0, 1: spw},
+                random_state=42,
+                verbose=-1,
+            )
+            return _cv_auc(LGBMClassifier(**params))
+
+        study_lgbm = optuna.create_study(direction='maximize')
+        study_lgbm.optimize(_lgbm_objective, n_trials=n_trials, show_progress_bar=False)
+        best_params['lgbm'] = study_lgbm.best_params
+        print(f'  LGBM HPO 최적 AUC={study_lgbm.best_value:.4f}')
+    except ImportError:
+        pass
+
+    # ── CatBoost ──
+    try:
+        from catboost import CatBoostClassifier
+
+        def _cat_objective(trial):
+            params = dict(
+                iterations=trial.suggest_int('iterations', 100, 400),
+                depth=trial.suggest_int('depth', 4, 8),
+                learning_rate=trial.suggest_float('learning_rate', 0.01, 0.15, log=True),
+                l2_leaf_reg=trial.suggest_float('l2_leaf_reg', 1.0, 10.0),
+                class_weights=[1.0, spw],
+                loss_function='Logloss',
+                eval_metric='AUC',
+                random_seed=42,
+                verbose=False,
+            )
+            return _cv_auc(CatBoostClassifier(**params))
+
+        study_cat = optuna.create_study(direction='maximize')
+        study_cat.optimize(_cat_objective, n_trials=n_trials, show_progress_bar=False)
+        best_params['catboost'] = study_cat.best_params
+        print(f'  CatBoost HPO 최적 AUC={study_cat.best_value:.4f}')
+    except ImportError:
+        pass
+
+    return best_params
+
+
+# ─────────────────────────────────────────────
+# RFECV 피처 선택
+# ─────────────────────────────────────────────
+
+def _rfecv_select_features(X: np.ndarray, y: np.ndarray) -> list[int]:
+    """RFECV로 유효 피처 인덱스 반환. 실패 시 전체 인덱스 반환."""
+    try:
+        from sklearn.feature_selection import RFECV
+        from sklearn.model_selection import TimeSeriesSplit
+        from xgboost import XGBClassifier
+
+        pos = max(int(y.sum()), 1)
+        neg = max(len(y) - pos, 1)
+        estimator = XGBClassifier(
+            n_estimators=100, max_depth=4, learning_rate=0.05,
+            scale_pos_weight=neg / pos,
+            eval_metric='logloss', random_state=42, use_label_encoder=False,
+        )
+        selector = RFECV(
+            estimator=estimator,
+            step=1,
+            cv=TimeSeriesSplit(n_splits=3),
+            scoring='roc_auc',
+            min_features_to_select=max(5, X.shape[1] // 3),
+            n_jobs=-1,
+        )
+        selector.fit(X, y)
+        selected = [i for i, s in enumerate(selector.support_) if s]
+        removed = [FEATURE_NAMES[i] for i in range(len(FEATURE_NAMES)) if i < X.shape[1] and not selector.support_[i]]
+        print(f'  RFECV: {X.shape[1]}개 → {len(selected)}개 피처 선택 (제거: {removed})')
+        return selected
+    except Exception as e:
+        print(f'  RFECV 실패, 전체 피처 유지: {e}')
+        return list(range(X.shape[1]))
+
+
 def train_model(horizon_key: str = '3d'):
     """앙상블 스태킹 학습. LightGBM/CatBoost 없으면 XGBoost 폴백."""
     from sklearn.linear_model import LogisticRegression
@@ -916,6 +1078,29 @@ def train_model(horizon_key: str = '3d'):
     neg = max(len(y_train) - pos, 1)
     scale_pos_weight = neg / pos
 
+    # ── HPO + RFECV (환경변수로 선택적 활성화) ──────────────
+    USE_HPO = os.environ.get('USE_HPO', '').lower() in ('1', 'true')
+    USE_RFECV = os.environ.get('USE_RFECV', '').lower() in ('1', 'true')
+
+    hpo_params: dict = {}
+    selected_idx: list[int] = list(range(X_train.shape[1]))
+    feat_names: list[str] = list(FEATURE_NAMES)
+
+    if USE_RFECV:
+        print('RFECV 피처 선택 중...')
+        selected_idx = _rfecv_select_features(X_train, y_train)
+        X_train = X_train[:, selected_idx]
+        X_test = X_test[:, selected_idx]
+        feat_names = [FEATURE_NAMES[i] for i in selected_idx if i < len(FEATURE_NAMES)]
+        print(f'  선택 피처: {len(selected_idx)}/{len(FEATURE_NAMES)}개 — {feat_names[:5]}...')
+
+    if USE_HPO:
+        print('Optuna HPO 실행 중 (n_trials=40)...')
+        hpo_params = _optuna_hpo(X_train, y_train)
+        for mn, p in hpo_params.items():
+            print(f'  {mn}: {p}')
+    # ────────────────────────────────────────────────────────
+
     base_model_names = _available_base_model_names()
     use_ensemble = len(base_model_names) >= 2
     print(f'\n기본 모델: {", ".join(base_model_names)}')
@@ -936,7 +1121,7 @@ def train_model(horizon_key: str = '3d'):
             y_tr, y_val = y_train[tr_idx], y_train[val_idx]
             if len(np.unique(y_val)) < 2:
                 continue
-            fold_models = _build_base_models(scale_pos_weight=scale_pos_weight)
+            fold_models = _build_base_models(scale_pos_weight=scale_pos_weight, hpo_params=hpo_params)
             print(f'  stacking fold {fold}: train={len(X_tr)} test={len(X_val)}')
             for name, model in fold_models.items():
                 try:
@@ -956,7 +1141,7 @@ def train_model(horizon_key: str = '3d'):
             meta_model = LogisticRegression(C=1.0, max_iter=1000, random_state=42)
             meta_model.fit(meta_X, meta_y)
 
-            for name, model in _build_base_models(scale_pos_weight=scale_pos_weight).items():
+            for name, model in _build_base_models(scale_pos_weight=scale_pos_weight, hpo_params=hpo_params).items():
                 try:
                     _fit_model(model, X_train, y_train, X_test, y_test)
                     final_models[name] = model
@@ -976,7 +1161,7 @@ def train_model(horizon_key: str = '3d'):
             print('앙상블 스태킹 실패 → XGBoost 단독으로 폴백')
 
     if ensemble_prob is None:
-        model = _build_model(scale_pos_weight=scale_pos_weight)
+        model = _build_model(scale_pos_weight=scale_pos_weight, hpo_params=hpo_params.get('xgb'))
         _fit_model(model, X_train, y_train, X_test, y_test)
         final_models = {'xgb': model}
         ensemble_prob = _predict_proba(model, X_test)
@@ -996,7 +1181,7 @@ def train_model(horizon_key: str = '3d'):
     print(classification_report(y_test, y_pred, target_names=['관망', '매수']))
 
     importances = sorted(
-        zip(FEATURE_NAMES, primary_model.feature_importances_),
+        zip(feat_names, primary_model.feature_importances_),
         key=lambda x: x[1], reverse=True,
     )
     print('\n=== XGBoost 피처 중요도 TOP 10 ===')
@@ -1038,7 +1223,7 @@ def train_model(horizon_key: str = '3d'):
         'target_days': cfg['target_days'],
         'target_return': cfg['target_return'],
         'base_models': sorted(final_models.keys()),
-        'feature_names': FEATURE_NAMES,
+        'feature_names': feat_names,
         'thresholds': {'buy': 0.65, 'high_confidence': 0.78},
         'trained_at': _utc_now_iso(),
         'n_samples': len(X),
@@ -1050,6 +1235,8 @@ def train_model(horizon_key: str = '3d'):
         'base_auc': base_auc,
         'feature_importance': [(n, round(float(v), 6)) for n, v in importances],
         'shap_ranking': list(shap_ranking.items())[:10] if shap_ranking else [],
+        'hpo_params': hpo_params if hpo_params else None,
+        'rfecv_selected_idx': selected_idx if USE_RFECV else None,
     }
     paths['meta_json'].write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding='utf-8')
 
