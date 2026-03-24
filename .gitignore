@@ -51,6 +51,14 @@ node_modules/
 TOOLS.md
 .telegram_info_buffer.json
 
+# SQLite DB (런타임 데이터)
+*.db
+*.sqlite3
+
+# Build artifacts
+btc/dist/
+dashboard/dist/
+
 # 백테스트 결과 (용량 큼)
 backtest/results/
 

@@ -279,7 +279,7 @@ def get_weekly_trend(code: str) -> dict:
 def get_stock_news(stock_name: str) -> str:
     """종목 관련 뉴스 헤드라인"""
     try:
-        import xml.etree.ElementTree as ET
+        import defusedxml.ElementTree as ET
         sources = [
             'https://www.yna.co.kr/rss/economy.xml',
             'https://rss.hankyung.com/economy.xml',

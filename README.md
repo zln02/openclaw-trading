@@ -292,6 +292,7 @@ Core --> Output
 - [x] Phase 15: CI/CD pipeline, Docker hardening, pre-commit hooks, security audit
 - [x] v6.0: Dashboard overhaul — sidebar layout, timeframe selectors, stock/symbol search, strategy panels, account banners
 - [x] Safety hardening: buy lock, order validation, UTC alignment, circuit breaker, drawdown guard
+- [x] Security hardening: defusedxml RSS parsing, joblib model serialization, bash sandbox blocklist
 - [ ] Level 6: Multi-Strategy Portfolio (Long-Short + Market Neutral)
 - [ ] ML dead feature cleanup (13 inactive features → AUC target >0.70)
 - [ ] KR partial TP quantity tracking fix

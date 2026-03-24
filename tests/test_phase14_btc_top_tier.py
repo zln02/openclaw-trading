@@ -157,7 +157,8 @@ class BtcTradingAgentSafetyTests(unittest.TestCase):
 
         with patch.object(agent.upbit, "get_balance", side_effect=[0.01, 1_000_000]), patch.object(
             agent, "get_open_position", return_value=pos
-        ), patch.object(agent, "_execute_sell_order", return_value=(False, "upbit_sell_error")):
+        ), patch("btc.btc_trading_agent.DRY_RUN", False), \
+                patch("btc.btc_trading_agent._execute_sell_order", return_value=(False, "upbit_sell_error")):
             out = agent.execute_trade(signal, indicators)
 
         self.assertEqual(out["result"], "SELL_ORDER_FAILED")

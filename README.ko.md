@@ -115,6 +115,8 @@ tests/       Python 테스트
 - [x] Level 3: Adaptive Composite Signals
 - [x] Level 4: Factor Model Operations (IC/IR → Weights)
 - [x] Level 5: Research-to-Production Loop
+- [x] v6.0: 대시보드 전면 개편 (사이드바, 타임프레임, 종목 검색, 전략 패널)
+- [x] 보안 강화: defusedxml RSS 파싱, joblib 모델 직렬화, bash 샌드박스 blocklist
 - [ ] Level 6: Multi-Strategy Portfolio (Long-Short + Market Neutral)
 - [ ] Level 7: On-chain DEX Arbitrage
 - [ ] 외부 트레이더 연동용 Public API

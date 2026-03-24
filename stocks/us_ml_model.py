@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import pickle
 import sys
 from pathlib import Path
 
@@ -376,8 +375,8 @@ def train_model(symbols: list[str] | None = None, period: str = "5y") -> dict:
             _save_base_model(name, fitted)
 
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
-    with open(META_PATH, "wb") as fp:
-        pickle.dump(meta_model, fp)
+    import joblib
+    joblib.dump(meta_model, META_PATH)
 
     ensemble_prob, _ = _bundle_predict_probability(final_models, meta_model, X_test)
     result = {
@@ -400,8 +399,8 @@ def _load_bundle() -> tuple[dict, object | None, dict]:
     meta_model = None
     if META_PATH.exists():
         try:
-            with open(META_PATH, "rb") as fp:
-                meta_model = pickle.load(fp)
+            import joblib
+            meta_model = joblib.load(META_PATH)
         except Exception:
             meta_model = None
     meta = {}

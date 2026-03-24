@@ -205,7 +205,7 @@ def _compute_composite_sync():
                        "entry_krw": pos.get("entry_krw", 0),
                        "current_fx_rate": fx_rate}
 
-    buy_threshold = RISK.get("buy_composite_min", 50) if "RISK" in dir() else 50
+    buy_threshold = 50
     try:
         from btc.btc_trading_agent import RISK as _BTC_RISK
         buy_threshold = _BTC_RISK.get("buy_composite_min", 50)
