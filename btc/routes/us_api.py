@@ -102,7 +102,7 @@ async def get_us_portfolio():
         
         # 현재 가격 계산 (배치 조회로 N+1 방지)
         symbols = list({p.get("symbol", "") for p in open_positions if p.get("symbol")})
-        batch_prices = _batch_fetch_prices(symbols)
+        batch_prices = await asyncio.to_thread(_batch_fetch_prices, symbols)
         total_invested = 0
         total_current = 0
 
@@ -206,7 +206,8 @@ async def api_us_positions():
             return {"positions": [], "summary": {}}
         res = supabase.table("us_trade_executions").select("*").eq("result", "OPEN").execute()
         positions = res.data or []
-        import yfinance as _yf_pos
+        syms = list({p.get("symbol", "") for p in positions if p.get("symbol")})
+        prices = await asyncio.to_thread(_batch_fetch_prices, syms)
         total_invested = 0
         total_current = 0
         for p in positions:
@@ -215,25 +216,11 @@ async def api_us_positions():
             qty = float(p.get("quantity", 0))
             invested = entry * qty
             total_invested += invested
-            try:
-                t = _yf_pos.Ticker(sym)
-                h = t.history(period="2d")
-                if not h.empty:
-                    cur = float(h["Close"].iloc[-1])
-                    p["current_price"] = round(cur, 2)
-                    p["pnl_pct"] = round((cur / entry - 1) * 100, 2) if entry else 0
-                    p["pnl_usd"] = round((cur - entry) * qty, 2)
-                    total_current += cur * qty
-                else:
-                    p["current_price"] = entry
-                    p["pnl_pct"] = 0
-                    p["pnl_usd"] = 0
-                    total_current += invested
-            except Exception:
-                p["current_price"] = entry
-                p["pnl_pct"] = 0
-                p["pnl_usd"] = 0
-                total_current += invested
+            cur = prices.get(sym, entry)
+            p["current_price"] = round(cur, 2)
+            p["pnl_pct"] = round((cur / entry - 1) * 100, 2) if entry else 0
+            p["pnl_usd"] = round((cur - entry) * qty, 2)
+            total_current += cur * qty
         total_pnl_pct = round((total_current / total_invested - 1) * 100, 2) if total_invested > 0 else 0
         return {
             "positions": positions,
@@ -290,7 +277,7 @@ async def api_us_logs():
 @router.get("/api/us/market")
 async def api_us_market():
     try:
-        data = _get_us_market_summary()
+        data = await asyncio.to_thread(_get_us_market_summary)
         regime = _get_market_regime()
         top_payload = _fetch_us_signals()
         flat = {

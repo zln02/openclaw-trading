@@ -117,7 +117,7 @@ async def get_market_summary():
     ):
         return _market_summary_cache["data"]
     try:
-        data = _fetch_market_summary_dict()
+        data = await asyncio.to_thread(_fetch_market_summary_dict)
         flattened = {
             "kospi": data.get("kospi", {}).get("price", 0),
             "kospi_change": data.get("kospi", {}).get("change", 0),
@@ -190,7 +190,7 @@ async def get_stocks_overview():
         live_prices = {}
         if kiwoom and market_open:
             try:
-                account = kiwoom.get_account_evaluation()
+                account = await asyncio.to_thread(kiwoom.get_account_evaluation)
                 for h in account.get("holdings", []):
                     c = h.get("code", "")
                     p = h.get("current_price", 0) or 0
@@ -234,7 +234,7 @@ async def get_stock_live_price(code: str):
     kiwoom = _get_kiwoom()
     if kiwoom:
         try:
-            price = kiwoom.get_current_price(db_code)
+            price = await asyncio.to_thread(kiwoom.get_current_price, db_code)
             if price and price > 0:
                 return {"price": price, "is_live": True, "code": code}
         except Exception:

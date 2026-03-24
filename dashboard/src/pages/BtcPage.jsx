@@ -6,10 +6,10 @@ import {
   getBtcDecisionLog,
   getBtcFilters,
   getBtcNews,
-  getBtcPortfolio,
   getBtcTrades,
 } from "../api";
 import usePolling from "../hooks/usePolling";
+import { usePortfolio } from "../context/PortfolioContext";
 import { compactTime, krw, marketTone, num, pct } from "../lib/format";
 import Badge from "../components/ui/Badge";
 import Card from "../components/ui/Card";
@@ -192,7 +192,8 @@ export default function BtcPage() {
   const tf = TIMEFRAMES[tfIndex];
 
   const { data: composite, error: compositeError, loading: compositeLoading } = usePolling(getBtcComposite, 30000);
-  const { data: portfolio, loading: portfolioLoading } = usePolling(getBtcPortfolio, 30000);
+  const { btcPortfolio: portfolio } = usePortfolio();
+  const portfolioLoading = portfolio === null;
   const { data: trades } = usePolling(getBtcTrades, 60000);
   const { data: decisionLog } = usePolling(() => getBtcDecisionLog(8), 30000);
   const { data: candles, loading: candlesLoading } = usePolling(

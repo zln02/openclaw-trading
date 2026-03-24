@@ -1,6 +1,7 @@
 import { Suspense, lazy } from "react";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 import Layout from "./components/Layout";
+import { PortfolioProvider } from "./context/PortfolioContext";
 
 const BtcPage = lazy(() => import("./pages/BtcPage"));
 const KrStockPage = lazy(() => import("./pages/KrStockPage"));
@@ -18,6 +19,7 @@ function RouteSkeleton() {
 
 export default function App() {
   return (
+    <PortfolioProvider>
     <BrowserRouter>
       <Routes>
         <Route element={<Layout />}>
@@ -56,5 +58,6 @@ export default function App() {
         </Route>
       </Routes>
     </BrowserRouter>
+    </PortfolioProvider>
   );
 }

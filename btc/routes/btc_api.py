@@ -335,7 +335,7 @@ async def api_btc_portfolio():
                 "exit_reason": p.get("exit_reason") or "",
             })
 
-        _refresh_upbit_cache()
+        await asyncio.to_thread(_refresh_upbit_cache)
         krw_balance = _upbit_cache.get("krw", 0) or 0
         krw_locked = _upbit_cache.get("krw_locked")
         krw_total = _upbit_cache.get("krw_total")
@@ -351,7 +351,7 @@ async def api_btc_portfolio():
                 import pyupbit
 
                 upbit = pyupbit.Upbit(upbit_key, upbit_secret)
-                upbit_btc_balance = float(upbit.get_balance("BTC") or 0)
+                upbit_btc_balance = float(await asyncio.to_thread(upbit.get_balance, "BTC") or 0)
                 upbit_btc_value_krw = float(upbit_btc_balance) * float(cur_price_krw or 0)
         except Exception as e:
             log.error(f"upbit balance(BTC) fetch failed: {e}")

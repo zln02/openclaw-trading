@@ -3,13 +3,11 @@ import { Activity, Bitcoin, Bot, Globe2, Landmark, Menu, Settings2, X } from "lu
 import { useEffect, useMemo, useState } from "react";
 import { NavLink, useLocation, useOutlet } from "react-router-dom";
 import {
-  getBtcPortfolio,
   getHealth,
-  getStockPortfolio,
-  getUsPositions,
   getUsFx,
 } from "../api";
 import usePolling from "../hooks/usePolling";
+import { usePortfolio } from "../context/PortfolioContext";
 import { krw, pct, relativeTime, usd } from "../lib/format";
 import { pageVariants } from "./ui/motion";
 
@@ -186,9 +184,7 @@ export default function Layout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [now, setNow] = useState(Date.now());
 
-  const { data: btc } = usePolling(getBtcPortfolio, 30000);
-  const { data: kr } = usePolling(getStockPortfolio, 30000);
-  const { data: us } = usePolling(getUsPositions, 30000);
+  const { btcPortfolio: btc, krPortfolio: kr, usPortfolio: us } = usePortfolio();
   const { data: fx } = usePolling(getUsFx, 60000);
   const { data: health, updatedAt } = usePolling(getHealth, 30000);
 

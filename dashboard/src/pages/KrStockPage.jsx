@@ -5,10 +5,10 @@ import {
   getKrTrades,
   getStockChart,
   getStockMarket,
-  getStockPortfolio,
   getStockStrategy,
 } from "../api";
 import usePolling from "../hooks/usePolling";
+import { usePortfolio } from "../context/PortfolioContext";
 import { compactTime, krw, num, pct } from "../lib/format";
 import Badge from "../components/ui/Badge";
 import Card from "../components/ui/Card";
@@ -181,7 +181,9 @@ export default function KrStockPage() {
   const [sortKey, setSortKey] = useState("score");
   const tf = KR_TIMEFRAMES[tfIndex];
 
-  const { data: account, loading: accountLoading, error: accountError } = usePolling(getStockPortfolio, 30000);
+  const { krPortfolio: account } = usePortfolio();
+  const accountLoading = account === null;
+  const accountError = null;
   const { data: topStocks, loading: topLoading } = usePolling(getKrTop, 60000);
   const { data: trades, loading: tradesLoading, error: tradesError } = usePolling(getKrTrades, 30000);
   const { data: market } = usePolling(getStockMarket, 60000);

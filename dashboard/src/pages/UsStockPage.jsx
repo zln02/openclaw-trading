@@ -1,7 +1,8 @@
 import { DollarSign, Globe2, LineChart, Search, TrendingUp, Wallet2, X } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
-import { getUsChart, getUsFx, getUsMarket, getUsPositions, getUsTrades } from "../api";
+import { getUsChart, getUsFx, getUsMarket, getUsTrades } from "../api";
 import usePolling from "../hooks/usePolling";
+import { usePortfolio } from "../context/PortfolioContext";
 import { buildSparkline, compactTime, krw, num, pct, usd } from "../lib/format";
 import Badge from "../components/ui/Badge";
 import Card from "../components/ui/Card";
@@ -153,7 +154,9 @@ export default function UsStockPage() {
 
   const { data: market, loading: marketLoading, error: marketError } = usePolling(getUsMarket, 60000);
   const { data: fx } = usePolling(getUsFx, 60000);
-  const { data: positions, loading: positionsLoading, error: positionsError } = usePolling(getUsPositions, 30000);
+  const { usPortfolio: positions } = usePortfolio();
+  const positionsLoading = positions === null;
+  const positionsError = null;
   const { data: trades } = usePolling(getUsTrades, 30000);
 
   const ranking = market?.top || market?.momentum || [];

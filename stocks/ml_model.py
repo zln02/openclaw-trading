@@ -66,23 +66,6 @@ FEATURE_NAMES = [
     'volume_trend',
 ]
 
-# 실데이터 수집 후 활성화할 피처 (현재 모두 0 → 비활성)
-# 활성화 조건: OpenDART/KRX 수집 파이프라인 구축 후 주석 해제
-_DISABLED_FACTOR_FEATURES = [
-    'momentum_12m',      # 12개월 모멘텀 (importance=0)
-    'momentum_1m',       # 1개월 모멘텀 — factor_vals 미수집 시 항상 0.0
-    'volume_ratio_20d',  # 20일 거래량 비율 — factor_vals 미수집 시 항상 1.0 (상수)
-    'pe_ratio',          # OpenDART 미수집
-    'pb_ratio',          # OpenDART 미수집
-    'roe',               # OpenDART 미수집
-    'debt_ratio',        # OpenDART 미수집
-    'revenue_growth',    # OpenDART 미수집
-    'earnings_surprise', # 실적 서프라이즈 미수집
-    'orderbook_imbalance',    # 호가 불균형 미수집
-    'turnover_ratio',         # market_cap 미수집 시 항상 0.0
-    'market_cap_log',         # market_cap 미수집 시 항상 0.0
-]
-
 # 활성 팩터 피처 — 실데이터 수집 파이프라인 없으면 비워둠
 FACTOR_FEATURES: list[str] = []
 

@@ -1710,15 +1710,20 @@ def check_stop_loss_take_profit():
                     try:
                         kiwoom.place_order(stock_code=code, order_type='sell', quantity=sell_qty, price=0)
                         remaining_qty = total_qty - sell_qty
-                        for t in trades[:1]:
+                        for t in trades:
                             tid = t.get('trade_id')
-                            if tid:
-                                supabase.table('trade_executions').update({
-                                    'partial_sold': True,
-                                    'quantity': remaining_qty,
-                                    'partial_sell_qty': sell_qty,
-                                    'partial_sell_price': price,
-                                }).eq('trade_id', tid).execute()
+                            if not tid:
+                                continue
+                            t_qty = int(t.get('quantity', 0))
+                            proportion = t_qty / total_qty if total_qty > 0 else 0
+                            t_sold = round(sell_qty * proportion)
+                            new_qty = max(0, t_qty - t_sold)
+                            supabase.table('trade_executions').update({
+                                'partial_sold': True,
+                                'quantity': new_qty,
+                                'partial_sell_qty': t_sold,
+                                'partial_sell_price': price,
+                            }).eq('trade_id', tid).execute()
                         send_telegram(
                             f'🟡 <b>{name} 부분 익절 ({int(RISK.get("partial_tp_ratio",0.5)*100)}%)</b>\n'
                             f'수익: +{net_pnl_pct*100:.2f}% | {sell_qty}주 매도\n'
