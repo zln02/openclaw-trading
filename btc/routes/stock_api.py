@@ -155,6 +155,10 @@ async def get_market_summary():
 # ── Overview cache ──────────────────────────────────────
 _overview_cache = {"data": [], "ts": 0}
 
+# ── Chart cache (BB+RSI O(n) 계산 방지) ─────────────────────────
+_chart_cache: dict = {}  # key: (code, interval, limit) → {"data": ..., "ts": float}
+_CHART_CACHE_TTL = 300  # 5분
+
 
 @router.get("/api/stocks/overview")
 async def get_stocks_overview():
@@ -327,6 +331,11 @@ async def get_stock_realtime_alt_data(symbol: str):
 @router.get("/api/stocks/chart/{code}")
 async def get_stock_chart(code: str, interval: str = Query("1d"), limit: int = Query(65, ge=10, le=500)):
     db_code = code.lstrip("A") if code.startswith("A") else code
+    cache_key = (db_code, interval, limit)
+    now = _time.time()
+    cached = _chart_cache.get(cache_key)
+    if cached and now - cached["ts"] < _CHART_CACHE_TTL:
+        return cached["data"]
     if not supabase:
         return {"candles": [], "name": "", "code": code}
     try:
@@ -359,7 +368,9 @@ async def get_stock_chart(code: str, interval: str = Query("1d"), limit: int = Q
                     "close": r["close_price"],
                     "volume": r.get("volume") or 0,
                 })
-            return {"candles": candles, "name": _stock_name(code), "code": code}
+            intraday_result = {"candles": candles, "name": _stock_name(code), "code": code}
+            _chart_cache[cache_key] = {"data": intraday_result, "ts": now}
+            return intraday_result
 
         raw = supabase.table("daily_ohlcv").select("*").eq("stock_code", db_code).order("date", desc=True).limit(limit).execute().data or []
         rows = sorted(raw, key=lambda r: r["date"])
@@ -418,7 +429,9 @@ async def get_stock_chart(code: str, interval: str = Query("1d"), limit: int = Q
             c["rsi"] = rsi_data[i] if i < len(rsi_data) else None
             candles.append(c)
 
-        return {"candles": candles, "name": _stock_name(code), "code": code}
+        result = {"candles": candles, "name": _stock_name(code), "code": code}
+        _chart_cache[cache_key] = {"data": result, "ts": now}
+        return result
     except Exception as e:
         log.error(f"stock chart: {e}")
         return {"candles": [], "name": "", "code": code}

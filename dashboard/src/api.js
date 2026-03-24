@@ -1,16 +1,22 @@
 const API_BASE = import.meta.env.VITE_API_URL || "";
 
-async function fetchJSON(path, timeoutMs = 10000) {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const res = await fetch(`${API_BASE}${path}`, { signal: controller.signal });
-    clearTimeout(timeoutId);
-    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-    return res.json();
-  } catch (e) {
-    clearTimeout(timeoutId);
-    throw e;
+async function fetchJSON(path, timeoutMs = 10000, retries = 1) {
+  for (let i = 0; i <= retries; i++) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(`${API_BASE}${path}`, { signal: controller.signal });
+      clearTimeout(timeoutId);
+      if (res.status === 429) {
+        await new Promise((r) => setTimeout(r, 2000));
+        continue;
+      }
+      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+      return res.json();
+    } catch (e) {
+      clearTimeout(timeoutId);
+      if (i === retries) throw e;
+    }
   }
 }
 

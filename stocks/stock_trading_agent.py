@@ -1397,6 +1397,7 @@ def execute_buy(
         'drift_status': signal.get('drift_status', ''),
         'drift_penalty': signal.get('drift_penalty', 0.0),
         'rsi': indicators.get('rsi', 0.0),
+        'news_sentiment': signal.get('news_sentiment', None),
     }
 
     # 팩터 스냅샷 수집 (Phase Level 4: 팩터 로깅)

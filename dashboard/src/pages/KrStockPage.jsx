@@ -181,9 +181,9 @@ export default function KrStockPage() {
   const [sortKey, setSortKey] = useState("score");
   const tf = KR_TIMEFRAMES[tfIndex];
 
-  const { krPortfolio: account } = usePortfolio();
-  const accountLoading = account === null;
-  const accountError = null;
+  const { krPortfolio: account, errors: portfolioErrors } = usePortfolio();
+  const accountLoading = account === null && !portfolioErrors?.kr;
+  const accountError = portfolioErrors?.kr || null;
   const { data: topStocks, loading: topLoading } = usePolling(getKrTop, 60000);
   const { data: trades, loading: tradesLoading, error: tradesError } = usePolling(getKrTrades, 30000);
   const { data: market } = usePolling(getStockMarket, 60000);

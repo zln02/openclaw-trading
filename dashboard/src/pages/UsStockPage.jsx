@@ -154,9 +154,9 @@ export default function UsStockPage() {
 
   const { data: market, loading: marketLoading, error: marketError } = usePolling(getUsMarket, 60000);
   const { data: fx } = usePolling(getUsFx, 60000);
-  const { usPortfolio: positions } = usePortfolio();
-  const positionsLoading = positions === null;
-  const positionsError = null;
+  const { usPortfolio: positions, errors: portfolioErrors } = usePortfolio();
+  const positionsLoading = positions === null && !portfolioErrors?.us;
+  const positionsError = portfolioErrors?.us || null;
   const { data: trades } = usePolling(getUsTrades, 30000);
 
   const ranking = market?.top || market?.momentum || [];
