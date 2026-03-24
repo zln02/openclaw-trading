@@ -97,10 +97,10 @@ class AgentLogger:
         ch.setFormatter(formatter)
         self._log.addHandler(ch)
 
-        # File handler — stdout이 터미널일 때만 (cron 리다이렉트 시 중복 방지)
+        # File handler — 항상 활성화 (Docker 컨테이너 포함)
         if log_file is None:
             log_file = LOG_DIR / f"{name}.log"
-        if sys.stdout.isatty():
+        if True:
             try:
                 if log_file.exists() and not os.access(log_file, os.W_OK):
                     try:

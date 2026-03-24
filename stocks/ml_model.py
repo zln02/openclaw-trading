@@ -69,40 +69,42 @@ FEATURE_NAMES = [
 # 실데이터 수집 후 활성화할 피처 (현재 모두 0 → 비활성)
 # 활성화 조건: OpenDART/KRX 수집 파이프라인 구축 후 주석 해제
 _DISABLED_FACTOR_FEATURES = [
-    'momentum_12m',   # 12개월 모멘텀 (importance=0)
-    'pe_ratio',       # OpenDART 미수집
-    'pb_ratio',       # OpenDART 미수집
-    'roe',            # OpenDART 미수집
-    'debt_ratio',     # OpenDART 미수집
-    'revenue_growth', # OpenDART 미수집
-    'earnings_surprise',     # 실적 서프라이즈 미수집
-    'orderbook_imbalance',   # 호가 불균형 미수집
+    'momentum_12m',      # 12개월 모멘텀 (importance=0)
+    'momentum_1m',       # 1개월 모멘텀 — factor_vals 미수집 시 항상 0.0
+    'volume_ratio_20d',  # 20일 거래량 비율 — factor_vals 미수집 시 항상 1.0 (상수)
+    'pe_ratio',          # OpenDART 미수집
+    'pb_ratio',          # OpenDART 미수집
+    'roe',               # OpenDART 미수집
+    'debt_ratio',        # OpenDART 미수집
+    'revenue_growth',    # OpenDART 미수집
+    'earnings_surprise', # 실적 서프라이즈 미수집
+    'orderbook_imbalance',    # 호가 불균형 미수집
+    'turnover_ratio',         # market_cap 미수집 시 항상 0.0
+    'market_cap_log',         # market_cap 미수집 시 항상 0.0
 ]
 
-FACTOR_FEATURES = [
-    'momentum_1m',       # 1개월 모멘텀 (활성)
-    'volume_ratio_20d',  # 20일 거래량 비율 (활성)
-]
+# 활성 팩터 피처 — 실데이터 수집 파이프라인 없으면 비워둠
+FACTOR_FEATURES: list[str] = []
 
 MARKET_FEATURES = [
-    'kospi_rsi_14',
-    'kospi_return_5d',
-    'vix_level',
-    # 'fg_index',       # 공포탐욕지수 미수집 → 비활성
-    # 'regime_encoded', # 레짐 인코딩 미수집 → 비활성
+    'kospi_rsi_14',       # yfinance 코스피 RSI
+    'kospi_return_5d',    # yfinance 코스피 5일 수익률
+    'vix_level',          # yfinance VIX
+    # 'fg_index',         # 공포탐욕지수 미수집 → 비활성
+    # 'regime_encoded',   # 레짐 인코딩 미수집 → 비활성
 ]
 
 SUPPLY_FEATURES = [
     # 'foreign_net_buy_5d',  # KRX API 미수집 → 비활성
     # 'inst_net_buy_5d',     # KRX API 미수집 → 비활성
     # 'short_interest_ratio',# 공매도 미수집 → 비활성
-    'days_to_earnings',
-    'sector_momentum_rank',
-    'relative_strength_vs_kospi',
-    'avg_spread_bps',
-    'turnover_ratio',
-    '52w_high_proximity',
-    'market_cap_log',
+    # 'days_to_earnings',    # check_earnings_proximity 실패 시 항상 30.0 → 비활성
+    # 'turnover_ratio',      # market_cap 미수집 시 0.0 → _DISABLED로 이동
+    # 'market_cap_log',      # market_cap 미수집 시 0.0 → _DISABLED로 이동
+    'sector_momentum_rank',          # ret_20d 기반 섹터 내 상대 순위 (가격 데이터만 필요)
+    'relative_strength_vs_kospi',    # 개별종목 20일 수익률 - 코스피 5일 수익률
+    'avg_spread_bps',                # 틱 사이즈 기반 호가 스프레드 추정
+    '52w_high_proximity',            # 52주 고점 대비 현재가 비율
 ]
 
 FEATURE_NAMES.extend(FACTOR_FEATURES + MARKET_FEATURES + SUPPLY_FEATURES)

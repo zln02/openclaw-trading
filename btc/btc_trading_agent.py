@@ -128,7 +128,22 @@ client  = OpenAI(api_key=OPENAI_KEY) if OPENAI_KEY else None
 # Supabase 쓰기 딜레이로 get_open_position()이 None 반환 시에도 중복매수 차단
 import threading as _threading
 _buy_lock = _threading.Lock()
-_last_buy_ts: float = 0.0   # 마지막 매수 완료 시각 (time.monotonic)
+_LAST_BUY_FILE = Path(__file__).resolve().parents[1] / "brain" / "btc_last_buy.json"
+
+def _read_last_buy_ts() -> float:
+    """마지막 매수 시각을 파일에서 읽어 UTC epoch으로 반환 (없으면 0.0)"""
+    try:
+        import json as _json
+        data = _json.loads(_LAST_BUY_FILE.read_text())
+        return float(data.get("ts", 0.0))
+    except Exception:
+        return 0.0
+
+def _write_last_buy_ts() -> None:
+    """현재 UTC epoch을 파일에 저장"""
+    import json as _json, time as _t
+    _LAST_BUY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _LAST_BUY_FILE.write_text(_json.dumps({"ts": _t.time()}))
 if client is None:
     log.warning("OPENAI_API_KEY 없음 — 룰 기반 fallback 판단으로 동작")
 
@@ -157,14 +172,14 @@ def _execute_sell_order(quantity: float, *, context: str) -> tuple[bool, str]:
 
 # ── 리스크 설정 (v6 — Top-tier Quant) ─────────────
 RISK = {
-    "split_ratios":     [0.10, 0.15, 0.20],     # 스코어 높을수록 큰 비중
+    "split_ratios":     [0.12, 0.18, 0.25],     # 스코어 높을수록 큰 비중
     "split_rsi":        [55,   45,   35  ],
     "invest_ratio":      0.30,
     "stop_loss":        -0.03,
-    "take_profit":       0.04,        # 전량 익절 (소자본 현실화: +4%)
-    "partial_tp_pct":    0.02,        # 1단계 익절 발동 (2%)
+    "take_profit":       0.08,        # 전량 익절 (+8%)
+    "partial_tp_pct":    0.03,        # 1단계 익절 발동 (+3%)
     "partial_tp_ratio":  0.50,        # 1단계 매도 비율 (50%)
-    "partial_tp_2_pct":  0.03,        # 2단계 익절 발동 (3%)
+    "partial_tp_2_pct":  0.05,        # 2단계 익절 발동 (+5%)
     "partial_tp_2_ratio": 0.50,       # 2단계 매도 비율 (남은 물량의 50%)
     "atr_multiplier":    2.0,         # ATR 손절 배수 (진입가 - ATR * 2.0)
     "atr_period":        14,          # ATR 계산 기간
@@ -920,7 +935,19 @@ def get_split_stage(composite_total: float) -> int:
 
 
 def is_defensive_regime(regime: str | None) -> bool:
-    return str(regime or "").upper() in {"CORRECTION", "BEAR", "RISK_OFF", "CRISIS", "UNKNOWN"}
+    return str(regime or "").upper() in {"BEAR", "RISK_OFF", "CRISIS", "UNKNOWN"}
+
+
+def get_required_buy_score(regime: str | None) -> int:
+    reg = str(regime or "").upper()
+    required = int(RISK["buy_composite_min"])
+    if reg == "CORRECTION":
+        return max(required, 55)
+    if reg in {"RISK_OFF", "UNKNOWN"}:
+        return max(required, 60)
+    if reg in {"BEAR", "CRISIS"}:
+        return max(required, 65)
+    return required
 
 # ── 주문 실행 ─────────────────────────────────────
 def execute_trade(
@@ -941,8 +968,6 @@ def execute_trade(
     vol_ratio_d=None,
     trend=None,
 ) -> dict:
-    global _last_buy_ts
-
     def _result(code: str, **extra) -> dict:
         payload = {"result": code}
         payload.update(extra)
@@ -968,7 +993,7 @@ def execute_trade(
     # ── 코드 레벨 안전 필터 (복합 스코어 기반) ──
     if signal["action"] == "BUY":
         comp_total = comp["total"] if isinstance(comp, dict) else 0
-        defensive_regime = is_defensive_regime(market_regime)
+        required_buy_score = get_required_buy_score(market_regime)
         if fg and fg["value"] > 75:
             log.warning(
                 f"F&G {fg['value']} > 75 (극도 탐욕) — BUY 차단",
@@ -977,15 +1002,19 @@ def execute_trade(
                 fg_value=fg["value"],
             )
             return _result("BLOCKED_FG", guard="fg_greed_block")
-        if defensive_regime and comp_total < max(RISK["buy_composite_min"], 60):
-            log.warning(
-                f"방어 레짐({market_regime})에서 복합스코어 {comp_total}점 — BUY 차단",
-                guard="defensive_regime_score_block",
-                result="BLOCKED_DEFENSIVE_REGIME",
-                market_regime=market_regime,
-                composite_score=comp_total,
-            )
-            return _result("BLOCKED_DEFENSIVE_REGIME", guard="defensive_regime_score_block")
+        if comp_total < required_buy_score:
+            reg = str(market_regime or "").upper()
+            if reg in {"CORRECTION", "BEAR", "RISK_OFF", "CRISIS", "UNKNOWN"}:
+                log.warning(
+                    f"레짐({market_regime}) 최소 진입점수 {required_buy_score} 미달 — BUY 차단 "
+                    f"(현재 {comp_total})",
+                    guard="defensive_regime_score_block",
+                    result="BLOCKED_DEFENSIVE_REGIME",
+                    market_regime=market_regime,
+                    composite_score=comp_total,
+                    required_buy_score=required_buy_score,
+                )
+                return _result("BLOCKED_DEFENSIVE_REGIME", guard="defensive_regime_score_block")
         is_extreme_fear = fg and fg["value"] <= 20
         if volume and volume["ratio"] <= 0.15 and not is_extreme_fear:
             log.warning(
@@ -1018,10 +1047,11 @@ def execute_trade(
     log.info(f"잔고 스냅샷: KRW={float(krw_balance):,.0f} | BTC={float(btc_balance):.8f}")
 
     # 프로세스 내 잠금 체크 (Supabase 딜레이로 get_open_position()이 None인 경우 대비)
+    # 파일 기반 저장으로 프로세스 재시작 후에도 잠금 유지
     import time as _t
     if signal["action"] == "BUY":
         with _buy_lock:
-            _elapsed = _t.monotonic() - _last_buy_ts
+            _elapsed = _t.time() - _read_last_buy_ts()
             if _elapsed < 3600:
                 log.warning(
                     "프로세스 잠금: 최근 1시간 내 매수 완료 — 중복 매수 차단",
@@ -1121,7 +1151,7 @@ def execute_trade(
         partial_1_done = pos.get("partial_1_sold") or pos.get("partial_sold", False)
         partial_2_done = pos.get("partial_2_sold", False)
 
-        # 1단계: 8% → 보유량의 50% 매도
+        # 1단계: 설정 수익률 도달 시 보유량의 일부 매도
         if net_change >= RISK.get("partial_tp_pct", 0.08) and not partial_1_done and btc_balance > 0.0001:
             ratio = RISK.get("partial_tp_ratio", 0.50)
             sell_qty = btc_balance * ratio * 0.9995
@@ -1138,12 +1168,13 @@ def execute_trade(
             send_telegram(
                 f"🟡 <b>분할 익절 1단계 ({int(ratio*100)}%)</b>\n"
                 f"진입가: {entry_price:,}원 | 현재가: {price:,}원\n"
-                f"수익: +{net_change*100:.2f}% | 매도량: {sell_qty:.6f} BTC\n"
+                f"수익: +{net_change*100:.2f}% (목표 {RISK.get('partial_tp_pct', 0.08)*100:.1f}%) | "
+                f"매도량: {sell_qty:.6f} BTC\n"
                 f"잔여분 트레일링 스탑 + 2단계 익절 대기"
             )
             return _result("PARTIAL_TP_1")
 
-        # 2단계: 12% → 남은 물량의 50% 추가 매도
+        # 2단계: 설정 수익률 도달 시 남은 물량의 일부 추가 매도
         if (net_change >= RISK.get("partial_tp_2_pct", 0.12)
                 and partial_1_done and not partial_2_done and btc_balance > 0.0001):
             ratio2 = RISK.get("partial_tp_2_ratio", 0.50)
@@ -1161,12 +1192,13 @@ def execute_trade(
             send_telegram(
                 f"🟢 <b>분할 익절 2단계 ({int(ratio2*100)}%)</b>\n"
                 f"진입가: {entry_price:,}원 | 현재가: {price:,}원\n"
-                f"수익: +{net_change*100:.2f}% | 매도량: {sell_qty:.6f} BTC\n"
+                f"수익: +{net_change*100:.2f}% (목표 {RISK.get('partial_tp_2_pct', 0.12)*100:.1f}%) | "
+                f"매도량: {sell_qty:.6f} BTC\n"
                 f"잔여분 트레일링 스탑으로 최종 보호"
             )
             return _result("PARTIAL_TP_2")
 
-        # 최대 익절 전량 (15%)
+        # 최대 익절 전량
         if net_change >= RISK["take_profit"]:
             if not DRY_RUN:
                 sold, reason = _execute_sell_order(btc_balance * 0.9995, context="TAKE_PROFIT")
@@ -1228,9 +1260,8 @@ def execute_trade(
                     atr_stop_price=atr_stop,
                 )
                 if ok:
-                    import time as _t2
                     with _buy_lock:
-                        _last_buy_ts = _t2.monotonic()  # 프로세스 잠금 갱신 (thread-safe)
+                        _write_last_buy_ts()  # 파일 기반 잠금 갱신 (재시작 후에도 유지)
                     break
                 log.warning(f"포지션 DB 저장 재시도 {_attempt + 1}/3")
                 import time as _time; _time.sleep(2)
@@ -1534,11 +1565,7 @@ def run_trading_cycle():
 
     # ── 복합 스코어 기반 매매 결정 ──
     signal = None
-    buy_min = RISK["buy_composite_min"]
-    if is_defensive_regime(market_regime):
-        buy_min = max(buy_min, 60)
-    if str(market_regime).upper() in {"BEAR", "CRISIS"}:
-        buy_min = max(buy_min, 65)
+    buy_min = get_required_buy_score(market_regime)
 
     # v6: 온체인 안전장치
     funding_blocked = False

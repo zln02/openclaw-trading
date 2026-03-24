@@ -2,6 +2,10 @@
 
 한국어 안내 문서입니다. 영문 소개용 README는 [README.md](README.md)를 참고하세요.
 
+<p align="center">
+  <img src="docs/images/dashboard-btc.png" alt="OpenClaw BTC dashboard" width="1200" />
+</p>
+
 ## 개요
 
 OpenClaw Trading System은 OpenClaw 런타임 위에서 동작하는 3시장 자동매매/리서치 플랫폼입니다.

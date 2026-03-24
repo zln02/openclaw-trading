@@ -9,7 +9,7 @@ def api_error(message: str, status_code: int = 500, detail: str | None = None) -
     body: dict = {"error": True, "message": message}
     if detail:
         body["detail"] = detail
-    return JSONResponse(content=body, status_code=status_code)
+    return JSONResponse(content=body, status_code=status_code, media_type="application/json; charset=utf-8")
 
 
 def api_success(data, message: str = "ok") -> dict:

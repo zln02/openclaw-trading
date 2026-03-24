@@ -66,3 +66,15 @@ def load_env() -> None:
                 os.environ.setdefault(k, v)
         except Exception:
             continue
+
+    # Docker secrets: /run/local-secrets/<KEY_NAME> 파일에서 로드
+    _secrets_dir = Path("/run/local-secrets")
+    if _secrets_dir.is_dir():
+        for secret_file in _secrets_dir.iterdir():
+            if secret_file.is_file() and _ENV_KEY_RE.match(secret_file.name):
+                try:
+                    value = secret_file.read_text(encoding="utf-8").strip()
+                    if value:
+                        os.environ.setdefault(secret_file.name, value)
+                except Exception:
+                    pass

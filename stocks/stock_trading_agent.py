@@ -502,8 +502,11 @@ def _calc_indicators_from_data(closes: list, volumes: list) -> dict:
     else:
         macd_signal = macd
         macd_histogram = 0
-    avg_vol = sum(volumes[-20:]) / min(len(volumes[-20:]), 20) if volumes else 1
+    # 마지막 봉은 yfinance 미완성 봉으로 거래량이 0일 수 있으므로 0이면 이전 봉 사용
     cur_vol = volumes[-1] if volumes else 0
+    if cur_vol == 0 and len(volumes) >= 2:
+        cur_vol = volumes[-2]
+    avg_vol = sum(v for v in volumes[-20:] if v > 0) / max(sum(1 for v in volumes[-20:] if v > 0), 1) if volumes else 1
     vol_ratio = round(cur_vol / avg_vol, 2) if avg_vol > 0 else 1.0
     vol_labels = [(3.0, '💥 거래량 폭발'), (2.0, '🔥 거래량 급등'), (1.5, '📈 거래량 증가'), (0.5, '➡️ 거래량 보통')]
     vol_label = f'😴 거래량 급감 ({vol_ratio}배)'
@@ -1155,18 +1158,25 @@ def get_today_strategy() -> dict:
 
 
 def get_watchlist_from_db() -> list:
-    """DB에서 종목 리스트 가져오기 (전략 없을 때 fallback)"""
+    """DB에서 종목 리스트 가져오기 (전략 없을 때 fallback → WATCHLIST 하드코딩)"""
     try:
         rows = (
             supabase.table('top50_stocks')
             .select('stock_code,stock_name')
-            .limit(20)
+            .limit(60)
             .execute()
             .data or []
         )
-        return [{'code': r['stock_code'], 'name': r['stock_name']} for r in rows]
+        if rows:
+            return [{'code': r['stock_code'], 'name': r['stock_name']} for r in rows]
     except Exception as e:
-        log(f'종목 리스트 DB 조회 실패: {e}', 'ERROR')
+        log(f'종목 리스트 DB 조회 실패 → WATCHLIST 사용: {e}', 'WARN')
+
+    try:
+        from stock_premarket import WATCHLIST
+        return [{'code': w['code'], 'name': w['name']} for w in WATCHLIST]
+    except Exception as e2:
+        log(f'WATCHLIST import 실패: {e2}', 'ERROR')
         return []
 
 
@@ -1526,7 +1536,7 @@ def execute_sell(stock: dict, signal: dict, indicators: dict, reason_prefix: str
 
     # 매도 기록도 별도 저장
     try:
-        supabase.table('trade_executions').insert({
+        sell_record: dict = {
             'trade_type': 'SELL',
             'stock_code': code,
             'stock_name': name,
@@ -1541,7 +1551,17 @@ def execute_sell(stock: dict, signal: dict, indicators: dict, reason_prefix: str
             'source': signal.get('source', 'SELL') if isinstance(signal, dict) else 'SELL',
             'drift_status': signal.get('drift_status', '') if isinstance(signal, dict) else '',
             'drift_penalty': signal.get('drift_penalty', 0.0) if isinstance(signal, dict) else 0.0,
-        }).execute()
+        }
+        try:
+            supabase.table('trade_executions').insert(sell_record).execute()
+        except Exception as col_err:
+            if 'drift_penalty' in str(col_err) or 'drift_status' in str(col_err):
+                # drift_penalty/drift_status 컬럼 미생성 시 해당 필드 제외 후 재시도
+                sell_record.pop('drift_penalty', None)
+                sell_record.pop('drift_status', None)
+                supabase.table('trade_executions').insert(sell_record).execute()
+            else:
+                raise
     except Exception as e:
         log(f'{name} 매도 기록 저장 실패: {e}', 'ERROR')
 
@@ -1689,16 +1709,20 @@ def check_stop_loss_take_profit():
                     log(f'{name} 부분 익절: {net_pnl_pct*100:.2f}%, {sell_qty}주 매도', 'TRADE')
                     try:
                         kiwoom.place_order(stock_code=code, order_type='sell', quantity=sell_qty, price=0)
+                        remaining_qty = total_qty - sell_qty
                         for t in trades[:1]:
                             tid = t.get('trade_id')
                             if tid:
-                                supabase.table('trade_executions').update(
-                                    {'partial_sold': True}
-                                ).eq('trade_id', tid).execute()
+                                supabase.table('trade_executions').update({
+                                    'partial_sold': True,
+                                    'quantity': remaining_qty,
+                                    'partial_sell_qty': sell_qty,
+                                    'partial_sell_price': price,
+                                }).eq('trade_id', tid).execute()
                         send_telegram(
                             f'🟡 <b>{name} 부분 익절 ({int(RISK.get("partial_tp_ratio",0.5)*100)}%)</b>\n'
                             f'수익: +{net_pnl_pct*100:.2f}% | {sell_qty}주 매도\n'
-                            f'잔여 {total_qty - sell_qty}주 트레일링 보호'
+                            f'잔여 {remaining_qty}주 트레일링 보호'
                         )
                     except Exception as e:
                         log(f'{name} 부분 익절 매도 실패: {e}', 'ERROR')
@@ -1863,16 +1887,27 @@ def run_trading_cycle():
     # 보유 포지션 손절/익절 먼저 체크
     check_stop_loss_take_profit()
 
-    # 전략 로드
+    # 전략 로드 + WATCHLIST 전체 51개 병합 (2단계 커버리지)
     strategy = get_today_strategy()
+    try:
+        from stock_premarket import WATCHLIST as _WL
+        watchlist_all = [{'code': w['code'], 'name': w['name']} for w in _WL]
+    except Exception:
+        watchlist_all = get_watchlist_from_db()
+
     if strategy:
         log(f"장 전 전략 로드 완료: {strategy.get('market_outlook', '?')}")
         buy_picks = [p for p in strategy.get('top_picks', []) if p.get('action') == 'BUY']
         watch_picks = [p for p in strategy.get('top_picks', []) if p.get('action') == 'WATCH']
-        targets = [{'code': p['code'], 'name': p['name']} for p in (buy_picks + watch_picks)]
+        strategy_targets = [{'code': p['code'], 'name': p['name']} for p in (buy_picks + watch_picks)]
+        # 전략 picks 우선, 나머지 WATCHLIST로 보충 (중복 제거)
+        strategy_codes = {t['code'] for t in strategy_targets}
+        extra = [s for s in watchlist_all if s['code'] not in strategy_codes]
+        targets = strategy_targets + extra
+        log(f"분석 대상: 전략 {len(strategy_targets)}개 + WATCHLIST {len(extra)}개 = 총 {len(targets)}개")
     else:
-        log('장 전 전략 없음 → DB 종목 리스트로 룰 기반 매매', 'WARN')
-        targets = get_watchlist_from_db()
+        log('장 전 전략 없음 → WATCHLIST 전체로 룰 기반 매매', 'WARN')
+        targets = watchlist_all
 
     if not targets:
         log('분석 대상 종목 없음')
@@ -1900,7 +1935,7 @@ def run_trading_cycle():
         m = calc_momentum_score(stock['code'])
         scored_targets.append((stock, m))
     scored_targets.sort(key=lambda x: x[1].get('score', 0), reverse=True)
-    scored_targets = scored_targets[:20]  # 상위 20개만 분석
+    scored_targets = scored_targets[:30]  # 상위 30개 심층 분석 (전체 51개 중)
 
     # 종목별 분석 + 매매
     for stock, momentum in scored_targets:
@@ -1929,8 +1964,13 @@ def run_trading_cycle():
             f"신고가 {momentum.get('near_high', 0):.0f}%"
         )
         if momentum.get('grade') == 'D' and not has_position:
-            log(f'  {name}: 모멘텀 D등급 — BUY 차단')
-            continue
+            rsi_now = indicators.get('rsi', 50)
+            bb_pos_now = indicators.get('bb_pos', 50)
+            if rsi_now <= 30 and bb_pos_now <= 10:
+                log(f'  {name}: 모멘텀 D등급이지만 RSI={rsi_now} + BB하단({bb_pos_now}%) — 예외 허용')
+            else:
+                log(f'  {name}: 모멘텀 D등급 — BUY 차단')
+                continue
 
         weekly = get_weekly_trend(code)
         log(f'  주봉 추세: {weekly.get("trend", "?")}')
@@ -1945,8 +1985,10 @@ def run_trading_cycle():
 
         news = get_stock_news(name)
 
-        # 수급 데이터 (외국인/기관)
-        supply = get_investor_trend_krx(code)
+        # 수급 데이터 (외국인/기관) — Kiwoom ka10007 우선, KRX fallback
+        supply = kiwoom.get_investor_trend(code)
+        if not supply:
+            supply = get_investor_trend_krx(code)
         foreign_net = supply.get('foreign_net', 0)
         inst_net = supply.get('inst_net', 0)
         if foreign_net or inst_net:

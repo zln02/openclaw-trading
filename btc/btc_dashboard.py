@@ -17,7 +17,7 @@ from collections import defaultdict
 from pathlib import Path
 from fastapi import FastAPI, Depends, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response, FileResponse
+from fastapi.responses import Response, FileResponse, JSONResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 import uvicorn
@@ -28,7 +28,10 @@ from common.config import DASHBOARD_PORT
 
 load_env()
 
-app = FastAPI(title="OpenClaw Trading Dashboard")
+app = FastAPI(
+    title="OpenClaw Trading Dashboard",
+    default_response_class=JSONResponse,
+)
 
 # ── Basic Auth ──────────────────────────────────────────────────────────────
 _security = HTTPBasic(auto_error=False)
@@ -113,14 +116,23 @@ async def health():
 
         payload = await health_monitor.run_checks()
         payload["service"] = "openclaw-dashboard"
-        return payload
+        http_status = 200 if payload.get("status") == "ok" else 503
+        return JSONResponse(
+            content=payload,
+            status_code=http_status,
+            media_type="application/json; charset=utf-8",
+        )
     except Exception as exc:
-        return {
-            "status": "degraded",
-            "service": "openclaw-dashboard",
-            "components": {},
-            "error": str(exc),
-        }
+        return JSONResponse(
+            content={
+                "status": "degraded",
+                "service": "openclaw-dashboard",
+                "components": {},
+                "error": f"헬스체크 실행 오류: {exc}",
+            },
+            status_code=503,
+            media_type="application/json; charset=utf-8",
+        )
 
 
 # Serve built React dashboard (production)

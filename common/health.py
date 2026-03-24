@@ -15,6 +15,7 @@ from common.supabase_client import get_supabase, run_query_with_retry
 from common.telegram import send_telegram
 
 log = get_logger("health")
+_HEALTH_SNAPSHOT_TABLE_MISSING = False
 
 
 def _safe_mtime(path: Path) -> float:
@@ -27,12 +28,12 @@ def _safe_mtime(path: Path) -> float:
 async def check_upbit() -> dict[str, Any]:
     def _check() -> dict[str, Any]:
         if not os.environ.get("UPBIT_ACCESS_KEY") or not os.environ.get("UPBIT_SECRET_KEY"):
-            raise RuntimeError("UPBIT keys missing")
+            raise RuntimeError("업비트 API 키가 설정되지 않았습니다 (UPBIT_ACCESS_KEY / UPBIT_SECRET_KEY)")
         import pyupbit
 
         price = pyupbit.get_current_price("KRW-BTC")
         if not price:
-            raise RuntimeError("Upbit current price unavailable")
+            raise RuntimeError("업비트 현재가 조회 실패 (응답 없음)")
         return {"price": float(price)}
 
     return await asyncio.to_thread(_check)
@@ -40,13 +41,17 @@ async def check_upbit() -> dict[str, Any]:
 
 async def check_supabase() -> dict[str, Any]:
     def _check() -> dict[str, Any]:
-        # run_query_with_retry: 연결 끊김 시 자동 재연결 + 3회 재시도
         result = run_query_with_retry(
             lambda sb: sb.table("btc_position").select("id").limit(1).execute()
         )
+        if result is None:
+            raise RuntimeError("Supabase 연결 실패 (응답 없음)")
         return {"rows": len(result.data or [])}
 
-    return await asyncio.to_thread(_check)
+    try:
+        return await asyncio.to_thread(_check)
+    except Exception as exc:
+        raise RuntimeError(f"Supabase 연결 오류: {exc}") from exc
 
 
 async def check_kiwoom() -> dict[str, Any]:
@@ -54,7 +59,7 @@ async def check_kiwoom() -> dict[str, Any]:
         app_key = os.environ.get("KIWOOM_MOCK_REST_API_APP_KEY", "")
         secret_key = os.environ.get("KIWOOM_MOCK_REST_API_SECRET_KEY", "")
         if not app_key or not secret_key:
-            raise RuntimeError("Kiwoom mock credentials missing")
+            raise RuntimeError("키움 모의투자 API 키가 설정되지 않았습니다 (KIWOOM_MOCK_REST_API_APP_KEY / SECRET_KEY)")
         return {"configured": True}
 
     return await asyncio.to_thread(_check)
@@ -62,8 +67,11 @@ async def check_kiwoom() -> dict[str, Any]:
 
 async def check_dashboard() -> dict[str, Any]:
     def _check() -> dict[str, Any]:
-        with socket.create_connection(("127.0.0.1", DASHBOARD_PORT), timeout=2):
-            return {"port": DASHBOARD_PORT}
+        try:
+            with socket.create_connection(("127.0.0.1", DASHBOARD_PORT), timeout=2):
+                return {"port": DASHBOARD_PORT}
+        except OSError as exc:
+            raise RuntimeError(f"대시보드 포트 {DASHBOARD_PORT} 연결 실패: {exc}") from exc
 
     return await asyncio.to_thread(_check)
 
@@ -71,7 +79,6 @@ async def check_dashboard() -> dict[str, Any]:
 async def check_cron_freshness() -> dict[str, Any]:
     def _check() -> dict[str, Any]:
         now = time.time()
-        # 컨테이너 내부: cron 로그는 /app/logs/cron/ 에 마운트됨
         cron_log_dir = LOG_DIR / "cron"
         watched = [BTC_LOG, STOCK_TRADING_LOG, US_TRADING_LOG, DASHBOARD_LOG]
         if cron_log_dir.is_dir():
@@ -81,12 +88,14 @@ async def check_cron_freshness() -> dict[str, Any]:
                 cron_log_dir / "us_trading.log",
                 cron_log_dir / "dashboard.log",
             ]
-        last_seen = max(_safe_mtime(path) for path in watched)
+        mtimes = [_safe_mtime(p) for p in watched]
+        last_seen = max(mtimes) if mtimes else 0.0
         if last_seen <= 0:
-            raise RuntimeError("No log activity found")
+            raise RuntimeError("에이전트 로그 파일을 찾을 수 없습니다 (cron 미실행 또는 로그 경로 오류)")
         age = int(now - last_seen)
-        if age > 60 * 60 * 6:
-            raise RuntimeError(f"Cron/log freshness stale: {age}s")
+        if age > 60 * 60 * 14:
+            hours = age // 3600
+            raise RuntimeError(f"에이전트 로그가 {hours}시간 동안 갱신되지 않았습니다 (cron 중단 의심)")
         return {"age_seconds": age, "log_dir": str(LOG_DIR)}
 
     return await asyncio.to_thread(_check)
@@ -141,6 +150,10 @@ class HealthMonitor:
 
     @staticmethod
     def _persist_snapshots(supabase: Any, results: dict[str, Any]) -> None:
+        global _HEALTH_SNAPSHOT_TABLE_MISSING
+        if _HEALTH_SNAPSHOT_TABLE_MISSING:
+            return
+
         for component, result in results.items():
             try:
                 supabase.table("health_snapshots").insert(
@@ -152,6 +165,10 @@ class HealthMonitor:
                     }
                 ).execute()
             except Exception as exc:
+                if "PGRST205" in str(exc) and "health_snapshots" in str(exc):
+                    _HEALTH_SNAPSHOT_TABLE_MISSING = True
+                    log.warning("health snapshot persistence disabled", error=str(exc))
+                    return
                 log.warning("health snapshot persist failed", component=component, error=str(exc))
 
 

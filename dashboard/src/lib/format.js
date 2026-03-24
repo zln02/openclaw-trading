@@ -15,7 +15,9 @@ export const compactTime = (value) => {
   if (!value) {
     return "—";
   }
-  return new Date(value).toLocaleString("ko-KR", {
+  // DB timestamps are UTC but may lack timezone suffix — force UTC parsing
+  const normalized = String(value).match(/[Z+\-]\d{2}:?\d{2}$|Z$/) ? value : `${value}Z`;
+  return new Date(normalized).toLocaleString("ko-KR", {
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
@@ -37,7 +39,8 @@ export const signed = (value, digits = 2) =>
 
 export const relativeTime = (value, now = Date.now()) => {
   if (!value) return "never";
-  const diffMs = now - new Date(value).getTime();
+  const normalized = String(value).match(/[Z+\-]\d{2}:?\d{2}$|Z$/) ? value : `${value}Z`;
+  const diffMs = now - new Date(normalized).getTime();
   const diffMin = Math.round(diffMs / 60000);
   if (diffMin <= 0) return "just now";
   if (diffMin < 60) return `${diffMin}m ago`;

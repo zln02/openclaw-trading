@@ -20,7 +20,16 @@ except Exception:  # pragma: no cover - optional dependency fallback
 _client = None
 
 # 재연결 트리거 키워드 (httpcore 연결 끊김 에러)
-_RECONNECT_ERRORS = ("Server disconnected", "RemoteProtocolError", "ConnectionError", "Connection reset")
+_RECONNECT_ERRORS = (
+    "Server disconnected",
+    "RemoteProtocolError",
+    "ConnectionError",
+    "Connection reset",
+    "Connection reset by peer",
+    "ConnectionTerminated",
+    "BrokenResourceError",
+    "ReadError",
+)
 
 
 def create_supabase_client(url: str, key: str):
@@ -78,7 +87,7 @@ def get_supabase():
 
 
 @retry(
-    stop=stop_after_attempt(3),
+    stop=stop_after_attempt(5),
     wait=wait_exponential(multiplier=1, min=1, max=10),
     reraise=True,
 )

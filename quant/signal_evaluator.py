@@ -66,10 +66,10 @@ def _rank(values: List[float]) -> List[float]:
 def compute_ic(signals: List[float], returns: List[float]) -> float:
     """Spearman rank IC between *signals* and *returns*.
 
-    Returns float in [-1, 1].  Returns 0.0 if fewer than 5 valid pairs.
+    Returns float in [-1, 1].  Returns 0.0 if fewer than 3 valid pairs.
     """
     pairs = [(s, r) for s, r in zip(signals, returns) if s is not None and r is not None]
-    if len(pairs) < 5:
+    if len(pairs) < 3:
         return 0.0
     sx, sy = zip(*pairs)
     rx = _rank(list(sx))
@@ -88,10 +88,19 @@ def compute_ic(signals: List[float], returns: List[float]) -> float:
 def compute_ir(ic_series: List[float]) -> float:
     """IC Information Ratio = mean(IC) / std(IC).
 
-    Returns 0.0 if fewer than 3 observations or std == 0.
+    For a single IC observation, returns IC itself as IR (no std available).
+    Returns 0.0 if no observations or std == 0.
     """
-    if len(ic_series) < 3:
+    if len(ic_series) == 0:
         return 0.0
+    if len(ic_series) == 1:
+        # Single window: IR = IC (treat as best-estimate, no stability info)
+        return round(ic_series[0], 4)
+    if len(ic_series) == 2:
+        # Two windows: IR = mean / std with minimum denominator
+        mean = sum(ic_series) / 2
+        std = abs(ic_series[0] - ic_series[1]) / 2
+        return round(mean / std, 4) if std > 0 else 0.0
     n = len(ic_series)
     mean = sum(ic_series) / n
     std = (sum((x - mean) ** 2 for x in ic_series) / n) ** 0.5
@@ -103,7 +112,7 @@ def compute_ir(ic_series: List[float]) -> float:
 # ── SignalEvaluator ────────────────────────────────────────────────────────
 
 class SignalEvaluator:
-    def __init__(self, supabase_client=None, lookback_days: int = 90, window_days: int = 14):
+    def __init__(self, supabase_client=None, lookback_days: int = 180, window_days: int = 7):
         """
         Args:
             lookback_days: how far back to pull trade records from Supabase.
@@ -189,11 +198,17 @@ class SignalEvaluator:
     ) -> List[float]:
         """Compute IC in rolling windows of `window_days` samples.
 
-        Returns a list of per-window IC values.
+        If total samples < window, returns a single full-data IC value so that
+        early-stage systems (few trades) still produce a usable IR estimate.
         """
         w = self.window_days
+        n = len(signal_vals)
+        # Not enough data for even one window — return full-data IC as single value
+        if n < w:
+            ic = compute_ic(signal_vals, pnl_vals)
+            return [ic] if ic != 0.0 else []
         series: List[float] = []
-        for start in range(0, len(signal_vals) - w + 1, max(1, w // 2)):
+        for start in range(0, n - w + 1, max(1, w // 2)):
             end = start + w
             ic = compute_ic(signal_vals[start:end], pnl_vals[start:end])
             series.append(ic)
@@ -226,7 +241,7 @@ class SignalEvaluator:
         sigs, rets = self._load_signal_pairs(signal_name)
         n = len(sigs)
 
-        if n < 5:
+        if n < 3:
             return {
                 "signal": signal_name,
                 "n": n,
@@ -240,7 +255,8 @@ class SignalEvaluator:
 
         ic = compute_ic(sigs, rets)
         ic_series = self._rolling_ic_series(sigs, rets)
-        ir = compute_ir(ic_series) if len(ic_series) >= 3 else 0.0
+        # When data is scarce, allow IR from 1+ windows (uses full-data IC fallback)
+        ir = compute_ir(ic_series) if len(ic_series) >= 1 else 0.0
 
         p_value = self._permutation_test(sigs, rets)
         significant = p_value < 0.05
@@ -341,7 +357,7 @@ class SignalEvaluator:
             ic = _safe_float(r.get("ic"), 0.0)
             ir = _safe_float(r.get("ir"), 0.0)
             n = int(_safe_float(r.get("n"), 0))
-            if not name or n < 5:
+            if not name or n < 3:
                 continue
             raw = max(0.0, ic) * max(0.0, ir)
             scored.append((name, raw))
@@ -353,7 +369,7 @@ class SignalEvaluator:
                 name = str(r.get("signal", "")).strip()
                 ic = _safe_float(r.get("ic"), 0.0)
                 n = int(_safe_float(r.get("n"), 0))
-                if not name or n < 5:
+                if not name or n < 3:
                     continue
                 raw = max(0.0, ic)
                 scored.append((name, raw))

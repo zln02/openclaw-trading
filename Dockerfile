@@ -28,6 +28,7 @@ COPY btc/ btc/
 COPY stocks/ stocks/
 COPY agents/ agents/
 COPY quant/ quant/
+COPY execution/ execution/
 COPY memory/ memory/
 COPY scripts/ scripts/
 COPY --from=dashboard-builder /dashboard/dist/ dashboard/dist/
