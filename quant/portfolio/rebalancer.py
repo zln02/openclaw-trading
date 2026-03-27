@@ -7,6 +7,10 @@ from dataclasses import asdict, dataclass
 from datetime import date, datetime
 from typing import Any, Optional
 
+from common.logger import get_logger
+
+log = get_logger("portfolio_rebalancer")
+
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
     try:
@@ -178,7 +182,7 @@ def _cli() -> int:
         as_of=payload.get("as_of"),
         last_rebalance_date=payload.get("last_rebalance_date"),
     )
-    print(json.dumps(out, ensure_ascii=False, indent=2))
+    log.info(json.dumps(out, ensure_ascii=False, indent=2))
     return 0
 
 

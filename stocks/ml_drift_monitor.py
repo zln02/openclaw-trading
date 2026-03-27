@@ -14,9 +14,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from common.config import BRAIN_PATH
+from common.logger import get_logger
 from common.telegram import Priority, send_telegram
 from ml_model import FEATURE_NAMES, extract_features, load_training_data, supabase
 
+log = get_logger("ml_drift_monitor")
 
 DRIFT_REPORT_PATH = BRAIN_PATH / "ml" / "drift_report.json"
 
@@ -233,7 +235,7 @@ def main() -> int:
     retrained = maybe_retrain(report, auto_retrain=args.auto_retrain)
     report["auto_retrain_triggered"] = retrained
     save_report(report)
-    print(json.dumps(report, ensure_ascii=False, indent=2))
+    log.info(json.dumps(report, ensure_ascii=False, indent=2))
     return 0
 
 

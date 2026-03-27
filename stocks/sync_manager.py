@@ -20,6 +20,9 @@ from supabase import create_client
 
 from kiwoom_client import KiwoomClient
 from common.env_loader import load_env
+from common.logger import get_logger
+
+log = get_logger("sync_manager")
 
 
 def _load_env():
@@ -30,7 +33,7 @@ def _load_env():
 def _log(msg: str, level: str = "INFO"):
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     prefix = {"INFO": "ℹ️", "WARN": "⚠️", "ERROR": "❌", "OK": "✅"}.get(level, "")
-    print(f"[{ts}] {prefix} {msg}")
+    getattr(log, "warning" if level == "WARN" else "error" if level == "ERROR" else "info")(f"[{ts}] {prefix} {msg}")
 
 
 def get_supabase_client():
@@ -143,7 +146,7 @@ def main():
 
     mode = sys.argv[1] if len(sys.argv) > 1 else "check"
     if mode not in ("check", "apply"):
-        print("사용법: python sync_manager.py [check|apply]")
+        log.info("사용법: python sync_manager.py [check|apply]")
         sys.exit(1)
 
     _log("계좌 평가/보유종목 조회 중...")

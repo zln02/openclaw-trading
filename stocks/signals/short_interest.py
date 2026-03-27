@@ -7,6 +7,10 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from common.logger import get_logger
+
+log = get_logger("short_interest")
+
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -160,7 +164,7 @@ def _cli() -> int:
         days_to_cover=args.dtc,
         price_change_5d_pct=args.price_5d,
     )
-    print(json.dumps(out, ensure_ascii=False, indent=2))
+    log.info(json.dumps(out, ensure_ascii=False, indent=2))
     return 0
 
 

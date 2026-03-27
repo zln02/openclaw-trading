@@ -8,6 +8,10 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+from common.logger import get_logger
+
+log = get_logger("earnings_model")
+
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -169,7 +173,7 @@ def _cli() -> int:
         consensus_eps=args.consensus,
         surprise_std=args.std,
     )
-    print(json.dumps(out, ensure_ascii=False, indent=2))
+    log.info(json.dumps(out, ensure_ascii=False, indent=2))
     return 0
 
 

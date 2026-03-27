@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
+from common.logger import get_logger
 
 def _load_env():
     p = Path('/home/wlsdud5035/.openclaw/openclaw.json')
@@ -29,6 +30,7 @@ def _load_env():
 
 
 _load_env()
+log = get_logger("performance_report")
 
 from supabase import create_client
 
@@ -205,7 +207,7 @@ def generate_report(market: str = "kr"):
     msg += format_section("📈 월간 (30일)", month_metrics)
     msg += "\n\n⚠️ 모의투자"
 
-    print(msg.replace('<b>', '').replace('</b>', ''))
+    log.info(msg.replace('<b>', '').replace('</b>', ''))
     send_telegram(msg)
 
     # DB에도 저장
@@ -236,4 +238,3 @@ if __name__ == '__main__':
     import sys
     mkt = sys.argv[1] if len(sys.argv) > 1 else "kr"
     generate_report(market=mkt)
-

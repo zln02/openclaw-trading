@@ -193,7 +193,7 @@ export default function KrStockPage() {
   const ranking = Array.isArray(topStocks) ? topStocks : [];
   const activeSymbol = selectedSymbol || ranking[0]?.stock_code || positions[0]?.code || "005930";
 
-  const { data: chartData, loading: chartLoading } = usePolling(
+  const { data: chartData, loading: chartLoading, error: chartError } = usePolling(
     () => getStockChart(activeSymbol, tf.interval, tf.limit),
     tf.pollMs,
     [activeSymbol, tf.interval, tf.limit],
@@ -296,6 +296,8 @@ export default function KrStockPage() {
       >
         {chartLoading ? (
           <LoadingSkeleton height={420} />
+        ) : chartError ? (
+          <ErrorState message={`차트 데이터 로딩 실패: ${chartError}`} />
         ) : (
           <LightweightPriceChart title={`${activeSymbol} · ${tf.label}`} data={chartSeries} height={420} />
         )}
@@ -307,7 +309,7 @@ export default function KrStockPage() {
           {accountLoading ? (
             <LoadingSkeleton height={380} />
           ) : pieData.length === 0 ? (
-            <EmptyState message="현재 보유 중인 국내 포지션이 없습니다." />
+            <EmptyState message="보유 종목이 없습니다" />
           ) : (
             <div className="space-y-4">
               <PortfolioPieChart data={pieData} />
@@ -472,7 +474,7 @@ export default function KrStockPage() {
                     );
                   })}
                   {(trades || []).length === 0 && (
-                    <tr><td colSpan="5"><EmptyState message="국내 거래 이력이 없습니다." /></td></tr>
+                    <tr><td colSpan="5"><EmptyState message="오늘 거래 내역이 없습니다" /></td></tr>
                   )}
                 </tbody>
               </table>

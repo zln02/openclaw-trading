@@ -8,6 +8,10 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from common.logger import get_logger
+
+log = get_logger("sec_13f")
+
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -143,7 +147,7 @@ def _cli() -> int:
     curr_rows = _load_rows(args.curr_file)
 
     out = SEC13FAnalyzer().analyze(prev_rows, curr_rows, fund_name=args.fund)
-    print(json.dumps(out, ensure_ascii=False, indent=2))
+    log.info(json.dumps(out, ensure_ascii=False, indent=2))
     return 0
 
 

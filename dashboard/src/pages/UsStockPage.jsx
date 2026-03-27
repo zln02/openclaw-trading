@@ -157,13 +157,13 @@ export default function UsStockPage() {
   const { usPortfolio: positions, errors: portfolioErrors } = usePortfolio();
   const positionsLoading = positions === null && !portfolioErrors?.us;
   const positionsError = portfolioErrors?.us || null;
-  const { data: trades } = usePolling(getUsTrades, 30000);
+  const { data: trades, error: tradesError } = usePolling(getUsTrades, 30000);
 
   const ranking = market?.top || market?.momentum || [];
   const openPositions = positions?.positions || positions?.open_positions || [];
   const activeSymbol = selectedSymbol || ranking[0]?.symbol || openPositions[0]?.symbol || "AAPL";
 
-  const { data: chartData, loading: chartLoading } = usePolling(
+  const { data: chartData, loading: chartLoading, error: chartError } = usePolling(
     () => getUsChart(activeSymbol, tf.period, tf.interval),
     tf.pollMs,
     [activeSymbol, tf.period, tf.interval],
@@ -255,6 +255,8 @@ export default function UsStockPage() {
       >
         {chartLoading ? (
           <LoadingSkeleton height={400} />
+        ) : chartError ? (
+          <ErrorState message={`차트 데이터 로딩 실패: ${chartError}`} />
         ) : (
           <LightweightPriceChart title={`${activeSymbol} · ${tf.label}`} data={chartSeries} height={400} />
         )}
@@ -301,7 +303,7 @@ export default function UsStockPage() {
           {positionsLoading ? (
             <LoadingSkeleton height={200} />
           ) : openPositions.length === 0 ? (
-            <EmptyState message="현재 미국 DRY-RUN 포지션이 없습니다." />
+            <EmptyState message="US 보유 종목이 없습니다" />
           ) : (
             <div className="overflow-x-auto scrollbar-subtle">
               <table className="terminal-table">
@@ -352,7 +354,8 @@ export default function UsStockPage() {
                   </div>
                 </div>
               ))}
-              {(trades || []).length === 0 && <EmptyState message="미국 모의 거래 이력이 없습니다." />}
+              {tradesError ? <ErrorState message={`US 거래 로딩 실패: ${tradesError}`} /> : null}
+              {(trades || []).length === 0 && !tradesError && <EmptyState message="최근 US 거래가 없습니다" />}
             </div>
           </div>
         </Card>

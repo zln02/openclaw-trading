@@ -194,9 +194,9 @@ export default function BtcPage() {
   const { data: composite, error: compositeError, loading: compositeLoading } = usePolling(getBtcComposite, 30000);
   const { btcPortfolio: portfolio } = usePortfolio();
   const portfolioLoading = portfolio === null;
-  const { data: trades } = usePolling(getBtcTrades, 60000);
+  const { data: trades, error: tradesError } = usePolling(getBtcTrades, 60000);
   const { data: decisionLog } = usePolling(() => getBtcDecisionLog(8), 30000);
-  const { data: candles, loading: candlesLoading } = usePolling(
+  const { data: candles, loading: candlesLoading, error: candlesError } = usePolling(
     () => getBtcCandles(tf.interval, tf.count),
     tf.pollMs,
     [tf.interval],
@@ -391,6 +391,8 @@ export default function BtcPage() {
 
             {candlesLoading ? (
               <LoadingSkeleton height={460} />
+            ) : candlesError ? (
+              <ErrorState message={`BTC 차트 데이터 로딩 실패: ${candlesError}`} />
             ) : (
               <LightweightPriceChart title={`가격 / 거래량 (${tf.label})`} data={candleSeries} height={460} />
             )}
@@ -425,10 +427,16 @@ export default function BtcPage() {
                         </tr>
                       );
                     })}
-                    {tradeRows.length === 0 ? (
+                    {tradesError ? (
                       <tr>
                         <td colSpan="4">
-                          <EmptyState message="최근 BTC 거래 내역이 없습니다." />
+                          <ErrorState message={`BTC 거래 내역 로딩 실패: ${tradesError}`} />
+                        </td>
+                      </tr>
+                    ) : tradeRows.length === 0 ? (
+                      <tr>
+                        <td colSpan="4">
+                          <EmptyState message="최근 거래 내역이 없습니다" />
                         </td>
                       </tr>
                     ) : null}

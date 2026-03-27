@@ -29,9 +29,21 @@ try:
 except ImportError:
     _check_circuit_breaker = None
 
+try:
+    from agents.regime_classifier import RegimeClassifier
+except ImportError:
+    RegimeClassifier = None
+
+try:
+    from execution.smart_router import SmartRouter
+    _smart_router = SmartRouter()
+except ImportError:
+    _smart_router = None
+
 load_env()
 log = get_logger("btc_agent", BTC_LOG)
 KST = timezone(timedelta(hours=9))
+_btc_regime_cache = {"regime": None, "multipliers": None, "ts": 0}
 
 import pyupbit
 from openai import OpenAI
@@ -167,6 +179,32 @@ def _utc_today_iso() -> str:
     return datetime.now(timezone.utc).date().isoformat()
 
 
+def _get_btc_regime_adj() -> dict:
+    """BTC 레짐 기반 가중치 조정 (사이클당 1회 조회)."""
+    now = time.time()
+    if _btc_regime_cache["ts"] and now - _btc_regime_cache["ts"] < 300:
+        return _btc_regime_cache["multipliers"] or {}
+    try:
+        if RegimeClassifier is None:
+            return {}
+        rc = RegimeClassifier()
+        regime_result = rc.classify()
+        regime = regime_result.get("regime") if isinstance(regime_result, dict) else regime_result
+        mults = {
+            "BULL": {"momentum_mult": 1.3, "volume_mult": 1.0, "mean_reversion_mult": 0.7},
+            "RISK_ON": {"momentum_mult": 1.3, "volume_mult": 1.0, "mean_reversion_mult": 0.7},
+            "BEAR": {"momentum_mult": 0.7, "volume_mult": 1.2, "mean_reversion_mult": 1.3},
+            "RISK_OFF": {"momentum_mult": 0.7, "volume_mult": 1.2, "mean_reversion_mult": 1.3},
+            "CRISIS": {"momentum_mult": 0.3, "volume_mult": 0.5, "mean_reversion_mult": 0.5},
+        }.get(str(regime).upper(), {"momentum_mult": 1.0, "volume_mult": 1.0, "mean_reversion_mult": 1.0})
+        _btc_regime_cache.update({"regime": regime, "multipliers": mults, "ts": now})
+        log.info(f"BTC regime: {regime}, multipliers: {mults}")
+        return mults
+    except Exception as e:
+        log.warning(f"BTC regime classification failed: {e}")
+        return {}
+
+
 def _upbit_call(func, *args, max_retries: int = 3, **kwargs):
     """Upbit API 호출 래퍼 (429 대응)."""
     retries = max_retries if max_retries is not None else API_RETRY_CONFIG["max_retries"]
@@ -191,6 +229,22 @@ def _upbit_call(func, *args, max_retries: int = 3, **kwargs):
 def _execute_sell_order(quantity: float, *, context: str) -> tuple[bool, str]:
     """Execute an Upbit market sell with consistent validation/error handling."""
     try:
+        try:
+            current_price = float(pyupbit.get_current_price("KRW-BTC") or 0)
+            est_notional = current_price * float(quantity)
+            if _smart_router and est_notional >= 5_000_000:
+                route = _smart_router.decide(
+                    symbol="KRW-BTC",
+                    side="sell",
+                    total_qty=quantity,
+                    market="btc",
+                    price_hint=current_price,
+                )
+                log.info(f"SmartRouter decision: {route.route} for {est_notional:,.0f} KRW")
+                if route.route == "TWAP":
+                    log.info("TWAP suggested but using MARKET for BTC liquidity")
+        except Exception as e:
+            log.warning(f"SmartRouter failed, fallback to MARKET: {e}")
         result = _upbit_call(upbit.sell_market_order, "KRW-BTC", quantity, max_retries=1)
         if result is None or not isinstance(result, dict) or "error" in result:
             log.error(f"Upbit {context} 매도 실패: {result}")
@@ -551,6 +605,11 @@ def calc_btc_composite(fg_value, rsi_d, bb_pct, vol_ratio_d, trend, ret_7d=0,
     - 보너스: ±5점
     - 레짐 조정: RISK_ON +5 / RISK_OFF -10 / CRISIS -20
     """
+    mults = _get_btc_regime_adj()
+    momentum_mult = float(mults.get("momentum_mult", 1.0) or 1.0)
+    volume_mult = float(mults.get("volume_mult", 1.0) or 1.0)
+    mean_reversion_mult = float(mults.get("mean_reversion_mult", 1.0) or 1.0)
+
     # F&G (낮을수록 매수 기회)
     if fg_value <= 10:   fg_sc = 22
     elif fg_value <= 20: fg_sc = 18
@@ -573,6 +632,7 @@ def calc_btc_composite(fg_value, rsi_d, bb_pct, vol_ratio_d, trend, ret_7d=0,
     elif bb_pct <= 40: bb_sc = 6
     elif bb_pct <= 55: bb_sc = 2
     else:              bb_sc = 0
+    bb_sc = round(bb_sc * mean_reversion_mult)
 
     # 일봉 거래량
     if vol_ratio_d >= 2.0:   vol_sc = 10
@@ -580,11 +640,13 @@ def calc_btc_composite(fg_value, rsi_d, bb_pct, vol_ratio_d, trend, ret_7d=0,
     elif vol_ratio_d >= 1.0: vol_sc = 5
     elif vol_ratio_d >= 0.6: vol_sc = 2
     else:                    vol_sc = 0
+    vol_sc = round(vol_sc * volume_mult)
 
     # 추세
     if trend == "UPTREND":    tr_sc = 12
     elif trend == "SIDEWAYS": tr_sc = 6
     else:                     tr_sc = 0
+    tr_sc = round(tr_sc * momentum_mult)
 
     # ── 온체인 신호 (신규) ──
 
@@ -699,6 +761,7 @@ def calc_btc_composite(fg_value, rsi_d, bb_pct, vol_ratio_d, trend, ret_7d=0,
         weights = _load_ic_weights()
         if weights:
             components["total"] = _apply_weighted_score(components, weights=weights)
+    components["total"] = max(0, min(int(round(float(components.get("total", 0) or 0))), 100))
 
     return components
 
@@ -1271,6 +1334,20 @@ def execute_trade(
             return _result("INSUFFICIENT_KRW")
 
         if not DRY_RUN:
+            if _smart_router and invest_krw >= 5_000_000:
+                try:
+                    route = _smart_router.decide(
+                        symbol="KRW-BTC",
+                        side="buy",
+                        total_qty=invest_krw / max(price, 1),
+                        market="btc",
+                        price_hint=price,
+                    )
+                    log.info(f"SmartRouter decision: {route.route} for {invest_krw:,.0f} KRW")
+                    if route.route == "TWAP":
+                        log.info("TWAP suggested but using MARKET for BTC liquidity")
+                except Exception as e:
+                    log.warning(f"SmartRouter failed, fallback to MARKET: {e}")
             result = _upbit_call(upbit.buy_market_order, "KRW-BTC", invest_krw, max_retries=1)
             if result is None or not isinstance(result, dict) or "error" in result:
                 log.error(f"Upbit 매수 주문 실패: {result}")

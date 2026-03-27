@@ -30,6 +30,20 @@ except ImportError:  # pragma: no cover - optional runtime dependency
 
 MODEL_DIR = Path(__file__).resolve().parents[1] / "brain" / "ml" / "btc"
 MODEL_DIR.mkdir(parents=True, exist_ok=True)
+FEATURE_COLS = [
+    "rsi_14",
+    "macd",
+    "macd_signal",
+    "macd_histogram",
+    "bb_pos",
+    "volume_ratio_20",
+    "kimchi_premium",
+    "fear_greed",
+    "rsi_14_1h",
+    "ma_ratio_1h",
+    "volatility_20",
+    "volatility_ratio",
+]
 
 
 @dataclass
@@ -108,13 +122,7 @@ def _calc_macd(series: pd.Series) -> tuple[pd.Series, pd.Series]:
 
 
 def build_features(frame: pd.DataFrame) -> pd.DataFrame:
-    """기본 기술지표 피처 생성.
-
-    TODO:
-    - 김치프리미엄 히스토리 조인
-    - Fear&Greed 시계열 조인
-    - 15분/1시간 멀티타임프레임 피처 확장
-    """
+    """기본 기술지표 피처 생성."""
     if frame.empty:
         return frame
 
@@ -138,9 +146,42 @@ def build_features(frame: pd.DataFrame) -> pd.DataFrame:
     df["bb_pos"] = ((df["close"] - df["bb_lower"]) / band_width).clip(0, 1)
     df["volume_ratio_20"] = df["volume"] / df["volume"].rolling(20).mean()
 
-    # 실데이터 연동 전 기본값
-    df["kimchi_premium"] = 0.0
-    df["fear_greed"] = 50.0
+    try:
+        import pyupbit
+        upbit_price = pyupbit.get_current_price("KRW-BTC")
+        import requests
+        binance_resp = requests.get(
+            "https://api.binance.com/api/v3/ticker/price",
+            params={"symbol": "BTCUSDT"},
+            timeout=5,
+        )
+        binance_price = float(binance_resp.json()["price"])
+        fx_resp = requests.get("https://api.exchangerate-api.com/v4/latest/USD", timeout=5)
+        usd_krw = fx_resp.json()["rates"]["KRW"]
+        kimchi = ((upbit_price / (binance_price * usd_krw)) - 1) * 100
+    except Exception:
+        kimchi = 0.0
+    df["kimchi_premium"] = kimchi
+
+    try:
+        import requests
+        response = requests.get("https://api.alternative.me/fng/?limit=1", timeout=5)
+        fear_greed = int(response.json()["data"][0]["value"])
+    except Exception:
+        fear_greed = 50.0
+    df["fear_greed"] = fear_greed
+
+    if len(df) >= 12:
+        close_1h = df["close"].rolling(12).apply(lambda x: x.iloc[-1], raw=False)
+        df["rsi_14_1h"] = _calc_rsi(close_1h, 14)
+        df["ma_ratio_1h"] = df["close"] / df["close"].rolling(60).mean()
+    else:
+        df["rsi_14_1h"] = df["rsi_14"]
+        df["ma_ratio_1h"] = 1.0
+
+    returns = df["close"].pct_change()
+    df["volatility_20"] = returns.rolling(20).std()
+    df["volatility_ratio"] = returns.rolling(5).std() / returns.rolling(20).std().clip(lower=1e-8)
     return df
 
 
@@ -157,18 +198,8 @@ def build_training_dataset(
     future_ret = (future_close / df["close"]) - 1.0
     df["target"] = (future_ret >= config.target_return).astype(int)
 
-    feature_cols = [
-        "rsi_14",
-        "macd",
-        "macd_signal",
-        "macd_histogram",
-        "bb_pos",
-        "volume_ratio_20",
-        "kimchi_premium",
-        "fear_greed",
-    ]
-    clean = df.dropna(subset=feature_cols + ["target"]).copy()
-    X = clean[feature_cols]
+    clean = df.dropna(subset=FEATURE_COLS + ["target"]).copy()
+    X = clean[FEATURE_COLS]
     y = clean["target"].astype(int)
     return X, y
 
