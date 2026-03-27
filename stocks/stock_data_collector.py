@@ -24,7 +24,7 @@ import json
 import time
 import sys
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -400,7 +400,7 @@ def get_dart_financials(corp_code: str, stock_code: str) -> dict:
     if not DART_KEY or not corp_code:
         return {}
     try:
-        base_year = datetime.now().year - 1
+        base_year = datetime.now(timezone.utc).year - 1
         years = [base_year, base_year - 1]
 
         for year in years:
@@ -489,9 +489,9 @@ def collect_financials():
             row = {
                 'stock_code': code,
                 'stock_name': name,
-                'fiscal_year': datetime.now().year - 1,
+                'fiscal_year': datetime.now(timezone.utc).year - 1,
                 **financials,
-                'updated_at': datetime.now().isoformat(),
+                'updated_at': datetime.now(timezone.utc).isoformat(),
             }
 
             supabase.table('financial_statements').upsert(
@@ -518,14 +518,14 @@ def cleanup_old_data():
         return
 
     try:
-        cutoff_daily = (datetime.now() - timedelta(days=90)).strftime('%Y-%m-%d')
+        cutoff_daily = (datetime.now(timezone.utc) - timedelta(days=90)).strftime('%Y-%m-%d')
         supabase.table('daily_ohlcv').delete().lt('date', cutoff_daily).execute()
         log('90일 이전 일봉 데이터 정리 완료', 'OK')
     except Exception as e:
         log(f'일봉 정리 실패: {e}', 'WARN')
 
     try:
-        cutoff_intraday = (datetime.now() - timedelta(days=7)).isoformat()
+        cutoff_intraday = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
         supabase.table('intraday_ohlcv').delete().lt('datetime', cutoff_intraday).execute()
         log('7일 이전 분봉 데이터 정리 완료', 'OK')
     except Exception as e:

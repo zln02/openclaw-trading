@@ -92,11 +92,11 @@ class DailyReportGenerator:
         self.supabase = supabase_client or get_supabase()
 
     def should_send_now(self, as_of: Optional[datetime] = None, target_hour_kst: int = 22) -> bool:
-        now = as_of or datetime.now()
+        now = as_of or datetime.now(timezone.utc)
         return now.hour == int(target_hour_kst)
 
     def _get_today_start(self) -> str:
-        return datetime.now().date().isoformat()
+        return datetime.now(timezone.utc).date().isoformat()
 
     def _load_btc_state(self) -> dict:
         """마지막 BTC 복합스코어/추세를 brain 파일에서 읽음."""
@@ -145,7 +145,7 @@ class DailyReportGenerator:
 
     def collect_context(self) -> DailyReportContext:
         today = self._get_today_start()
-        ctx = DailyReportContext(date_str=datetime.now().strftime("%m/%d"))
+        ctx = DailyReportContext(date_str=datetime.now(timezone.utc).strftime("%m/%d"))
 
         if self.supabase:
             try:
@@ -317,7 +317,7 @@ class DailyReportGenerator:
 
     def build_markdown(self, ctx: DailyReportContext, report_date: str) -> str:
         """Legacy markdown formatter retained for older tests and integrations."""
-        date_label = report_date or ctx.date_str or datetime.now().date().isoformat()
+        date_label = report_date or ctx.date_str or datetime.now(timezone.utc).date().isoformat()
         pnl_pct = ctx.today_pnl_pct if ctx.today_pnl_pct else ctx.btc_pnl_pct
         pnl_abs = ctx.today_pnl_abs if ctx.today_pnl_abs else ctx.total_pnl
         trade_count = ctx.trade_count or (ctx.btc_buys + ctx.kr_buys + ctx.us_buys)
@@ -382,7 +382,7 @@ def _cli() -> int:
 
     out = gen.run(send=not args.no_send)
     import json as _json
-    print(_json.dumps(out, ensure_ascii=False, indent=2, default=str))
+    log.info(_json.dumps(out, ensure_ascii=False, indent=2, default=str))
     return 0
 
 

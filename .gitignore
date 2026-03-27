@@ -1,5 +1,6 @@
 # Python
 __pycache__/
+pycache/
 *.pyc
 *.pyo
 *.pkl
@@ -19,6 +20,7 @@ secretary/.venv/
 .docker-secrets/
 skills/**/.env
 *.log
+brain/ml/backup_*
 **/kiwoom_token.json
 .last_daily_alert_sent
 secretary/.env
@@ -38,6 +40,7 @@ stocks/today_strategy.json
 # OS
 .DS_Store
 node_modules/
+dashboard/node_modules/
 
 # Backups
 *.bak
@@ -65,6 +68,9 @@ backtest/results/
 # Excluded directories
 archive/
 logs/
+prometheus_data/
+grafana_data/
+/.pytest_cache/
 
 # gog binary (Google Sheets CLI, 22 MB — 로컬 전용)
 gog-docker

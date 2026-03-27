@@ -19,13 +19,13 @@ import json
 import sys
 import requests
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from common.env_loader import load_env
 from common.logger import get_logger
-from common.config import STOCK_PREMARKET_LOG
+from common.config import STOCK_PREMARKET_LOG, WORKSPACE_DIR
 
 load_env()
 _log = get_logger("stock_premarket", STOCK_PREMARKET_LOG)
@@ -43,7 +43,7 @@ SUPABASE_KEY = os.environ.get('SUPABASE_SECRET_KEY', '')
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if (SUPABASE_URL and SUPABASE_KEY) else None
 kiwoom = KiwoomClient()
 
-STRATEGY_PATH = Path('/home/wlsdud5035/.openclaw/workspace/stocks/today_strategy.json')
+STRATEGY_PATH = Path(WORKSPACE_DIR) / 'stocks' / 'today_strategy.json'
 
 # 감시 종목 TOP50 (v3)
 WATCHLIST = [
@@ -412,12 +412,12 @@ def get_yesterday_results() -> str:
     if not supabase:
         return '전날 매매 데이터 없음'
     try:
-        yesterday = (datetime.now() - timedelta(days=1)).date().isoformat()
+        yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date().isoformat()
         trades = (
             supabase.table('trade_executions')
             .select('*')
             .gte('created_at', yesterday)
-            .lt('created_at', datetime.now().date().isoformat())
+            .lt('created_at', datetime.now(timezone.utc).date().isoformat())
             .execute()
             .data or []
         )
@@ -526,7 +526,7 @@ def analyze_with_ai(
 
 반드시 아래 JSON만 출력:
 {{
-  "date": "{datetime.now().date().isoformat()}",
+  "date": "{datetime.now(timezone.utc).date().isoformat()}",
   "market_outlook": "강세|중립|약세",
   "risk_level": "낮음|보통|높음",
   "sector_view": {{"반도체": "긍정|중립|부정", ...}},
@@ -554,7 +554,7 @@ def analyze_with_ai(
             raise ValueError(f'JSON 파싱 불가: {raw[:100]}')
 
         # 필수 필드 보정
-        strategy['date'] = datetime.now().date().isoformat()
+        strategy['date'] = datetime.now(timezone.utc).date().isoformat()
         strategy.setdefault('market_outlook', '중립')
         strategy.setdefault('risk_level', '보통')
         strategy.setdefault('top_picks', [])
@@ -596,7 +596,7 @@ def generate_rule_based_strategy(indicators: list) -> dict:
         })
 
     return {
-        'date': datetime.now().date().isoformat(),
+        'date': datetime.now(timezone.utc).date().isoformat(),
         'market_outlook': '중립',
         'risk_level': '보통',
         'sector_view': {},

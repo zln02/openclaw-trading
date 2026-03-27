@@ -17,7 +17,7 @@ import json
 import os
 import shutil
 import subprocess
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, List, Optional
 
@@ -292,7 +292,7 @@ def append_trade(
     if not SHEET_ID and not excel_path:
         return False
 
-    date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
     # 가격 포맷팅
     if isinstance(price, (int, float)):

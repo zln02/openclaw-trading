@@ -4,7 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -75,7 +75,7 @@ class WeeklyReportGenerator:
             return "Failed to read strategy reviewer result."
 
     def build_markdown(self, ctx: WeeklyReportContext, week_label: Optional[str] = None) -> str:
-        label = week_label or datetime.now().strftime("%Y-W%W")
+        label = week_label or datetime.now(timezone.utc).strftime("%Y-W%W")
         return (
             f"## Weekly Trading Report ({label})\n\n"
             f"- **Weekly PnL**: {ctx.weekly_pnl_pct:+.2f}% ({ctx.weekly_pnl_abs:+,.0f})\n"
@@ -117,7 +117,7 @@ def _cli() -> int:
     args = parser.parse_args()
 
     out = WeeklyReportGenerator().run(send=not args.no_send)
-    print(json.dumps(out, ensure_ascii=False, indent=2))
+    log.info(json.dumps(out, ensure_ascii=False, indent=2))
     return 0
 
 

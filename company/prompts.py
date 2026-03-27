@@ -188,7 +188,7 @@ QA = f"""{_BASE}
 
 ### 검토 항목
 - print() 사용 → get_logger() 교체 여부
-- log.warn() → log.warning() (deprecated)
+- log.warning() 사용 여부 확인
 - bare except: → 구체적 예외 처리
 - 하드코딩된 값 (API key, 수치 등)
 - 타입 힌트 누락

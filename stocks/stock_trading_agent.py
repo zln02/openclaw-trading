@@ -17,15 +17,15 @@ import sys
 import requests
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TypedDict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from common.env_loader import load_env
 from common.telegram import send_telegram as _tg_send
-from common.supabase_client import get_supabase
+from common.supabase_client import _reset_client, get_supabase
 from common.logger import get_logger
 from common.retry import retry, retry_call
-from common.config import STOCK_TRADING_LOG
+from common.config import ML_BLEND_CONFIG, STOCK_TRADING_LOG, WORKSPACE_DIR
 from common.equity_loader import (
     append_equity_snapshot,
     get_effective_market_weight,
@@ -45,6 +45,7 @@ except ImportError:
 
 load_env()
 _log = get_logger("stock_agent", STOCK_TRADING_LOG)
+KST = timezone(timedelta(hours=9))
 
 sys.path.insert(0, str(Path(__file__).parent))
 from kiwoom_client import KiwoomClient
@@ -57,6 +58,21 @@ OPENAI_KEY = os.environ.get('OPENAI_API_KEY', '')
 supabase = get_supabase()
 kiwoom = KiwoomClient()
 _kr_drift_cache: dict = {}
+_last_known_state: dict = {
+    "open_positions": [],
+    "positions_by_code": {},
+}
+
+
+class KospiSentiment(TypedDict):
+    rsi: float
+    msg: str
+
+
+class WeeklyTrend(TypedDict, total=False):
+    trend: str
+    ema5: float
+    ema10: float
 
 RISK = {
     "invest_ratio": 0.25,
@@ -86,6 +102,22 @@ RISK = {
     "volatility_sizing": True,           # ATR 기반 포지션 사이징
 }
 
+# --- Level 5: 자동 파라미터 반영 ---
+try:
+    from quant.param_optimizer import load_best_params as _load_opt_params
+    _opt_params = _load_opt_params()
+    if _opt_params:
+        _risk_overrideable = {"stop_loss", "invest_ratio", "max_positions", "cooldown_minutes"}
+        _applied = {}
+        for _k, _v in _opt_params.items():
+            if _k in _risk_overrideable and _v is not None:
+                RISK[_k] = _v
+                _applied[_k] = _v
+        if _applied:
+            _log.info(f"[Level5] agent_params 적용: {_applied}")
+except Exception as _e:
+    _log.debug(f"Level5 agent_params 로드 스킵: {_e}")
+
 RULES = {
     "buy_rsi_max": 45,
     "buy_bb_max": 50,
@@ -105,7 +137,7 @@ RULES = {
 def log(msg: str, level: str = "INFO"):
     """Backward-compat wrapper routing to structured logger."""
     _dispatch = {
-        "INFO": _log.info, "WARN": _log.warn,
+        "INFO": _log.info, "WARN": _log.warning, "WARNING": _log.warning,
         "ERROR": _log.error, "TRADE": _log.trade,
     }
     _dispatch.get(level, _log.info)(msg)
@@ -125,7 +157,8 @@ def _load_kr_ml_drift_report(force: bool = False) -> dict:
         return _kr_drift_cache
     try:
         _kr_drift_cache = json.loads(path.read_text(encoding='utf-8'))
-    except Exception:
+    except Exception as e:
+        _log.debug(f'KR ML drift 리포트 로드 실패: {e}')
         _kr_drift_cache = {}
     return _kr_drift_cache
 
@@ -169,7 +202,7 @@ def _apply_kr_drift_gate(signal: dict) -> dict:
 
 
 def is_market_open() -> bool:
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     if now.weekday() >= 5:
         return False
     t = now.hour * 100 + now.minute
@@ -211,7 +244,7 @@ def _calc_ema(data: list, period: int) -> float:
     return e
 
 
-def get_kospi_sentiment() -> dict:
+def get_kospi_sentiment() -> KospiSentiment:
     """코스피 시장 심리 (RSI 기반)"""
     cache_key = 'kospi_sentiment'
     if cache_key in _cache:
@@ -245,7 +278,7 @@ def get_kospi_sentiment() -> dict:
         return {'rsi': 50, 'msg': '⚪ 코스피 조회 실패 — 중립 처리'}
 
 
-def get_weekly_trend(code: str) -> dict:
+def get_weekly_trend(code: str) -> WeeklyTrend:
     """주봉 EMA 5/10 기반 추세 (캐싱)"""
     cache_key = f'weekly_{code}'
     if cache_key in _cache:
@@ -298,11 +331,13 @@ def get_stock_news(stock_name: str) -> str:
                         headlines.append(title.strip())
                 if headlines:
                     break
-            except Exception:
+            except Exception as e:
+                _log.debug(f'뉴스 RSS 조회 실패: {e}')
                 continue
 
         return '\n'.join(headlines[:3]) if headlines else '관련 뉴스 없음'
-    except Exception:
+    except Exception as e:
+        _log.debug(f'뉴스 조회 실패: {e}')
         return '뉴스 조회 실패'
 
 
@@ -310,7 +345,7 @@ def get_investor_trend_krx(stock_code: str) -> dict:
     """KRX 투자자별 매매동향 (당일 기준)"""
     try:
         url = 'http://data.krx.co.kr/comm/bldAttendant/getJsonData.cmd'
-        today = datetime.now().strftime('%Y%m%d')
+        today = datetime.now(timezone.utc).strftime('%Y%m%d')
         payload = {
             'bld': 'dbms/MDC/STAT/standard/MDCSTAT02203',
             'locale': 'ko_KR',
@@ -340,7 +375,8 @@ def get_investor_trend_krx(stock_code: str) -> dict:
         def _parse(v: str) -> int:
             try:
                 return int(str(v).replace(',', ''))
-            except Exception:
+            except Exception as e:
+                log(f"_parse failed: {e}", 'WARN')
                 return 0
         return {
             'foreign_net': _parse(row.get('FRGN_NET_BUY_QTY', '0')),
@@ -412,7 +448,8 @@ def calc_momentum_score(code: str) -> dict:
             'vol_ratio': round(vol_ratio, 2),
             'near_high': round(nearness, 1),
         }
-    except Exception:
+    except Exception as e:
+        log(f"score calculation failed: {e}", 'WARN')
         return {'score': 0, 'grade': 'F'}
 
 
@@ -567,16 +604,24 @@ def get_indicators(code: str) -> dict:
 def get_open_positions() -> list:
     """현재 열린 포지션 목록"""
     try:
-        return (
+        positions = (
             supabase.table('trade_executions')
             .select('*')
             .eq('result', 'OPEN')
             .execute()
             .data or []
         )
+        _last_known_state["open_positions"] = positions
+        positions_by_code = {}
+        for pos in positions:
+            code = pos.get("stock_code")
+            if code:
+                positions_by_code.setdefault(code, []).append(pos)
+        _last_known_state["positions_by_code"] = positions_by_code
+        return positions
     except Exception as e:
-        log(f'포지션 조회 실패: {e}', 'ERROR')
-        return []
+        log(f'포지션 조회 실패, last known state 사용: {e}', 'ERROR')
+        return list(_last_known_state.get("open_positions", []))
 
 
 def _get_kr_market_weight(account_equity: float) -> float:
@@ -597,7 +642,8 @@ def _estimate_atr_pct_kr(code: str, price: float) -> float:
         diffs = [abs(float(closes[i] - closes[i - 1])) for i in range(1, len(closes))]
         atr = sum(diffs[-14:]) / min(len(diffs), 14) if diffs else 0.0
         return atr / price if price > 0 else 0.0
-    except Exception:
+    except Exception as e:
+        log(f"value extraction failed: {e}", 'WARN')
         return 0.0
 
 
@@ -668,7 +714,7 @@ def _apply_drawdown_guard_kr() -> bool:
 def get_position_for_stock(code: str) -> list:
     """특정 종목의 열린 포지션"""
     try:
-        return (
+        positions = (
             supabase.table('trade_executions')
             .select('*')
             .eq('stock_code', code)
@@ -676,9 +722,12 @@ def get_position_for_stock(code: str) -> list:
             .execute()
             .data or []
         )
+        if positions:
+            _last_known_state.setdefault("positions_by_code", {})[code] = positions
+        return positions
     except Exception as e:
-        log(f'종목 포지션 조회 실패 {code}: {e}', 'ERROR')
-        return []
+        log(f'종목 포지션 조회 실패 {code}, last known state 사용: {e}', 'ERROR')
+        return list(_last_known_state.get("positions_by_code", {}).get(code, []))
 
 
 def calc_avg_entry_price(positions: list) -> float:
@@ -714,7 +763,7 @@ def check_cooldown(code: str) -> bool:
             .data or []
         )
         return len(recent) > 0
-    except Exception:
+    except (TypeError, ValueError, KeyError):
         return False
 
 
@@ -724,13 +773,14 @@ def check_cooldown(code: str) -> bool:
 def check_daily_loss() -> bool:
     """오늘 일일 손실 한도 도달 시 True (거래 중단)"""
     try:
-        today = datetime.now(timezone.utc).date().isoformat()  # UTC 기준으로 Supabase 타임스탬프와 일치
+        today = datetime.now(KST).date()
+        today_start = datetime.combine(today, datetime.min.time()).replace(tzinfo=KST)
         closed_today = (
             supabase.table('trade_executions')
             .select('*')
             .eq('result', 'CLOSED')
             .eq('trade_type', 'SELL')
-            .gte('created_at', today)
+            .gte('created_at', today_start.isoformat())
             .execute()
             .data or []
         )
@@ -919,6 +969,16 @@ def analyze_with_ai(
     supply: dict = None,
 ) -> dict:
     """AI 분석 (실패 시 룰 기반 fallback)"""
+    def _parse_ai_response(raw: str) -> dict:
+        raw = raw.replace('```json', '').replace('```', '').strip()
+        if raw.startswith('{'):
+            return json.loads(raw)
+        start = raw.find('{')
+        end = raw.rfind('}') + 1
+        if start >= 0 and end > start:
+            return json.loads(raw[start:end])
+        raise ValueError(f'JSON 파싱 불가: {raw[:100]}')
+
     if not OPENAI_KEY:
         log('OpenAI 키 없음 → 룰 기반 판단', 'WARN')
         momentum = calc_momentum_score(stock['code'])
@@ -985,25 +1045,40 @@ def analyze_with_ai(
 반드시 아래 JSON만 출력:
 {{"action":"BUY|SELL|HOLD","confidence":0~100,"reason":"한줄이유"}}"""
 
-        res = client.chat.completions.create(
-            model='gpt-4o-mini',
-            messages=[{'role': 'user', 'content': prompt}],
-            temperature=0.1,
-            max_tokens=150,
-        )
-        raw = res.choices[0].message.content.strip()
-        # JSON 파싱 정리
-        raw = raw.replace('```json', '').replace('```', '').strip()
-        if raw.startswith('{'):
-            out = json.loads(raw)
-        else:
-            # JSON 부분만 추출
-            start = raw.find('{')
-            end = raw.rfind('}') + 1
-            if start >= 0 and end > start:
-                out = json.loads(raw[start:end])
-            else:
-                raise ValueError(f'JSON 파싱 불가: {raw[:100]}')
+        try:
+            res = retry_call(
+                lambda: client.chat.completions.create(
+                    model='gpt-4o-mini',
+                    messages=[{'role': 'user', 'content': prompt}],
+                    temperature=0.1,
+                    max_tokens=150,
+                ),
+                max_attempts=2,
+                base_delay=3,
+                default=None,
+            )
+            if res is None:
+                raise RuntimeError('OpenAI 응답 없음')
+            raw = res.choices[0].message.content.strip()
+            out = _parse_ai_response(raw)
+        except Exception as openai_err:
+            log(f'OpenAI 실패, Claude fallback: {openai_err}', 'WARN')
+            try:
+                import anthropic
+
+                claude = anthropic.Anthropic()
+                claude_resp = claude.messages.create(
+                    model="claude-haiku-4-5-20251001",
+                    max_tokens=500,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                response_text = ''.join(
+                    block.text for block in claude_resp.content if getattr(block, 'type', '') == 'text'
+                ).strip()
+                out = _parse_ai_response(response_text)
+            except Exception as claude_err:
+                log(f'Claude도 실패: {claude_err}', 'WARN')
+                raise
 
         # 보정: 거래량 2배 이상 + BUY면 신뢰도 +10
         if out.get('action') == 'BUY' and indicators.get('vol_ratio', 1.0) >= 2.0:
@@ -1046,6 +1121,7 @@ def get_trading_signal(
     """
     ml_confidence: float = 0.0
     ml_source: str = 'ML_NA'
+    ml_features: dict = {}
 
     # ML 신호 항상 수집
     try:
@@ -1054,6 +1130,7 @@ def get_trading_signal(
             ml = get_ml_signal(stock['code'])
             ml_confidence = float(ml.get('confidence', 0))
             ml_source = ml.get('source', 'ML_XGBOOST')
+            ml_features = ml.get('features', {})
             # 고확률 ML → 즉시 BUY
             ml_action = ml.get('action')
             if ml_action in ('BUY', 'STRONG_BUY', 'SWING_BUY') and ml_confidence >= 78:
@@ -1068,6 +1145,7 @@ def get_trading_signal(
                     'source': 'ML_MULTI_HORIZON',
                     'ml_score': ml_confidence,
                     'ml_confidence': ml_confidence,
+                    'ml_features': ml_features,
                 })
             if ml_confidence >= 65:
                 log(f"  ML 보조신호: {ml_confidence:.1f}% → 룰/AI 블렌딩", 'INFO')
@@ -1094,7 +1172,11 @@ def get_trading_signal(
     # ML 블렌딩: BUY 신호일 때만 confidence 조정 (rule 0.5 / ml 0.5)
     if base_signal.get('action') == 'BUY' and ml_confidence > 0:
         base_conf = float(base_signal.get('confidence', 0))
-        blended = round(base_conf * 0.5 + ml_confidence * 0.5, 1)
+        blended = round(
+            base_conf * ML_BLEND_CONFIG["rule_weight"]
+            + ml_confidence * ML_BLEND_CONFIG["ml_weight"],
+            1,
+        )
         base_signal['confidence'] = blended
         base_signal['reason'] = (
             base_signal.get('reason', '') + f" [ML블렌딩:{ml_confidence:.0f}%→{blended:.0f}%]"
@@ -1102,6 +1184,7 @@ def get_trading_signal(
 
     base_signal['ml_score'] = round(ml_confidence, 2)
     base_signal['ml_confidence'] = round(ml_confidence, 2)
+    base_signal['ml_features'] = ml_features
     return _apply_kr_drift_gate(base_signal)
 
 
@@ -1122,7 +1205,8 @@ def _get_stock_sector(code: str) -> str:
             _sector_map[w['code']] = w.get('sector', '')
         if code in _sector_map:
             return _sector_map[code]
-    except Exception:
+    except Exception as e:
+        _log.debug(f'섹터 맵 로드 실패: {e}')
         pass
     _sector_map[code] = ''
     return ''
@@ -1145,16 +1229,17 @@ def _get_dart_score(code: str) -> dict:
 # 전략 로드
 # ─────────────────────────────────────────────
 def get_today_strategy() -> dict:
-    path = Path('/home/wlsdud5035/.openclaw/workspace/stocks/today_strategy.json')
+    path = Path(WORKSPACE_DIR) / 'stocks' / 'today_strategy.json'
     if not path.exists():
         return {}
     try:
         d = json.loads(path.read_text())
-        if d.get('date') != datetime.now().date().isoformat():
+        if d.get('date') != datetime.now(timezone.utc).date().isoformat():
             log('장 전 전략 날짜 불일치 — 무시', 'WARN')
             return {}
         return d
-    except Exception:
+    except Exception as e:
+        _log.debug(f'장 전 전략 로드 실패: {e}')
         return {}
 
 
@@ -1237,7 +1322,7 @@ def execute_buy(
             s = (s or '2000-01-01T00:00:00').replace('Z', '').replace('+00:00', '')[:19]
             return datetime.fromisoformat(s)
         last_buy_time = max(_parse_created(p.get('created_at')) for p in existing)
-        hours_since = (datetime.now() - last_buy_time).total_seconds() / 3600
+        hours_since = (datetime.now(timezone.utc) - last_buy_time).total_seconds() / 3600
         min_hours = RISK.get('min_hours_between_splits', 4)
         if hours_since < min_hours:
             log(f'{name}: {split_stage}차 매수 대기 ({hours_since:.1f}시간/{min_hours}시간)', 'WARN')
@@ -1302,8 +1387,11 @@ def execute_buy(
             or summary.get('deposit', 0)
             or krw_balance
         )
-    except Exception as e:
+    except (ConnectionError, TimeoutError, ValueError) as e:
         log(f'잔고 조회 실패: {e}', 'ERROR')
+        return {'result': 'BALANCE_ERROR'}
+    except RuntimeError as e:
+        log(f'잔고 조회 런타임 실패: {e}', 'ERROR')
         return {'result': 'BALANCE_ERROR'}
 
     target_market_weight = get_effective_market_weight('KR')
@@ -1356,8 +1444,8 @@ def execute_buy(
                 elif atr_pct > 0.03:
                     invest_krw *= 0.8
                     log(f'{name}: 중변동성({atr_pct*100:.1f}%) — 포지션 20% 축소')
-        except Exception:
-            pass
+        except Exception as e:
+            _log.debug(f'{name} ATR 기반 포지션 조정 실패: {e}')
 
     if invest_krw < RISK['min_order_krw']:
         return {'result': 'INSUFFICIENT_KRW', 'available': invest_krw}
@@ -1385,6 +1473,18 @@ def execute_buy(
         decision = router_result.get('decision', {})
         slippage = router_result.get('slippage', {})
         log(f"{name} SmartRouter: {decision.get('route', 'MARKET')} / 슬리피지 {slippage.get('avg_abs_slippage_bps', 0):.1f}bps")
+    except ConnectionError as e:
+        log(f'{name} 매수 주문 연결 실패: {e}', 'ERROR')
+        send_telegram(f'❌ <b>{name} 매수 주문 실패</b>\n연결 오류: {e}')
+        return {'result': 'ORDER_FAILED', 'error': str(e)}
+    except TimeoutError as e:
+        log(f'{name} 매수 주문 타임아웃: {e}', 'ERROR')
+        send_telegram(f'❌ <b>{name} 매수 주문 실패</b>\n타임아웃: {e}')
+        return {'result': 'ORDER_FAILED', 'error': str(e)}
+    except ValueError as e:
+        log(f'{name} 매수 주문 값 오류: {e}', 'ERROR')
+        send_telegram(f'❌ <b>{name} 매수 주문 실패</b>\n파라미터 오류: {e}')
+        return {'result': 'ORDER_FAILED', 'error': str(e)}
     except Exception as e:
         log(f'{name} 매수 주문 실패: {e}', 'ERROR')
         send_telegram(f'❌ <b>{name} 매수 주문 실패</b>\n{e}')
@@ -1405,6 +1505,7 @@ def execute_buy(
         'split_stage': split_stage,
         'ml_score': signal.get('ml_score', 0.0),
         'ml_confidence': signal.get('ml_confidence', 0.0),
+        'ml_features_json': json.dumps(signal.get('ml_features', {})) if signal.get('ml_features') else None,
         'composite_score': signal.get('confidence', 0.0),
         'source': signal.get('source', 'AI'),
         'drift_status': signal.get('drift_status', ''),
@@ -1421,7 +1522,7 @@ def execute_buy(
             _sys.path.insert(0, _WORKSPACE_PATH)
         from quant.factors.registry import calc_all, FactorContext
         _fctx = FactorContext()
-        _today_iso = datetime.now().date().isoformat()
+        _today_iso = datetime.now(timezone.utc).date().isoformat()
         _all_factors = calc_all(_today_iso, symbol=code, market='kr', context=_fctx)
         _top5 = dict(
             sorted(_all_factors.items(), key=lambda x: abs(x[1]), reverse=True)[:5]
@@ -1456,8 +1557,8 @@ def execute_buy(
     if _sheets_append:
         try:
             _sheets_append("kr", "매수", code, price, quantity, None, signal.get("reason", ""))
-        except Exception:
-            pass
+        except Exception as e:
+            _log.debug(f'{name} sheets 매수 기록 실패: {e}')
 
     return {
         'result': 'BUY',
@@ -1507,6 +1608,21 @@ def execute_sell(stock: dict, signal: dict, indicators: dict, reason_prefix: str
         decision = router_result.get('decision', {})
         slippage = router_result.get('slippage', {})
         log(f"{name} SmartRouter: {decision.get('route', 'MARKET')} / 슬리피지 {slippage.get('avg_abs_slippage_bps', 0):.1f}bps")
+    except ConnectionError as e:
+        log(f'{name} 매도 주문 연결 실패: {e}', 'ERROR')
+        err_str = str(e)
+        send_telegram(f'❌ <b>{name} 매도 주문 실패</b>\n연결 오류: {e}')
+        return {'result': 'ORDER_FAILED', 'error': err_str}
+    except TimeoutError as e:
+        log(f'{name} 매도 주문 타임아웃: {e}', 'ERROR')
+        err_str = str(e)
+        send_telegram(f'❌ <b>{name} 매도 주문 실패</b>\n타임아웃: {e}')
+        return {'result': 'ORDER_FAILED', 'error': err_str}
+    except ValueError as e:
+        log(f'{name} 매도 주문 값 오류: {e}', 'ERROR')
+        err_str = str(e)
+        send_telegram(f'❌ <b>{name} 매도 주문 실패</b>\n파라미터 오류: {e}')
+        return {'result': 'ORDER_FAILED', 'error': err_str}
     except Exception as e:
         log(f'{name} 매도 주문 실패: {e}', 'ERROR')
         err_str = str(e)
@@ -1594,8 +1710,8 @@ def execute_sell(stock: dict, signal: dict, indicators: dict, reason_prefix: str
             action = "손절" if pnl_pct < -2 else "익절" if pnl_pct > 2 else "매도"
             reason = f"{reason_prefix}{signal.get('reason', '') if isinstance(signal, dict) else ''}"
             _sheets_append("kr", action, code, price, total_qty, pnl_pct, reason)
-        except Exception:
-            pass
+        except Exception as e:
+            _log.debug(f'{name} sheets 매도 기록 실패: {e}')
 
     return {
         'result': 'SELL',
@@ -1743,6 +1859,12 @@ def check_stop_loss_take_profit():
                             f'수익: +{net_pnl_pct*100:.2f}% | {sell_qty}주 매도\n'
                             f'잔여 {remaining_qty}주 트레일링 보호'
                         )
+                    except ConnectionError as e:
+                        log(f'{name} 부분 익절 매도 연결 실패: {e}', 'ERROR')
+                    except TimeoutError as e:
+                        log(f'{name} 부분 익절 매도 타임아웃: {e}', 'ERROR')
+                    except ValueError as e:
+                        log(f'{name} 부분 익절 매도 파라미터 오류: {e}', 'ERROR')
                     except Exception as e:
                         log(f'{name} 부분 익절 매도 실패: {e}', 'ERROR')
                     time.sleep(0.3)
@@ -1770,8 +1892,9 @@ def check_stop_loss_take_profit():
                     )
                     for t in trades
                 )
-                holding_days = (datetime.now() - oldest_buy).days
-            except Exception:
+                holding_days = (datetime.now(timezone.utc) - oldest_buy).days
+            except Exception as e:
+                log(f"holding_days calculation failed: {e}", 'WARN')
                 holding_days = 0
 
             if holding_days >= 5 and net_pnl_pct < 0.01:
@@ -1839,6 +1962,18 @@ def run_trading_cycle():
     _kr_buy_blocked = False
     _regime_adj_cache = _get_regime_factor_adj()  # 레짐별 팩터 가중치 사이클 초기 로드
 
+    global supabase
+    try:
+        supabase = get_supabase()
+        if not supabase:
+            log('Supabase 미연결 — 이번 사이클 스킵', 'WARN')
+            return
+        supabase.table('trade_executions').select('trade_id').limit(1).execute()
+    except Exception as e:
+        log(f'Supabase 쿼리 실패, 재연결 시도: {e}', 'WARN')
+        _reset_client()
+        return
+
     # STOP 플래그 체크 (텔레그램 /stop 명령으로 생성)
     stop_flag = Path(__file__).parent / 'STOP_TRADING'
     if stop_flag.exists():
@@ -1886,7 +2021,7 @@ def run_trading_cycle():
         return
 
     # 오늘 신규 매수 건수 한도 체크
-    today = datetime.now().date().isoformat()
+    today = datetime.now(timezone.utc).date().isoformat()
     try:
         today_buys = (
             supabase.table('trade_executions')
@@ -1911,7 +2046,8 @@ def run_trading_cycle():
     try:
         from stock_premarket import WATCHLIST as _WL
         watchlist_all = [{'code': w['code'], 'name': w['name']} for w in _WL]
-    except Exception:
+    except Exception as e:
+        log(f"import fallback to DB: {e}", 'WARN')
         watchlist_all = get_watchlist_from_db()
 
     if strategy:

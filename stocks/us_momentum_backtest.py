@@ -15,7 +15,7 @@
 import sys
 import os
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Dict, Tuple
 
@@ -200,7 +200,7 @@ def save_all_to_supabase(all_scores: List[MomentumScore]) -> None:
     if not all_scores:
         return
 
-    run_date = datetime.utcnow().date().isoformat()
+    run_date = datetime.now(timezone.utc).date().isoformat()
     table = "us_momentum_signals"
 
     try:
@@ -401,4 +401,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

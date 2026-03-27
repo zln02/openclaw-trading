@@ -14,7 +14,7 @@
 
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 
 from supabase import create_client
 
@@ -28,7 +28,7 @@ def _load_env():
 
 
 def _log(msg: str, level: str = "INFO"):
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     prefix = {"INFO": "ℹ️", "WARN": "⚠️", "ERROR": "❌", "OK": "✅"}.get(level, "")
     print(f"[{ts}] {prefix} {msg}")
 

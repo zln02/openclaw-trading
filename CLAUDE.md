@@ -23,7 +23,7 @@ pytest -k "test_calc"                    # Filter by name
 
 ### Docker (production)
 ```bash
-# Launch all 5 services
+# Launch all 7 services
 docker compose up -d
 
 # Frontend changes require rebuild
@@ -44,7 +44,9 @@ Daily     08:30 → stocks/ml_model.py retrain (if ≥50 trades)
 
 ## Architecture
 
-**5 Docker services**: `dashboard` (FastAPI + React SPA, :8080), `btc-agent` (600s loop), `kr-agent`, `us-agent` (900s loop), `telegram-bot`
+**7 Docker services**: `dashboard` (FastAPI + React SPA, :8080), `btc-agent` (600s loop), `kr-agent` (600s loop), `us-agent` (900s loop), `telegram-bot`, `prometheus` (:9090), `grafana` (:3000)
+
+**OpenClaw Gateway**: AI 비서 `제이(J)` 통합 레이어. 텔레그램과 연결되고, 20개 스킬 묶음(`trading-ops`, `market-briefing`, `signal-query`, `trade-executor` 등)을 사용한다. Gateway port는 `18789`.
 
 **Backend** (`btc/btc_dashboard.py`): FastAPI mounts three route groups:
 - `btc/routes/btc_api.py` → `/api/btc/*`, `/api/candles`, `/api/trades`, etc.
@@ -60,6 +62,8 @@ Daily     08:30 → stocks/ml_model.py retrain (if ≥50 trades)
 - US: multi-factor momentum ranking → regime gate → dry-run log only
 
 **AI agents** (`agents/`): 5-agent Claude team — Orchestrator (opus-4-6), MarketAnalyst + RiskManager (sonnet-4-6), NewsAnalyst + Reporter (haiku-4-5). Run via `python -m agents.trading_agent_team --market btc`.
+
+**Gateway Agent** (`agents/gateway_agent.py`): 텔레그램 자연어 인터페이스 보조 계층. `stocks/telegram_bot.py`의 `/ask`, `/market`, `/review`에서 직접 import되어 현재도 사용 중이다.
 
 **Level 5 Research loop** (`quant/`): weekly automated IC/IR evaluation → parameter auto-tuning → live agent feedback.
 

@@ -1,5 +1,5 @@
 """BTC-related API endpoints."""
-import os, time, json, requests, asyncio
+import os, time, json, requests, asyncio, math
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from fastapi import APIRouter, Query
@@ -150,6 +150,25 @@ def get_upbit_cache():
     return _upbit_cache
 
 
+def _safe_float(val, default: float = 0.0) -> float:
+    """Replace NaN/Inf with a safe default."""
+    try:
+        f = float(val)
+    except (TypeError, ValueError):
+        return default
+    return default if (math.isnan(f) or math.isinf(f)) else f
+
+
+def _sanitize_floats(obj):
+    if isinstance(obj, float):
+        return 0.0 if (math.isnan(obj) or math.isinf(obj)) else obj
+    if isinstance(obj, dict):
+        return {k: _sanitize_floats(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_sanitize_floats(v) for v in obj]
+    return obj
+
+
 # ── BTC page ────────────────────────────────────────────
 # @router.get("/", response_class=HTMLResponse)
 # async def index():
@@ -167,15 +186,20 @@ def _compute_composite_sync():
     if df.empty:
         return {"error": "데이터 없음"}
     close = df["Close"].squeeze()
-    rsi_d = float(_RSI(close, window=14).rsi().iloc[-1])
+    latest_close = _safe_float(close.iloc[-1], 0.0)
+    rsi_d = _safe_float(_RSI(close, window=14).rsi().iloc[-1], 50.0)
     bb = _BB(close, window=20)
-    bb_h, bb_l = float(bb.bollinger_hband().iloc[-1]), float(bb.bollinger_lband().iloc[-1])
-    bb_pct = (float(close.iloc[-1]) - bb_l) / (bb_h - bb_l) * 100 if bb_h > bb_l else 50
+    bb_h = _safe_float(bb.bollinger_hband().iloc[-1], latest_close)
+    bb_l = _safe_float(bb.bollinger_lband().iloc[-1], latest_close)
+    bb_pct = ((latest_close - bb_l) / (bb_h - bb_l) * 100) if bb_h > bb_l else 50.0
     vol = df["Volume"].squeeze()
-    vol_avg = float(vol.rolling(20).mean().iloc[-1])
-    vol_ratio_d = float(vol.iloc[-1]) / vol_avg if vol_avg > 0 else 1.0
-    ret_7d = (float(close.iloc[-1]) / float(close.iloc[-8]) - 1) * 100 if len(close) > 8 else 0
-    ret_30d = (float(close.iloc[-1]) / float(close.iloc[-31]) - 1) * 100 if len(close) > 31 else 0
+    vol_avg = _safe_float(vol.rolling(20).mean().iloc[-1], 1.0)
+    latest_vol = _safe_float(vol.iloc[-1], 0.0)
+    vol_ratio_d = latest_vol / vol_avg if vol_avg > 0 else 1.0
+    close_7d = _safe_float(close.iloc[-8], 0.0) if len(close) > 8 else 0.0
+    close_30d = _safe_float(close.iloc[-31], 0.0) if len(close) > 31 else 0.0
+    ret_7d = ((latest_close / close_7d) - 1) * 100 if close_7d > 0 else 0.0
+    ret_30d = ((latest_close / close_30d) - 1) * 100 if close_30d > 0 else 0.0
 
     fg_val = 50
     try:
@@ -194,16 +218,19 @@ def _compute_composite_sync():
         pr = supabase.table("btc_position").select("*").eq("status", "OPEN").order("entry_time", desc=True).limit(1).execute()
         pos = pr.data[0] if pr.data else None
 
-    cur_price = float(close.iloc[-1])
+    cur_price = latest_close
     fx_rate = _get_fx_rate()  # Real-time FX rate instead of hardcoded 1450
     pos_pnl = None
     if pos:
-        entry_p = float(pos.get("entry_price", 0))
+        entry_p = _safe_float(pos.get("entry_price", 0), 0.0)
         if entry_p > 0:
-            pos_pnl = {"pnl_pct": round((cur_price * fx_rate - entry_p) / entry_p * 100, 2),
-                       "entry_price": entry_p, "quantity": pos.get("quantity", 0),
-                       "entry_krw": pos.get("entry_krw", 0),
-                       "current_fx_rate": fx_rate}
+            pos_pnl = {
+                "pnl_pct": round(_safe_float((cur_price * fx_rate - entry_p) / entry_p * 100, 0.0), 2),
+                "entry_price": entry_p,
+                "quantity": pos.get("quantity", 0),
+                "entry_krw": pos.get("entry_krw", 0),
+                "current_fx_rate": _safe_float(fx_rate, 0.0),
+            }
 
     buy_threshold = 50
     try:
@@ -212,19 +239,23 @@ def _compute_composite_sync():
     except Exception:
         pass
 
-    return {
+    return _sanitize_floats({
         "composite": comp,
         # 프론트엔드 호환을 위한 top-level 편의 키
         "composite_score": comp.get("total", 0),
         "bb_score": comp.get("bb", 0),
         "volume_score": comp.get("vol", 0),
         "trend_score": comp.get("trend", 0),
-        "fg_value": fg_val, "rsi_d": round(rsi_d, 1), "bb_pct": round(bb_pct, 1),
-        "vol_ratio_d": round(vol_ratio_d, 2), "trend": trend,
-        "ret_7d": round(ret_7d, 1), "ret_30d": round(ret_30d, 1),
+        "fg_value": fg_val,
+        "rsi_d": round(_safe_float(rsi_d, 50.0), 1),
+        "bb_pct": round(_safe_float(bb_pct, 50.0), 1),
+        "vol_ratio_d": round(_safe_float(vol_ratio_d, 1.0), 2),
+        "trend": trend,
+        "ret_7d": round(_safe_float(ret_7d, 0.0), 1),
+        "ret_30d": round(_safe_float(ret_30d, 0.0), 1),
         "buy_threshold": buy_threshold,
         "position": pos_pnl,
-    }
+    })
 
 
 @router.get("/api/btc/composite")
@@ -408,7 +439,8 @@ async def api_summary():
             result["us"] = {"positions": len(us_open), "invested_usd": round(us_invested, 2),
                             "symbols": [p["symbol"] for p in us_open]}
     except Exception as e:
-        result["error"] = str(e)
+        log.error(f"summary 조회 실패: {e}", exc_info=True)
+        result["error"] = "Internal server error"
     return result
 
 
@@ -817,8 +849,8 @@ async def get_agent_decisions(
         rows = query.order("created_at", desc=True).limit(limit).execute()
         return {"decisions": rows.data or []}
     except Exception as e:
-        log.warning(f"agent_decisions: {e}")
-        return {"decisions": [], "error": str(e)}
+        log.error(f"agent_decisions 조회 실패: {e}", exc_info=True)
+        return {"decisions": [], "error": "Internal server error"}
 
 
 @router.get("/api/decisions/{market}")
@@ -835,8 +867,8 @@ async def get_decisions_by_market(market: str, limit: int = 20):
         )
         return {"decisions": data.data or []}
     except Exception as e:
-        log.warning(f"decisions/{market}: {e}")
-        return {"decisions": [], "error": str(e)}
+        log.error(f"decisions/{market} 조회 실패: {e}", exc_info=True)
+        return {"decisions": [], "error": "Internal server error"}
 
 
 @router.get("/api/agent-performance")
@@ -846,8 +878,8 @@ async def get_agent_performance(period: str = Query(default="weekly")):
 
         return await AgentPerformanceTracker.fetch_summary(period=period)
     except Exception as e:
-        log.warning(f"agent_performance: {e}")
-        return {"items": [], "period": period, "error": str(e)}
+        log.error(f"agent_performance 조회 실패: {e}", exc_info=True)
+        return {"items": [], "period": period, "error": "Internal server error"}
 
 
 @router.get("/api/risk-metrics")
@@ -869,11 +901,11 @@ async def get_risk_metrics():
             "cross_market": cross_market,
         }
     except Exception as e:
-        log.warning(f"risk_metrics: {e}")
+        log.error(f"risk_metrics 조회 실패: {e}", exc_info=True)
         return {
             "circuit_breaker": {},
             "cross_market": {"risk_level": "UNKNOWN", "correlations": {}},
-            "error": str(e),
+            "error": "Internal server error",
         }
 
 

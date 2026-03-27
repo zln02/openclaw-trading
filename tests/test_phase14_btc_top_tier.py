@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pandas as pd
 
@@ -165,9 +165,11 @@ class BtcTradingAgentSafetyTests(unittest.TestCase):
         self.assertEqual(out["reason"], "upbit_sell_error")
 
     def test_run_trading_cycle_skips_on_missing_market_data(self) -> None:
+        fake_supabase = MagicMock()
+        fake_supabase.table.return_value.select.return_value.limit.return_value.execute.return_value = MagicMock(data=[])
         with patch.object(agent, "check_daily_loss", return_value=False), patch.object(
             agent, "get_market_data", return_value=None
-        ):
+        ), patch.object(agent, "get_supabase", return_value=fake_supabase), patch.object(agent, "supabase", fake_supabase):
             out = agent.run_trading_cycle()
 
         self.assertEqual(out["result"], "MARKET_DATA_UNAVAILABLE")

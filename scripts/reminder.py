@@ -17,7 +17,7 @@ import argparse
 import json
 import re
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 try:
@@ -108,7 +108,7 @@ def _parse_hm(s: str) -> tuple[int, int]:
 
 
 def _next_at(hour: int, minute: int) -> datetime:
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     t = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
     if t <= now:
         t += timedelta(days=1)
@@ -124,10 +124,10 @@ def cmd_add(args):
 
     if args.in_:
         delta = _parse_duration(args.in_)
-        ft = datetime.now() + delta
+        ft = datetime.now(timezone.utc) + delta
         r = {"id": rid, "type": "once", "msg": msg,
              "fire_time": ft.strftime("%Y-%m-%dT%H:%M:%S"),
-             "fired": False, "created": datetime.now().isoformat()}
+             "fired": False, "created": datetime.now(timezone.utc).isoformat()}
         mins = int(delta.total_seconds() // 60)
         label = f"{mins}분 후 ({ft.strftime('%H:%M')})"
 
@@ -136,14 +136,14 @@ def cmd_add(args):
         ft = _next_at(h, m)
         r = {"id": rid, "type": "once", "msg": msg,
              "fire_time": ft.strftime("%Y-%m-%dT%H:%M:%S"),
-             "fired": False, "created": datetime.now().isoformat()}
+             "fired": False, "created": datetime.now(timezone.utc).isoformat()}
         label = ft.strftime("%m/%d %H:%M")
 
     elif args.daily:
         h, m = _parse_hm(args.daily)
         r = {"id": rid, "type": "daily", "msg": msg,
              "hour": h, "minute": m, "active": True,
-             "created": datetime.now().isoformat()}
+             "created": datetime.now(timezone.utc).isoformat()}
         label = f"매일 {args.daily}"
 
     elif args.weekly:
@@ -152,7 +152,7 @@ def cmd_add(args):
         h, m = _parse_hm(parts[1])
         r = {"id": rid, "type": "weekly", "msg": msg,
              "weekday": wd, "hour": h, "minute": m,
-             "active": True, "created": datetime.now().isoformat()}
+             "active": True, "created": datetime.now(timezone.utc).isoformat()}
         label = f"매주 {WEEKDAY_KR.get(wd, wd)}요일 {parts[1]}"
 
     else:
@@ -197,7 +197,7 @@ def cmd_remove(args):
 def cmd_check(args):
     """1분마다 cron이 호출 — 만료된 리마인더 전송"""
     data  = _load()
-    now   = datetime.now()
+    now   = datetime.now(timezone.utc)
     today = now.strftime("%Y-%m-%d")
     changed = False
 

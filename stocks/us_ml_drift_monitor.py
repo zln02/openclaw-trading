@@ -5,7 +5,7 @@ import argparse
 import json
 import subprocess
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import numpy as np
@@ -55,7 +55,7 @@ def _ks_stat(expected: np.ndarray, actual: np.ndarray) -> dict:
 
 
 def load_recent_feature_matrix(lookback_days: int = 20) -> np.ndarray:
-    cutoff = (datetime.utcnow().date() - timedelta(days=max(lookback_days, 5))).isoformat()
+    cutoff = (datetime.now(timezone.utc).date() - timedelta(days=max(lookback_days, 5))).isoformat()
     all_rows = []
     for symbol in DEFAULT_SYMBOLS:
         try:
@@ -79,9 +79,9 @@ def build_drift_report() -> dict:
     X_recent = load_recent_feature_matrix(lookback_days=20)
 
     if X_train is None or data is None or len(X_train) == 0:
-        return {"market": "us", "status": "NO_TRAIN_DATA", "generated_at": datetime.utcnow().isoformat() + "Z"}
+        return {"market": "us", "status": "NO_TRAIN_DATA", "generated_at": datetime.now(timezone.utc).isoformat() + "Z"}
     if len(X_recent) == 0:
-        return {"market": "us", "status": "NO_RECENT_DATA", "generated_at": datetime.utcnow().isoformat() + "Z"}
+        return {"market": "us", "status": "NO_RECENT_DATA", "generated_at": datetime.now(timezone.utc).isoformat() + "Z"}
 
     rows = []
     max_psi = 0.0
@@ -129,7 +129,7 @@ def build_drift_report() -> dict:
         "label": "5d>=3%",
         "status": overall.upper(),
         "recommended_action": action,
-        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "generated_at": datetime.now(timezone.utc).isoformat() + "Z",
         "recent_samples": int(len(X_recent)),
         "training_samples": int(len(X_train)),
         "max_psi": round(max_psi, 6),

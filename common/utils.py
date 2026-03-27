@@ -2,7 +2,7 @@
 import json
 import os
 import tempfile
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any, Optional
 
 
@@ -67,5 +67,5 @@ def parse_day(value: Optional[Any] = None) -> date:
     if isinstance(value, date):
         return value
     if value is None:
-        return datetime.now().date()
+        return datetime.now(timezone.utc).date()
     return datetime.strptime(str(value)[:10], "%Y-%m-%d").date()

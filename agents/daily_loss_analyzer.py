@@ -13,16 +13,18 @@ from __future__ import annotations
 
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from common.env_loader import load_env
+from common.logger import get_logger
 from common.metrics import calc_trade_pnl
 from common.supabase_client import get_supabase
 from common.telegram import send_telegram
 
 load_env()
+log = get_logger("daily_loss_analyzer")
 
 BRAVE_API_KEY = os.environ.get("BRAVE_API_KEY", "")
 supabase = get_supabase()
@@ -59,7 +61,7 @@ def _search_news(symbol: str, market: str, date_str: str) -> str:
 
 def _fetch_loss_trades() -> list[dict]:
     """지난 24시간 손실 거래 조회 (BTC/KR/US 통합)."""
-    since = (datetime.now() - timedelta(hours=24)).isoformat()
+    since = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
     losses = []
 
     # BTC: btc_position (CLOSED)
@@ -181,5 +183,5 @@ def run() -> dict:
 
 if __name__ == "__main__":
     result = run()
-    print(result)
+    log.info(result)
     sys.exit(0 if result.get("ok") else 1)

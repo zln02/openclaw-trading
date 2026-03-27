@@ -130,7 +130,7 @@ class DARTRealtimeFilter:
         if cached is not None:
             return cached
 
-        today = datetime.now().strftime("%Y%m%d")
+        today = datetime.now(timezone.utc).strftime("%Y%m%d")
         rows: list[dict] = []
         for page_no in range(1, max(int(page_count), 1) + 1):
             resp = retry_call(

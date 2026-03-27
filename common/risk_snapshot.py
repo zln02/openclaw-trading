@@ -10,7 +10,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from common.config import BRAIN_PATH
 from common.equity_loader import load_all_positions
+from common.logger import get_logger
 from quant.risk.var_model import VaRModel, fetch_return_matrix
+
+log = get_logger("risk_snapshot")
 
 
 def _utc_now() -> datetime:
@@ -131,4 +134,4 @@ def save_risk_snapshot(snapshot: dict) -> Path:
 if __name__ == "__main__":
     out = build_risk_snapshot()
     path = save_risk_snapshot(out)
-    print(path)
+    log.info(f"snapshot saved: {path}")

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Callable, Dict, Iterable, List, Optional
 
 import requests
@@ -623,6 +623,6 @@ def factor_orderbook_imbalance(ctx: FactorContext, symbol: str, as_of_iso: str, 
 
 if __name__ == "__main__":
     ctx = FactorContext()
-    today = datetime.now().date().isoformat()
+    today = datetime.now(timezone.utc).date().isoformat()
     rows = calc_all(today, symbol="005930", market="kr", context=ctx)
     log.info("factor snapshot", symbol="005930", count=len(rows))

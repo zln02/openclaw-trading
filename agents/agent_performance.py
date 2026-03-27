@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import defaultdict
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from common.logger import get_logger
@@ -92,7 +92,7 @@ class AgentPerformanceTracker:
 
 
 def current_week_window() -> tuple[date, date]:
-    today = datetime.utcnow().date()
+    today = datetime.now(timezone.utc).date()
     week_start = today - timedelta(days=today.weekday())
     week_end = week_start + timedelta(days=6)
     return week_start, week_end

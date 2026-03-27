@@ -46,6 +46,19 @@ _SHARPE_HIGH = 1.5        # 이 이상이면 공격 허용
 _STOP_LOSS_TIGHTEN = 0.8  # stop_loss × 이 값 (더 타이트하게)
 _POS_SIZE_REDUCE = 0.85   # invest_ratio × 이 값
 _POS_SIZE_INCREASE = 1.10 # invest_ratio × 이 값 (sharpe 높을 때)
+PARAM_BOUNDS = {
+    "stop_loss": (-0.10, -0.01),
+    "take_profit": (0.02, 0.20),
+    "invest_ratio": (0.05, 0.50),
+    "trailing_stop": (0.005, 0.05),
+    "max_positions": (1, 10),
+    "max_trades_per_day": (1, 10),
+    "min_confidence": (30, 90),
+    "atr_multiplier": (0.5, 5.0),
+    "rsi_window": (5, 30),
+    "momentum_lookback": (3, 30),
+    "bb_window": (10, 50),
+}
 
 
 def _safe_float(v: Any, default: float = 0.0) -> float:
@@ -53,6 +66,26 @@ def _safe_float(v: Any, default: float = 0.0) -> float:
         return float(v) if v is not None else default
     except Exception:
         return default
+
+
+def _validate_param_bounds(params: Dict[str, Any]) -> Dict[str, Any]:
+    """파라미터 바운드 검증. 범위 초과 시 클램핑 + 경고."""
+    validated: Dict[str, Any] = {}
+    for key, value in params.items():
+        if key in PARAM_BOUNDS:
+            lo, hi = PARAM_BOUNDS[key]
+            if isinstance(value, (int, float)):
+                clamped = max(lo, min(hi, value))
+                if clamped != value:
+                    log.warning(
+                        f"파라미터 바운드 초과: {key}={value} → {clamped} (범위: {lo}~{hi})"
+                    )
+                validated[key] = clamped
+            else:
+                validated[key] = value
+        else:
+            validated[key] = value
+    return validated
 
 
 # ── Performance stats from Supabase ───────────────────────────────────────────
@@ -167,6 +200,7 @@ def _load_agent_params() -> Dict[str, Any]:
 
 def _save_agent_params(params: Dict[str, Any]) -> None:
     _AGENT_PARAMS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    params = _validate_param_bounds(params)
     params["updated"] = datetime.now(timezone.utc).isoformat()
     _AGENT_PARAMS_PATH.write_text(
         json.dumps(params, ensure_ascii=False, indent=2), encoding="utf-8"

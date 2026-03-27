@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from common.env_loader import load_env
@@ -286,8 +286,8 @@ if __name__ == "__main__":
     from quant.backtest.universe import UniverseProvider
 
     up = UniverseProvider()
-    end = datetime.now().date().isoformat()
-    start = (datetime.now().date() - timedelta(days=365 * 2)).isoformat()
+    end = datetime.now(timezone.utc).date().isoformat()
+    start = (datetime.now(timezone.utc).date() - timedelta(days=365 * 2)).isoformat()
     syms = up.get_universe(end, market="kr", max_symbols=30)
 
     analyzer = FactorAnalyzer()

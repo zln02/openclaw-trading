@@ -86,7 +86,7 @@ def _run_specialist(
                 elif block.type == "tool_use":
                     tool_calls.append(block.name)
                     if stream_output:
-                        print(f"  ⚙ [{role}] {block.name}({str(block.input)[:60]}...)", flush=True)
+                        log.info(f"  ⚙ [{role}] {block.name}({str(block.input)[:60]}...)")
 
         elapsed = time.time() - start
         log.info(f"[{role}] 완료: {len(result_text)}자, 도구 {len(tool_calls)}회, {elapsed:.1f}s")
@@ -106,7 +106,7 @@ def assign_to_cto(task: str) -> str:
     Args:
         task: CTO에게 전달할 구체적인 기술 과제
     """
-    print(f"\n📐 [CTO] {task[:100]}", flush=True)
+    log.info(f"\n📐 [CTO] {task[:100]}")
     return _run_specialist("CTO", prompts.CTO, task, READ_ONLY_TOOLS + [get_codebase_overview], MODEL_CTO)
 
 
@@ -117,7 +117,7 @@ def assign_to_backend(task: str) -> str:
     Args:
         task: 백엔드 개발·수정 태스크 (구체적인 파일명, 함수명 포함 권장)
     """
-    print(f"\n⚙️  [Backend] {task[:100]}", flush=True)
+    log.info(f"\n⚙️  [Backend] {task[:100]}")
     return _run_specialist("Backend", prompts.BACKEND, task, CODE_TOOLS, MODEL_SR)
 
 
@@ -128,7 +128,7 @@ def assign_to_frontend(task: str) -> str:
     Args:
         task: 프론트엔드 개발·수정 태스크
     """
-    print(f"\n🎨 [Frontend] {task[:100]}", flush=True)
+    log.info(f"\n🎨 [Frontend] {task[:100]}")
     return _run_specialist("Frontend", prompts.FRONTEND, task, FILE_TOOLS, MODEL_SR)
 
 
@@ -139,7 +139,7 @@ def assign_to_quant(task: str) -> str:
     Args:
         task: 퀀트 전략, 지표, 백테스트 관련 태스크
     """
-    print(f"\n📊 [Quant] {task[:100]}", flush=True)
+    log.info(f"\n📊 [Quant] {task[:100]}")
     return _run_specialist("Quant", prompts.QUANT, task, CODE_TOOLS, MODEL_SR)
 
 
@@ -150,7 +150,7 @@ def assign_to_devops(task: str) -> str:
     Args:
         task: cron, 배포, 환경설정, 모니터링 관련 태스크
     """
-    print(f"\n🔧 [DevOps] {task[:100]}", flush=True)
+    log.info(f"\n🔧 [DevOps] {task[:100]}")
     return _run_specialist("DevOps", prompts.DEVOPS, task, CODE_TOOLS, MODEL_JR)
 
 
@@ -161,7 +161,7 @@ def assign_to_qa(task: str) -> str:
     Args:
         task: 코드 리뷰, 버그 탐색, 테스트 작성 태스크
     """
-    print(f"\n🔍 [QA] {task[:100]}", flush=True)
+    log.info(f"\n🔍 [QA] {task[:100]}")
     return _run_specialist("QA", prompts.QA, task, CODE_TOOLS, MODEL_JR)
 
 
@@ -172,7 +172,7 @@ def request_user_approval(question: str) -> str:
     Args:
         question: 사용자에게 물어볼 내용 (실거래 영향, 파괴적 변경 등)
     """
-    print(f"\n⚠️  [CEO→사용자 확인 필요]\n{question}\n", flush=True)
+    log.info(f"\n⚠️  [CEO→사용자 확인 필요]\n{question}\n")
     try:
         answer = input("계속 진행하시겠습니까? (y/N): ").strip().lower()
         return "approved" if answer in ("y", "yes", "예", "네") else "rejected"
@@ -231,10 +231,10 @@ def run_ceo(user_request: str, dry_run: bool = False) -> Dict[str, Any]:
         f"4. 모든 작업 완료 후 최종 보고서 작성"
     )
 
-    print(f"\n{'='*60}", flush=True)
-    print(f"  🏢 OpenClaw AI Company", flush=True)
-    print(f"  요청: {user_request[:80]}", flush=True)
-    print(f"{'='*60}\n", flush=True)
+    log.info(f"\n{'='*60}")
+    log.info("  🏢 OpenClaw AI Company")
+    log.info(f"  요청: {user_request[:80]}")
+    log.info(f"{'='*60}\n")
 
     result_text = ""
     plan_extracted = ""
@@ -257,15 +257,15 @@ def run_ceo(user_request: str, dry_run: bool = False) -> Dict[str, Any]:
                     result_text = block.text
                     # 실시간 출력
                     if block.text.strip():
-                        print(f"\n{'─'*60}", flush=True)
-                        print(f"📋 [CEO 보고]\n{block.text}", flush=True)
+                        log.info(f"\n{'─'*60}")
+                        log.info(f"📋 [CEO 보고]\n{block.text}")
                 elif block.type == "tool_use":
                     delegation_log.append(f"{block.name}: {str(block.input)[:80]}")
 
         elapsed = time.time() - start
-        print(f"\n{'='*60}", flush=True)
-        print(f"  ✅ 완료 | 소요: {elapsed:.1f}초", flush=True)
-        print(f"{'='*60}\n", flush=True)
+        log.info(f"\n{'='*60}")
+        log.info(f"  ✅ 완료 | 소요: {elapsed:.1f}초")
+        log.info(f"{'='*60}\n")
 
         return {
             "result":      result_text,
@@ -333,7 +333,7 @@ class TradingCompany:
 
     def list_roles(self) -> None:
         """사용 가능한 역할 목록 출력."""
-        print("\n📋 OpenClaw AI Company — 팀 구성\n")
+        log.info("\n📋 OpenClaw AI Company — 팀 구성\n")
         roles_info = {
             "ceo":      f"CEO        ({MODEL_CEO})  — 전체 조율, 위임, 최종 보고",
             "cto":      f"CTO        ({MODEL_CTO})  — 기술 아키텍처 설계·검토",
@@ -344,8 +344,8 @@ class TradingCompany:
             "qa":       f"QA         ({MODEL_JR})    — 코드 리뷰/버그 탐지",
         }
         for role, desc in roles_info.items():
-            print(f"  --role {role:<10} {desc}")
-        print()
+            log.info(f"  --role {role:<10} {desc}")
+        log.info("")
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -387,7 +387,7 @@ def main() -> None:
     result = company.request(args.task, role=args.role, dry_run=args.dry_run)
 
     if args.json:
-        print(json.dumps(result, ensure_ascii=False, indent=2))
+        log.info(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

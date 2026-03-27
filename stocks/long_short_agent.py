@@ -10,7 +10,7 @@ import json
 import os
 import sys
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -50,11 +50,11 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
 
 
 def _now_iso() -> str:
-    return datetime.now().isoformat()
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _today_iso() -> str:
-    return datetime.now().date().isoformat()
+    return datetime.now(timezone.utc).date().isoformat()
 
 
 def _calc_rsi(closes: list[float], period: int = 14) -> float:

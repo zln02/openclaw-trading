@@ -244,6 +244,6 @@ def send_emergency_alert(
         f"─────────────────────\n"
         f"{message}"
         f"{detail_line}\n"
-        f"⏰ {_dt.datetime.now().strftime('%H:%M:%S')}"
+        f"⏰ {_dt.datetime.now(timezone.utc).strftime('%H:%M:%S')}"
     )
     return send_telegram(msg, priority=Priority.URGENT)

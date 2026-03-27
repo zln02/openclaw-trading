@@ -8,7 +8,7 @@ Goals:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
@@ -294,7 +294,7 @@ class UniverseProvider:
 
 if __name__ == "__main__":
     provider = UniverseProvider()
-    today = datetime.now().date().isoformat()
+    today = datetime.now(timezone.utc).date().isoformat()
     kr = provider.get_universe(today, market="kr", max_symbols=20)
     us = provider.get_universe(today, market="us", max_symbols=20)
     log.info("universe sample", as_of=today, kr=len(kr), us=len(us))

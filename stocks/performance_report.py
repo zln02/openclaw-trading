@@ -14,7 +14,7 @@
 import os
 import json
 import math
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
@@ -58,7 +58,7 @@ def get_closed_trades(days: int = 30, market: str = "kr") -> list:
     if not supabase:
         return []
     table = 'us_trade_executions' if market == 'us' else 'trade_executions'
-    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     trades = (
         supabase.table(table)
         .select('*')
@@ -199,7 +199,7 @@ def generate_report(market: str = "kr"):
             f"  누적: {m['total_pnl_pct']:+.2f}% ({m['total_pnl_krw']:+,.0f}{currency})"
         )
 
-    msg = f"📊 <b>{label} 성과 리포트</b> ({datetime.now().strftime('%Y-%m-%d')})"
+    msg = f"📊 <b>{label} 성과 리포트</b> ({datetime.now(timezone.utc).strftime('%Y-%m-%d')})"
     msg += format_section("📅 오늘", today_metrics)
     msg += format_section("📆 주간 (7일)", week_metrics)
     msg += format_section("📈 월간 (30일)", month_metrics)
@@ -214,7 +214,7 @@ def generate_report(market: str = "kr"):
             supabase.table('daily_reports').upsert(
                 [
                     {
-                        'date': datetime.now().date().isoformat(),
+                        'date': datetime.now(timezone.utc).date().isoformat(),
                         'report_type': 'performance',
                         'content': json.dumps(
                             {

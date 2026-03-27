@@ -679,10 +679,10 @@ def _cli() -> int:
             duration_seconds=args.stream_seconds,
             poll_interval=args.poll_interval,
         )
-        print(json.dumps(out, ensure_ascii=False, indent=2))
+        log.info(json.dumps(out, ensure_ascii=False, indent=2))
     else:
         out = analyst.run_batch(symbols)
-        print(json.dumps(out["news_sentiment_score"], ensure_ascii=False, indent=2))
+        log.info(json.dumps(out["news_sentiment_score"], ensure_ascii=False, indent=2))
     return 0
 
 

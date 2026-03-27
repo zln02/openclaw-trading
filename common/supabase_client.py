@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import os
+import time
+
+from common.logger import get_logger
 
 try:
     from tenacity import retry, reraise, stop_after_attempt, wait_exponential
@@ -17,7 +20,10 @@ except Exception:  # pragma: no cover - optional dependency fallback
     def wait_exponential(*args, **kwargs):
         return None
 
+log = get_logger("supabase_client")
+
 _client = None
+_last_connect_attempt = 0.0
 
 # 재연결 트리거 키워드 (httpcore 연결 끊김 에러)
 _RECONNECT_ERRORS = (
@@ -68,9 +74,14 @@ def reset_client() -> None:
     _client = None
 
 
+def _reset_client() -> None:
+    """Backward-compatible reset alias."""
+    reset_client()
+
+
 def get_supabase():
-    """Supabase 클라이언트를 반환 (지연 초기화, 싱글턴)."""
-    global _client
+    """Supabase 클라이언트를 반환 (지연 초기화, 자동 재연결)."""
+    global _client, _last_connect_attempt
     if _client is not None:
         return _client
 
@@ -82,8 +93,30 @@ def get_supabase():
     except Exception:
         pass
 
-    _client = create_supabase_client_from_env()
-    return _client
+    now = time.time()
+    if now - _last_connect_attempt < 30:
+        return None
+
+    _last_connect_attempt = now
+    url = os.environ.get("SUPABASE_URL", "")
+    key = os.environ.get("SUPABASE_SECRET_KEY", "") or os.environ.get("SUPABASE_KEY", "")
+    if not url or not key:
+        log.warning("Supabase URL/KEY 미설정")
+        return None
+
+    for attempt in range(3):
+        try:
+            _client = create_supabase_client(url, key)
+            if _client is None:
+                raise RuntimeError("Supabase client unavailable")
+            log.info("Supabase 연결 성공")
+            return _client
+        except Exception as exc:
+            log.warning(f"Supabase 연결 시도 {attempt + 1}/3 실패: {exc}")
+            if attempt < 2:
+                time.sleep(2)
+
+    return None
 
 
 @retry(

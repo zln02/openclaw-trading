@@ -16,11 +16,16 @@ XGBoost 분류 모델:
 import os
 import json
 import sys
-import pickle
-from datetime import datetime
+import joblib
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
+
+_WORKSPACE_ROOT = Path(__file__).resolve().parents[1]
+if str(_WORKSPACE_ROOT) not in sys.path:
+    sys.path.insert(0, str(_WORKSPACE_ROOT))
+from common.logger import get_logger
 
 
 def _load_env():
@@ -33,6 +38,7 @@ def _load_env():
 
 
 _load_env()
+log = get_logger(__name__)
 
 from supabase import create_client  # noqa: E402
 
@@ -40,7 +46,7 @@ SUPABASE_URL = os.environ.get('SUPABASE_URL', '')
 SUPABASE_KEY = os.environ.get('SUPABASE_SECRET_KEY', '')
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
 
-ROOT_DIR = Path(__file__).resolve().parents[1]
+ROOT_DIR = _WORKSPACE_ROOT
 MODEL_DIR = ROOT_DIR / 'brain' / 'ml'
 MODEL_DIR.mkdir(parents=True, exist_ok=True)
 FEATURE_NAMES = [
@@ -122,7 +128,7 @@ def _horizon_paths(horizon_key: str) -> dict:
 
 
 def _utc_now_iso() -> str:
-    return datetime.utcnow().isoformat() + 'Z'
+    return datetime.now(timezone.utc).isoformat() + 'Z'
 
 
 # ─────────────────────────────────────────────
@@ -259,17 +265,17 @@ class MLFeatureContext:
             if vix is not None and not vix.empty and 'Close' in vix:
                 for idx, val in vix['Close'].items():
                     history['vix'][str(idx.date())] = float(val)
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug(f'시장 히스토리 로드 실패: {e}')
 
         try:
             workspace_root = str(Path(__file__).resolve().parents[1])
             if workspace_root not in sys.path:
                 sys.path.insert(0, workspace_root)
             from quant.factors.registry import calc
-            history['fg_index'] = calc('fg_index', as_of=datetime.now().date().isoformat(), symbol='005930', market='kr', context=self._get_factor_ctx())
-        except Exception:
-            pass
+            history['fg_index'] = calc('fg_index', as_of=datetime.now(timezone.utc).date().isoformat(), symbol='005930', market='kr', context=self._get_factor_ctx())
+        except Exception as e:
+            log.debug(f'fg_index 로드 실패: {e}')
 
         try:
             workspace_root = str(Path(__file__).resolve().parents[1])
@@ -283,8 +289,8 @@ class MLFeatureContext:
                 'TRANSITION': 2.0,
                 'RISK_ON': 3.0,
             }.get(regime, 2.0)
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug(f'레짐 인코딩 로드 실패: {e}')
 
         self.market_history = history
         return history
@@ -323,7 +329,8 @@ class MLFeatureContext:
         try:
             import yfinance as yf
             info = yf.Ticker(f'{code}.KS').info or {}
-        except Exception:
+        except Exception as e:
+            log.debug(f'yfinance 종목 정보 조회 실패: {e}')
             info = {}
         self.symbol_info_cache[code] = info
         return info
@@ -348,8 +355,8 @@ class MLFeatureContext:
             recent = rows[-5:]
             out['foreign_net_buy_5d'] = sum(_safe_float(r.get('foreign_net'), 0.0) for r in recent)
             out['inst_net_buy_5d'] = sum(_safe_float(r.get('inst_net', r.get('institution_net')), 0.0) for r in recent)
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug(f'investor_flows 조회 실패: {e}')
         self.flow_cache[code] = out
         return out
 
@@ -400,8 +407,8 @@ class MLFeatureContext:
                 n = max(len(pairs) - 1, 1)
                 for idx, (peer_code, _) in enumerate(pairs):
                     ranks[peer_code] = idx / n
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug(f'섹터 모멘텀 순위 계산 실패: {e}')
         self.sector_rank_cache[sector] = ranks
         return ranks.get(code, 0.5)
 
@@ -441,8 +448,8 @@ def _compute_extra_features(stock_code: str, as_of_date: str, closes, volumes, h
             dte = earnings.get('days_to_earnings')
             if dte is not None:
                 days_to_earnings = float(max(0, min(int(dte), 30)))
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug(f'실적 일정 조회 실패: {e}')
         _ML_FEATURE_CTX.earnings_cache[stock_code] = days_to_earnings
 
     sector_rank = _ML_FEATURE_CTX.get_sector_momentum_rank(stock_code, ret_20d)
@@ -599,7 +606,7 @@ def load_training_data(target_days=3, target_return=0.02):
     라벨: target_days일 후 수익률 >= target_return이면 1(매수), 아니면 0(관망)
     """
     if not supabase:
-        print('Supabase 미연결')
+        log.warning('Supabase 미연결')
         return None, None
 
     stocks = (
@@ -609,7 +616,7 @@ def load_training_data(target_days=3, target_return=0.02):
         .data
         or []
     )
-    print(f'데이터 로드: {len(stocks)}종목')
+    log.info(f'데이터 로드: {len(stocks)}종목')
 
     all_X = []
     all_y = []
@@ -652,15 +659,15 @@ def load_training_data(target_days=3, target_return=0.02):
             all_y.append(label)
 
     if not all_X:
-        print('학습 데이터 없음')
+        log.warning('학습 데이터 없음')
         return None, None
 
     X = np.array(all_X, dtype=float)
     y = np.array(all_y, dtype=int)
     buys = int(y.sum())
-    print(f'학습 데이터: {len(X)}개 샘플 (매수: {buys} / 관망: {len(y) - buys})')
+    log.info(f'학습 데이터: {len(X)}개 샘플 (매수: {buys} / 관망: {len(y) - buys})')
     if len(y) > 0:
-        print(f'매수 비율: {buys / len(y) * 100:.1f}%')
+        log.info(f'매수 비율: {buys / len(y) * 100:.1f}%')
 
     return X, y
 
@@ -759,8 +766,7 @@ def _predict_proba(model, X):
 
 
 def _save_meta_model(meta_model, horizon_key: str = '3d') -> None:
-    with open(_horizon_paths(horizon_key)['meta_model'], 'wb') as fp:
-        pickle.dump(meta_model, fp)
+    joblib.dump(meta_model, _horizon_paths(horizon_key)['meta_model'])
 
 
 def _load_meta_model(horizon_key: str = '3d'):
@@ -768,10 +774,15 @@ def _load_meta_model(horizon_key: str = '3d'):
     if not meta_path.exists():
         return None
     try:
-        with open(meta_path, 'rb') as fp:
-            return pickle.load(fp)
+        return joblib.load(meta_path)
     except Exception:
-        return None
+        try:
+            import pickle
+            with open(meta_path, 'rb') as fp:
+                return pickle.load(fp)
+        except Exception as e:
+            log.debug(f'메타 모델 로드 실패: {e}')
+            return None
 
 
 def _available_base_model_names() -> list[str]:
@@ -816,13 +827,13 @@ def walk_forward_validate(X: np.ndarray, y: np.ndarray, n_splits: int = 5) -> di
         from sklearn.model_selection import TimeSeriesSplit
         from sklearn.metrics import roc_auc_score, precision_score
     except ImportError as e:
-        print(f'의존성 부족: {e}')
+        log.warning(f'의존성 부족: {e}')
         return {}
 
     tscv = TimeSeriesSplit(n_splits=n_splits)
     fold_aucs, fold_precisions = [], []
 
-    print(f'\n=== Walk-forward 교차검증 ({n_splits}폴드) ===')
+    log.info(f'Walk-forward 교차검증 ({n_splits}폴드)')
     for fold, (train_idx, test_idx) in enumerate(tscv.split(X), 1):
         X_tr, X_te = X[train_idx], X[test_idx]
         y_tr, y_te = y[train_idx], y[test_idx]
@@ -843,8 +854,8 @@ def walk_forward_validate(X: np.ndarray, y: np.ndarray, n_splits: int = 5) -> di
 
         fold_aucs.append(auc)
         fold_precisions.append(prec)
-        print(f'  Fold {fold}: AUC={auc:.3f}  Precision@0.65={prec:.3f}  '
-              f'(train={len(X_tr)}, test={len(X_te)})')
+        log.info(f'  Fold {fold}: AUC={auc:.3f}  Precision@0.65={prec:.3f}  '
+                 f'(train={len(X_tr)}, test={len(X_te)})')
 
     if not fold_aucs:
         return {}
@@ -856,8 +867,8 @@ def walk_forward_validate(X: np.ndarray, y: np.ndarray, n_splits: int = 5) -> di
         'std_auc':         round(float(np.std(fold_aucs)), 4),
         'mean_precision':  round(float(np.mean(fold_precisions)), 4),
     }
-    print(f'\n  평균 AUC: {result["mean_auc"]:.3f} ± {result["std_auc"]:.3f}')
-    print(f'  평균 Precision@0.65: {result["mean_precision"]:.3f}')
+    log.info(f'  평균 AUC: {result["mean_auc"]:.3f} ± {result["std_auc"]:.3f}')
+    log.info(f'  평균 Precision@0.65: {result["mean_precision"]:.3f}')
     return result
 
 
@@ -875,7 +886,7 @@ def compute_shap_values(model, X_sample: np.ndarray) -> dict:
     try:
         import shap
     except ImportError:
-        print('shap 미설치: pip install shap')
+        log.warning('shap 미설치: pip install shap')
         return {}
 
     sample = X_sample[:500] if len(X_sample) > 500 else X_sample
@@ -895,10 +906,10 @@ def compute_shap_values(model, X_sample: np.ndarray) -> dict:
         key=lambda x: x[1], reverse=True,
     )
 
-    print('\n=== SHAP 피처 기여도 (평균 절댓값) ===')
+    log.info('=== SHAP 피처 기여도 (평균 절댓값) ===')
     for name, val in ranking[:10]:
         bar = '█' * int(val * 200)
-        print(f'  {name:<20} {val:.4f}  {bar}')
+        log.info(f'  {name:<20} {val:.4f}  {bar}')
 
     return {name: round(val, 6) for name, val in ranking}
 
@@ -919,7 +930,7 @@ def _optuna_hpo(X_train: np.ndarray, y_train: np.ndarray, n_trials: int = 40) ->
         from sklearn.metrics import roc_auc_score
         optuna.logging.set_verbosity(optuna.logging.WARNING)
     except ImportError as e:
-        print(f'optuna 미설치: {e}')
+        log.warning(f'optuna 미설치: {e}')
         return {}
 
     pos = max(int(y_train.sum()), 1)
@@ -962,7 +973,7 @@ def _optuna_hpo(X_train: np.ndarray, y_train: np.ndarray, n_trials: int = 40) ->
     study = optuna.create_study(direction='maximize')
     study.optimize(_xgb_objective, n_trials=n_trials, show_progress_bar=False)
     best_params['xgb'] = study.best_params
-    print(f'  XGB HPO 최적 AUC={study.best_value:.4f} params={study.best_params}')
+    log.info(f'  XGB HPO 최적 AUC={study.best_value:.4f} params={study.best_params}')
 
     # ── LightGBM ──
     try:
@@ -985,7 +996,7 @@ def _optuna_hpo(X_train: np.ndarray, y_train: np.ndarray, n_trials: int = 40) ->
         study_lgbm = optuna.create_study(direction='maximize')
         study_lgbm.optimize(_lgbm_objective, n_trials=n_trials, show_progress_bar=False)
         best_params['lgbm'] = study_lgbm.best_params
-        print(f'  LGBM HPO 최적 AUC={study_lgbm.best_value:.4f}')
+        log.info(f'  LGBM HPO 최적 AUC={study_lgbm.best_value:.4f}')
     except ImportError:
         pass
 
@@ -1010,7 +1021,7 @@ def _optuna_hpo(X_train: np.ndarray, y_train: np.ndarray, n_trials: int = 40) ->
         study_cat = optuna.create_study(direction='maximize')
         study_cat.optimize(_cat_objective, n_trials=n_trials, show_progress_bar=False)
         best_params['catboost'] = study_cat.best_params
-        print(f'  CatBoost HPO 최적 AUC={study_cat.best_value:.4f}')
+        log.info(f'  CatBoost HPO 최적 AUC={study_cat.best_value:.4f}')
     except ImportError:
         pass
 
@@ -1046,10 +1057,10 @@ def _rfecv_select_features(X: np.ndarray, y: np.ndarray) -> list[int]:
         selector.fit(X, y)
         selected = [i for i, s in enumerate(selector.support_) if s]
         removed = [FEATURE_NAMES[i] for i in range(len(FEATURE_NAMES)) if i < X.shape[1] and not selector.support_[i]]
-        print(f'  RFECV: {X.shape[1]}개 → {len(selected)}개 피처 선택 (제거: {removed})')
+        log.info(f'  RFECV: {X.shape[1]}개 → {len(selected)}개 피처 선택 (제거: {removed})')
         return selected
     except Exception as e:
-        print(f'  RFECV 실패, 전체 피처 유지: {e}')
+        log.warning(f'  RFECV 실패, 전체 피처 유지: {e}')
         return list(range(X.shape[1]))
 
 
@@ -1066,7 +1077,7 @@ def train_model(horizon_key: str = '3d'):
     paths = _horizon_paths(horizon_key)
     X, y = load_training_data(target_days=cfg['target_days'], target_return=cfg['target_return'])
     if X is None or len(X) < 100:
-        print('데이터 부족 (최소 100개 필요)')
+        log.warning('데이터 부족 (최소 100개 필요)')
         return
 
     wf = walk_forward_validate(X, y, n_splits=5)
@@ -1087,24 +1098,24 @@ def train_model(horizon_key: str = '3d'):
     feat_names: list[str] = list(FEATURE_NAMES)
 
     if USE_RFECV:
-        print('RFECV 피처 선택 중...')
+        log.info('RFECV 피처 선택 중...')
         selected_idx = _rfecv_select_features(X_train, y_train)
         X_train = X_train[:, selected_idx]
         X_test = X_test[:, selected_idx]
         feat_names = [FEATURE_NAMES[i] for i in selected_idx if i < len(FEATURE_NAMES)]
-        print(f'  선택 피처: {len(selected_idx)}/{len(FEATURE_NAMES)}개 — {feat_names[:5]}...')
+        log.info(f'  선택 피처: {len(selected_idx)}/{len(FEATURE_NAMES)}개 — {feat_names[:5]}...')
 
     if USE_HPO:
-        print('Optuna HPO 실행 중 (n_trials=40)...')
+        log.info('Optuna HPO 실행 중 (n_trials=40)...')
         hpo_params = _optuna_hpo(X_train, y_train)
         for mn, p in hpo_params.items():
-            print(f'  {mn}: {p}')
+            log.info(f'  {mn}: {p}')
     # ────────────────────────────────────────────────────────
 
     base_model_names = _available_base_model_names()
     use_ensemble = len(base_model_names) >= 2
-    print(f'\n기본 모델: {", ".join(base_model_names)}')
-    print(f'최종 모델 학습: {len(X_train)}개 / OOS 테스트: {len(X_test)}개')
+    log.info(f'기본 모델: {", ".join(base_model_names)}')
+    log.info(f'최종 모델 학습: {len(X_train)}개 / OOS 테스트: {len(X_test)}개')
 
     final_models = {}
     ensemble_prob = None
@@ -1122,13 +1133,13 @@ def train_model(horizon_key: str = '3d'):
             if len(np.unique(y_val)) < 2:
                 continue
             fold_models = _build_base_models(scale_pos_weight=scale_pos_weight, hpo_params=hpo_params)
-            print(f'  stacking fold {fold}: train={len(X_tr)} test={len(X_val)}')
+            log.info(f'  stacking fold {fold}: train={len(X_tr)} test={len(X_val)}')
             for name, model in fold_models.items():
                 try:
                     _fit_model(model, X_tr, y_tr, X_val, y_val)
                     oof_preds[name][val_idx] = _predict_proba(model, X_val)
                 except Exception as e:
-                    print(f'    {name} 학습 실패: {e}')
+                    log.warning(f'    {name} 학습 실패: {e}')
 
         valid_cols = [name for name in base_model_names if not np.isnan(oof_preds[name]).all()]
         valid_mask = np.ones(len(X_train), dtype=bool)
@@ -1149,7 +1160,7 @@ def train_model(horizon_key: str = '3d'):
                     if probs is not None and len(np.unique(y_test)) > 1:
                         base_auc[name] = round(float(roc_auc_score(y_test, probs)), 4)
                 except Exception as e:
-                    print(f'최종 {name} 학습 실패: {e}')
+                    log.warning(f'최종 {name} 학습 실패: {e}')
 
             test_cols = [name for name in valid_cols if name in final_models]
             if len(test_cols) >= 2:
@@ -1158,7 +1169,7 @@ def train_model(horizon_key: str = '3d'):
                 training_mode = 'stacking'
 
         if ensemble_prob is None:
-            print('앙상블 스태킹 실패 → XGBoost 단독으로 폴백')
+            log.warning('앙상블 스태킹 실패 → XGBoost 단독으로 폴백')
 
     if ensemble_prob is None:
         model = _build_model(scale_pos_weight=scale_pos_weight, hpo_params=hpo_params.get('xgb'))
@@ -1169,35 +1180,35 @@ def train_model(horizon_key: str = '3d'):
     primary_model = final_models['xgb']
     y_pred = (ensemble_prob >= 0.65).astype(int)
 
-    print('\n=== OOS 모델 성과 ===')
-    print(f'  정확도:     {accuracy_score(y_test, y_pred) * 100:.1f}%')
+    log.info('=== OOS 모델 성과 ===')
+    log.info(f'  정확도:     {accuracy_score(y_test, y_pred) * 100:.1f}%')
     auc = 0.0
     ap = 0.0
     if len(np.unique(y_test)) > 1:
         auc = float(roc_auc_score(y_test, ensemble_prob))
         ap = float(average_precision_score(y_test, ensemble_prob))
-        print(f'  AUC-ROC:    {auc:.3f}')
-        print(f'  AP (PR):    {ap:.3f}')
-    print(classification_report(y_test, y_pred, target_names=['관망', '매수']))
+        log.info(f'  AUC-ROC:    {auc:.3f}')
+        log.info(f'  AP (PR):    {ap:.3f}')
+    log.info(classification_report(y_test, y_pred, target_names=['관망', '매수']))
 
     importances = sorted(
         zip(feat_names, primary_model.feature_importances_),
         key=lambda x: x[1], reverse=True,
     )
-    print('\n=== XGBoost 피처 중요도 TOP 10 ===')
+    log.info('=== XGBoost 피처 중요도 TOP 10 ===')
     for name, imp in importances[:10]:
-        print(f'  {name}: {imp:.4f}')
+        log.info(f'  {name}: {imp:.4f}')
 
     shap_ranking = compute_shap_values(primary_model, X_test)
 
     thresholds = [0.5, 0.6, 0.65, 0.7, 0.8]
-    print('\n=== 확률 임계값별 Precision ===')
+    log.info('=== 확률 임계값별 Precision ===')
     for thresh in thresholds:
         mask = ensemble_prob >= thresh
         if mask.sum() == 0:
             continue
         prec = y_test[mask].sum() / mask.sum() * 100
-        print(f'  ≥{thresh:.2f}: {int(mask.sum())}건 → Precision {prec:.1f}%')
+        log.info(f'  ≥{thresh:.2f}: {int(mask.sum())}건 → Precision {prec:.1f}%')
 
     primary_model.save_model(str(paths['xgb']))
     os.chmod(paths['xgb'], 0o644)
@@ -1240,14 +1251,14 @@ def train_model(horizon_key: str = '3d'):
     }
     paths['meta_json'].write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding='utf-8')
 
-    print(f'\n모델 저장: {paths["xgb"]}')
+    log.info(f'모델 저장: {paths["xgb"]}')
     if 'lgbm' in final_models:
-        print(f'LightGBM 저장: {paths["lgbm"]}')
+        log.info(f'LightGBM 저장: {paths["lgbm"]}')
     if 'catboost' in final_models:
-        print(f'CatBoost 저장: {paths["catboost"]}')
+        log.info(f'CatBoost 저장: {paths["catboost"]}')
     if meta_model is not None and training_mode == 'stacking':
-        print(f'메타모델 저장: {paths["meta_model"]}')
-    print(f'메타 저장: {paths["meta_json"]}')
+        log.info(f'메타모델 저장: {paths["meta_model"]}')
+    log.info(f'메타 저장: {paths["meta_json"]}')
 
     return primary_model
 
@@ -1266,42 +1277,57 @@ def retrain_from_live_trades(min_samples: int = 30, horizon_key: str = '3d') -> 
         True if 재학습 성공
     """
     if not supabase:
-        print('Supabase 미연결')
+        log.info('Supabase 미연결')
         return False
 
     # 실매매 결과 로드
     try:
         rows = (
             supabase.table('trade_executions')
-            .select('stock_code,price,result,pnl_pct,created_at')
+            .select('stock_code,price,result,pnl_pct,created_at,ml_features_json')
             .in_('result', ['CLOSED', 'SELL'])
             .order('created_at', desc=False)
             .execute()
             .data or []
         )
     except Exception as e:
-        print(f'거래 데이터 로드 실패: {e}')
+        log.info(f'거래 데이터 로드 실패: {e}')
         return False
 
     if len(rows) < min_samples:
-        print(f'라이브 샘플 부족: {len(rows)} < {min_samples}')
+        log.info(f'라이브 샘플 부족: {len(rows)} < {min_samples}')
         return False
 
     # 라이브 라벨 생성: pnl_pct >= 2% → 1(성공)
     live_X, live_y = [], []
     for r in rows:
         code = r.get('stock_code', '')
-        pred = predict_stock(code, horizon_key=horizon_key)
-        if 'error' in pred:
-            continue
-        features = list(pred['features'].values())
+
+        # 저장된 피처 우선 사용 (look-ahead bias 방지)
+        saved_json = r.get('ml_features_json')
+        features = None
+        if saved_json:
+            try:
+                saved_dict = json.loads(saved_json) if isinstance(saved_json, str) else saved_json
+                features = list(saved_dict.values())
+            except Exception as e:
+                log.debug(f'저장된 라이브 피처 파싱 실패: {e}')
+                features = None
+
+        # fallback: 현재 데이터로 재생성
+        if features is None:
+            pred = predict_stock(code, horizon_key=horizon_key)
+            if 'error' in pred:
+                continue
+            features = list(pred['features'].values())
+
         pnl = float(r.get('pnl_pct') or 0)
         label = 1 if pnl >= 2.0 else 0
         live_X.append(features)
         live_y.append(label)
 
     if len(live_X) < min_samples:
-        print(f'유효 라이브 샘플 부족: {len(live_X)}')
+        log.info(f'유효 라이브 샘플 부족: {len(live_X)}')
         return False
 
     # 히스토리컬 데이터와 병합
@@ -1316,8 +1342,8 @@ def retrain_from_live_trades(min_samples: int = 30, horizon_key: str = '3d') -> 
         y_all = np.array(live_y, dtype=int)
 
     live_wins = sum(live_y)
-    print(f'\n실매매 데이터 {len(live_X)}건 추가 (성공: {live_wins} / 실패: {len(live_y)-live_wins})')
-    print(f'전체 학습 데이터: {len(X_all)}건')
+    log.info(f'실매매 데이터 {len(live_X)}건 추가 (성공: {live_wins} / 실패: {len(live_y)-live_wins})')
+    log.info(f'전체 학습 데이터: {len(X_all)}건')
 
     # 재학습
     pos = max(int(y_all.sum()), 1)
@@ -1343,7 +1369,7 @@ def retrain_from_live_trades(min_samples: int = 30, horizon_key: str = '3d') -> 
         'n_samples': len(X_all),
         'source': 'live_retrain',
     }, ensure_ascii=False, indent=2), encoding='utf-8')
-    print(f'실매매 반영 모델 저장: {paths["xgb"]}')
+    log.info(f'실매매 반영 모델 저장: {paths["xgb"]}')
     return True
 
 
@@ -1362,10 +1388,10 @@ def _load_model(horizon_key: str = '3d'):
                 model.save_model(str(paths['xgb']))
                 os.chmod(paths['xgb'], 0o644)
                 old_path.unlink()
-                print(f'[ml_model] 구버전 .pkl → .ubj 마이그레이션 완료')
+                log.info(f'[ml_model] 구버전 .pkl → .ubj 마이그레이션 완료')
                 return model
             except Exception as e:
-                print(f'[ml_model] 마이그레이션 실패: {e}')
+                log.warning(f'[ml_model] 마이그레이션 실패: {e}')
         return None
     from xgboost import XGBClassifier
     model = XGBClassifier()
@@ -1382,7 +1408,8 @@ def _load_model_bundle(horizon_key: str = '3d') -> dict:
         try:
             import lightgbm as lgb
             bundle['lgbm'] = lgb.Booster(model_file=str(paths['lgbm']))
-        except Exception:
+        except Exception as e:
+            log.debug(f'LightGBM 모델 로드 실패: {e}')
             bundle['lgbm'] = None
 
     if paths['catboost'].exists():
@@ -1391,14 +1418,16 @@ def _load_model_bundle(horizon_key: str = '3d') -> dict:
             model = CatBoostClassifier()
             model.load_model(str(paths['catboost']))
             bundle['catboost'] = model
-        except Exception:
+        except Exception as e:
+            log.debug(f'CatBoost 모델 로드 실패: {e}')
             bundle['catboost'] = None
 
     bundle['meta'] = _load_meta_model(horizon_key=horizon_key)
     if paths['meta_json'].exists():
         try:
             bundle['meta_info'] = json.loads(paths['meta_json'].read_text(encoding='utf-8'))
-        except Exception:
+        except Exception as e:
+            log.debug(f'메타 정보 로드 실패: {e}')
             bundle['meta_info'] = {}
     return bundle
 
@@ -1415,7 +1444,8 @@ def _bundle_predict_probability(bundle: dict, X: np.ndarray) -> tuple[float, dic
             else:
                 prob = float(_predict_proba(model, X)[0])
             probs[name] = prob
-        except Exception:
+        except Exception as e:
+            log.debug(f'{name} 확률 예측 실패: {e}')
             continue
 
     if not probs:
@@ -1428,8 +1458,8 @@ def _bundle_predict_probability(bundle: dict, X: np.ndarray) -> tuple[float, dic
         try:
             ensemble_prob = float(meta.predict_proba(meta_X)[0][1])
             return ensemble_prob, probs
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug(f'메타 모델 앙상블 예측 실패: {e}')
 
     ensemble_prob = float(sum(probs.values()) / len(probs))
     return ensemble_prob, probs
@@ -1490,11 +1520,11 @@ def predict_stock(stock_code: str, horizon_key: str = '3d') -> dict:
 def predict_all(horizon_key: str = '3d') -> list:
     """전 종목 매수 확률 예측 → 상위 종목 반환"""
     if not supabase:
-        print('Supabase 미연결')
+        log.warning('Supabase 미연결')
         return []
     model = _load_model(horizon_key=horizon_key)
     if model is None:
-        print('모델 없음')
+        log.warning('모델 없음')
         return []
 
     stocks = (
@@ -1515,12 +1545,12 @@ def predict_all(horizon_key: str = '3d') -> list:
 
     results.sort(key=lambda x: x['buy_probability'], reverse=True)
 
-    print('\n=== 매수 확률 TOP 10 ===')
+    log.info('=== 매수 확률 TOP 10 ===')
     for r in results[:10]:
         emoji = '🟢' if r['action'] == 'BUY' else '⚪'
-        print(f"  {emoji} {r['name']}: {r['buy_probability']}% → {r['action']}")
+        log.info(f"  {emoji} {r['name']}: {r['buy_probability']}% → {r['action']}")
 
-    print(f'\n매수 신호: {sum(1 for r in results if r["action"] == "BUY")}종목')
+    log.info(f'매수 신호: {sum(1 for r in results if r["action"] == "BUY")}종목')
     return results
 
 

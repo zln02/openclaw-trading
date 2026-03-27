@@ -9,7 +9,7 @@
 
 import json
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -104,7 +104,7 @@ def build_hourly_brief(prev_hour: datetime, msgs: list[str]) -> str:
 
 
 def run() -> int:
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     prev = (now.replace(minute=0, second=0, microsecond=0) - timedelta(hours=1))
 
     data = _load_info_data()

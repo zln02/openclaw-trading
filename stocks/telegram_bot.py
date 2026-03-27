@@ -10,7 +10,7 @@ import json
 import os
 import time
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -20,8 +20,9 @@ try:
     from stocks.kiwoom_client import KiwoomClient
 except ImportError:
     from kiwoom_client import KiwoomClient
-from common.config import WORKSPACE
+from common.config import API_RETRY_CONFIG, WORKSPACE
 from common.env_loader import load_env
+from common.logger import get_logger
 from common.supabase_client import create_supabase_client_from_env
 from common.telegram_ai import ai_respond
 
@@ -35,7 +36,9 @@ _load_env()
 TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TG_CHAT = os.environ.get("TELEGRAM_CHAT_ID", "")
 
+log = get_logger("telegram_bot")
 supabase = create_supabase_client_from_env()
+KST = timezone(timedelta(hours=9))
 
 
 def send_message(
@@ -45,11 +48,11 @@ def send_message(
     html_mode: bool = True,
 ):
     if not TG_TOKEN:
-        print("TELEGRAM_BOT_TOKEN 미설정")
+        log.warning("TELEGRAM_BOT_TOKEN 미설정")
         return
     cid = chat_id or TG_CHAT
     if not cid:
-        print("TELEGRAM_CHAT_ID 미설정")
+        log.warning("TELEGRAM_CHAT_ID 미설정")
         return
     payload: dict[str, Any] = {"chat_id": cid, "text": text}
     if html_mode:
@@ -57,13 +60,10 @@ def send_message(
     if reply_markup:
         payload["reply_markup"] = reply_markup
     try:
-        requests.post(
-            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-            json=payload,
-            timeout=5,
-        )
+        url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
+        requests.post(url, json=payload, timeout=API_RETRY_CONFIG["telegram_timeout_seconds"])
     except Exception as e:
-        print(f"send_message 실패: {e}")
+        log.error(f"Telegram 전송 실패: {type(e).__name__}")
 
 
 def get_help_text() -> str:
@@ -71,8 +71,13 @@ def get_help_text() -> str:
         "지원 명령:\n"
         "/status - 계좌 및 보유종목 상태\n"
         "/stop - 자동매매 중지 플래그 설정\n"
-        "/resume - 자동매매 중지 플래그 해제\n"
+        "/resume - 자동매매 재개 확인 요청\n"
+        "/resume_confirm - 자동매매 중지 플래그 해제\n"
         "/sell_all - 전량 매도 확인\n"
+        "/drawdown - 드로우다운 가드 상태\n"
+        "/daily_loss - 오늘 시장별 일일 손익\n"
+        "/market - 시장 현황 요약\n"
+        "/review - 최근 성과 요약\n"
         "/ask <질문> - AI에게 직접 질문\n"
         "/why - 최근 의사결정 근거\n"
         "/risk - 현재 리스크 상태 요약\n"
@@ -121,13 +126,87 @@ def get_status_text() -> str:
 def set_stop_flag():
     # stock_trading_agent.py와 동일한 경로 사용 (Path(__file__).parent / 'STOP_TRADING')
     flag = Path(__file__).parent / "STOP_TRADING"
-    flag.write_text(datetime.now().isoformat())
+    flag.write_text(datetime.now(timezone.utc).isoformat())
 
 
 def clear_stop_flag():
     flag = Path(__file__).parent / "STOP_TRADING"
     if flag.exists():
         flag.unlink()
+
+
+def get_drawdown_guard_text() -> str:
+    try:
+        path = WORKSPACE / "brain" / "drawdown" / "kr.json"
+        if not path.exists():
+            return "드로우다운 가드 상태 파일 없음"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        daily_loss = float(data.get("daily_return", 0.0) or 0.0) * 100
+        weekly_loss = float(data.get("weekly_return", 0.0) or 0.0) * 100
+        blocked = not bool(data.get("allow_new_buys", True))
+        cooldown_until = data.get("cooldown_until")
+        remaining = 0
+        if cooldown_until:
+            try:
+                dt = datetime.fromisoformat(str(cooldown_until))
+                remaining = max(0, int((dt - datetime.now(KST)).total_seconds() / 60))
+            except Exception as e:
+                log.error(f"drawdown cooldown 파싱 실패: {e}", exc_info=True)
+        return (
+            "📊 드로우다운 가드 상태\n"
+            f"- 일간 손실: {daily_loss:.1f}% (한도: 2.0%)\n"
+            f"- 주간 손실: {weekly_loss:.1f}%\n"
+            f"- 매수 차단: {'🚫 YES' if blocked else '✅ NO'}\n"
+            f"- 쿨다운: {remaining}분 남음"
+        )
+    except Exception as e:
+        log.error(f"drawdown 상태 조회 실패: {e}", exc_info=True)
+        return "드로우다운 가드 상태 조회 실패"
+
+
+def get_daily_loss_text() -> str:
+    if not supabase:
+        return "오늘 거래 없음"
+    try:
+        today = datetime.now(KST).date()
+        today_start = datetime.combine(today, datetime.min.time()).replace(tzinfo=KST)
+        rows = (
+            supabase.table("trade_executions")
+            .select("market,price,entry_price,quantity,created_at,trade_type,result")
+            .gte("created_at", today_start.isoformat())
+            .execute()
+            .data
+            or []
+        )
+        if not rows:
+            return "오늘 거래 없음"
+
+        markets = {
+            "BTC": {"pnl": 0.0, "count": 0},
+            "KR": {"pnl": 0.0, "count": 0},
+            "US": {"pnl": 0.0, "count": 0},
+        }
+        for row in rows:
+            market = str(row.get("market") or "KR").upper()
+            if market not in markets:
+                continue
+            price = float(row.get("price") or 0.0)
+            entry_price = float(row.get("entry_price") or price)
+            quantity = float(row.get("quantity") or 0.0)
+            markets[market]["pnl"] += (price - entry_price) * quantity
+            markets[market]["count"] += 1
+
+        total_krw = markets["BTC"]["pnl"] + markets["KR"]["pnl"]
+        return (
+            "📈 오늘 일일 손익 (KST 기준)\n"
+            f"- BTC: {markets['BTC']['pnl']:+,.0f}원 ({markets['BTC']['count']}건)\n"
+            f"- KR: {markets['KR']['pnl']:+,.0f}원 ({markets['KR']['count']}건)\n"
+            f"- US: ${markets['US']['pnl']:+,.2f} ({markets['US']['count']}건)\n"
+            f"- 합계: {total_krw:+,.0f}원"
+        )
+    except Exception as e:
+        log.error(f"daily_loss 조회 실패: {e}", exc_info=True)
+        return "오늘 손익 조회 실패"
 
 
 def get_open_positions() -> list:
@@ -143,7 +222,7 @@ def get_open_positions() -> list:
             or []
         )
     except Exception as e:
-        print(f"get_open_positions 실패: {e}")
+        log.error(f"get_open_positions 실패: {e}")
         return []
 
 
@@ -252,7 +331,7 @@ def _load_json(path: Path) -> dict:
         if path.exists():
             return json.loads(path.read_text())
     except Exception as e:
-        print(f"JSON 로드 실패({path}): {e}")
+        log.error(f"JSON 로드 실패({path}): {e}")
     return {}
 
 
@@ -272,8 +351,7 @@ def get_recent_agent_decisions(limit: int = 5) -> list[dict]:
             .execute()
         )
         return rows.data or []
-    except Exception as e:
-        print(f"get_recent_agent_decisions 실패: {e}")
+    except Exception:
         return []
 
 
@@ -289,8 +367,7 @@ def get_weekly_performance_rows(limit: int = 5) -> list[dict]:
             .execute()
         )
         return rows.data or []
-    except Exception as e:
-        print(f"get_weekly_performance_rows 실패: {e}")
+    except Exception:
         return []
 
 
@@ -300,14 +377,14 @@ def get_recent_trades(limit: int = 5) -> list[dict]:
     try:
         rows = (
             supabase.table("trade_executions")
-            .select("created_at, stock_code, stock_name, action, price, quantity, pnl_pct, market")
+            .select("created_at, stock_code, stock_name, trade_type, price, quantity, pnl_pct")
             .order("created_at", desc=True)
             .limit(limit)
             .execute()
         )
         return rows.data or []
     except Exception as e:
-        print(f"get_recent_trades 실패: {e}")
+        log.error(f"get_recent_trades 실패: {e}")
         return []
 
 
@@ -332,9 +409,9 @@ def format_trades(rows: list[dict]) -> str:
         return "기록 없음"
     lines = []
     for row in rows[:5]:
-        action = str(row.get("action") or "HOLD").upper()
+        action = str(row.get("trade_type") or row.get("action") or "HOLD").upper()
         lines.append(
-            f"- {row.get('market', 'kr').upper()} {row.get('stock_name') or row.get('stock_code') or '-'} "
+            f"- {row.get('stock_name') or row.get('stock_code') or '-'} "
             f"{action} {int(row.get('quantity') or 0)}주 @ {row.get('price') or 0}"
         )
     return "\n".join(lines)
@@ -355,7 +432,7 @@ def get_risk_summary_text() -> str:
             from quant.cross_market_risk import CrossMarketRisk
             cross_market = asyncio.run(CrossMarketRisk().check_exposure())
         except Exception as e:
-            print(f"cross_market_risk 실패: {e}")
+            log.error(f"cross_market_risk 실패: {e}")
         return (
             "🛡 현재 리스크 상태\n"
             f"- BTC DD: {float(btc.get('current_drawdown', 0)):.2%}\n"
@@ -463,14 +540,19 @@ def handle_command(cmd: str, chat_id: str):
             chat_id,
             reply_markup=build_keyboard(),
         )
-    elif lower.startswith("/resume") or lower.startswith("/start"):
-        clear_stop_flag()
+    elif lower == "/resume" or lower == "/start":
         send_message(
-            "▶ 자동매매 중지 플래그를 해제했습니다.\n"
-            "※ 실제 재개 여부는 에이전트 설정에 따라 달라집니다.",
+            "⚠️ 매매를 재개합니다. /resume_confirm 으로 확인해주세요",
             chat_id,
             reply_markup=build_keyboard(),
         )
+    elif lower.startswith("/resume_confirm"):
+        try:
+            clear_stop_flag()
+            send_message("✅ 매매 재개됨", chat_id, reply_markup=build_keyboard())
+        except Exception as e:
+            log.error(f"/resume_confirm 실패: {e}", exc_info=True)
+            send_message("매매 재개 처리 실패", chat_id, reply_markup=build_keyboard())
     elif lower.startswith("/sell_all"):
         handle_sell_all(chat_id)
     elif lower.startswith("/confirm_sell_all"):
@@ -481,16 +563,48 @@ def handle_command(cmd: str, chat_id: str):
         send_message(get_last_decision_reason_text(), chat_id, reply_markup=build_keyboard(), html_mode=False)
     elif lower.startswith("/risk"):
         send_message(get_risk_summary_text(), chat_id, reply_markup=build_keyboard(), html_mode=False)
+    elif lower.startswith("/drawdown"):
+        try:
+            send_message(get_drawdown_guard_text(), chat_id, reply_markup=build_keyboard(), html_mode=False)
+        except Exception as e:
+            log.error(f"/drawdown 실패: {e}", exc_info=True)
+            send_message("드로우다운 가드 상태 조회 실패", chat_id, reply_markup=build_keyboard(), html_mode=False)
+    elif lower.startswith("/daily_loss"):
+        try:
+            send_message(get_daily_loss_text(), chat_id, reply_markup=build_keyboard(), html_mode=False)
+        except Exception as e:
+            log.error(f"/daily_loss 실패: {e}", exc_info=True)
+            send_message("오늘 손익 조회 실패", chat_id, reply_markup=build_keyboard(), html_mode=False)
     elif lower.startswith("/agents"):
         send_message(get_agent_summary_text(), chat_id, reply_markup=build_keyboard(), html_mode=False)
     elif lower.startswith("/performance"):
         send_message(get_weekly_performance_text(), chat_id, reply_markup=build_keyboard(), html_mode=False)
-    elif lower.startswith("/ask"):
+    elif lower.startswith("/ask "):
+        question = cmd[5:].strip()
+        if not question:
+            send_message("사용법: /ask 질문 내용", chat_id, reply_markup=build_keyboard(), html_mode=False)
+            return
+        send_message("🤔 분석 중...", chat_id, reply_markup=build_keyboard(), html_mode=False)
+        from agents.gateway_agent import handle_query
+
+        send_message(handle_query(question), chat_id, reply_markup=build_keyboard(), html_mode=False)
+    elif lower.startswith("/ask\n") or lower == "/ask":
         question = cmd[4:].strip()
         if not question:
             send_message("사용법: /ask 질문 내용", chat_id, reply_markup=build_keyboard(), html_mode=False)
             return
-        send_message(handle_ai_chat(question, chat_id), chat_id, reply_markup=build_keyboard(), html_mode=False)
+        send_message("🤔 분석 중...", chat_id, reply_markup=build_keyboard(), html_mode=False)
+        from agents.gateway_agent import handle_query
+
+        send_message(handle_query(question), chat_id, reply_markup=build_keyboard(), html_mode=False)
+    elif lower == "/market":
+        from agents.gateway_agent import handle_query
+
+        send_message(handle_query("시장 현황"), chat_id, reply_markup=build_keyboard(), html_mode=False)
+    elif lower == "/review":
+        from agents.gateway_agent import handle_query
+
+        send_message(handle_query("성과 요약"), chat_id, reply_markup=build_keyboard(), html_mode=False)
     elif lower.startswith("/help"):
         send_message(get_help_text(), chat_id, reply_markup=build_keyboard(), html_mode=False)
     elif cmd.startswith("/"):
@@ -501,31 +615,33 @@ def handle_command(cmd: str, chat_id: str):
 
 def _is_authorized(chat_id: str) -> bool:
     if not TG_CHAT:
-        print(f"[보안] TELEGRAM_CHAT_ID 미설정 — 발신자({chat_id}) 차단")
+        log.warning(f"[보안] TELEGRAM_CHAT_ID 미설정 — 발신자({chat_id}) 차단")
         return False
     return str(chat_id) == str(TG_CHAT)
 
 
 def poll_updates():
     if not TG_TOKEN:
-        print("TELEGRAM_BOT_TOKEN 미설정. 종료.")
+        log.warning("TELEGRAM_BOT_TOKEN 미설정. 종료.")
         return
     if not TG_CHAT:
-        print("TELEGRAM_CHAT_ID 미설정. 보안상 봇을 시작하지 않습니다.")
+        log.warning("TELEGRAM_CHAT_ID 미설정. 보안상 봇을 시작하지 않습니다.")
         return
 
     last_update_id = None
-    print("텔레그램 봇 폴링 시작...")
+    log.info("텔레그램 봇 폴링 시작...")
     while True:
         try:
             params = {"timeout": 30}
             if last_update_id is not None:
                 params["offset"] = last_update_id + 1
-            resp = requests.get(
-                f"https://api.telegram.org/bot{TG_TOKEN}/getUpdates",
-                params=params,
-                timeout=35,
-            )
+            try:
+                url = f"https://api.telegram.org/bot{TG_TOKEN}/getUpdates"
+                resp = requests.get(url, params=params, timeout=35)
+            except Exception as e:
+                log.error(f"Telegram 업데이트 조회 실패: {type(e).__name__}")
+                time.sleep(5)
+                continue
             data = resp.json()
             for upd in data.get("result", []):
                 last_update_id = upd["update_id"]
@@ -550,7 +666,7 @@ def poll_updates():
                     continue
                 handle_command(text, cid)
         except Exception as e:
-            print(f"poll_updates 오류: {e}")
+            log.error(f"poll_updates 오류: {e}")
             time.sleep(5)
 
 

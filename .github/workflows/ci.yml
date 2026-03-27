@@ -1,0 +1,45 @@
+name: OpenClaw CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install flake8 isort
+      - run: flake8 --max-line-length=120 --ignore=E501,W503,E402 common/ btc/ stocks/ agents/ quant/
+      - run: isort --check-only --diff common/ btc/ stocks/ agents/ quant/
+
+  test:
+    needs: lint
+    runs-on: ubuntu-latest
+    env:
+      DRY_RUN: "1"
+      SUPABASE_URL: "https://fake.supabase.co"
+      SUPABASE_KEY: "fake-key"
+      OPENAI_API_KEY: "fake-key"
+      TELEGRAM_TOKEN: "fake-token"
+      TELEGRAM_CHAT_ID: "fake-id"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - run: pytest tests/ -v --tb=short
+
+  security:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: grep -r "sk-" --include="*.py" . && exit 1 || true
+      - run: grep -r "eyJ" --include="*.py" . && exit 1 || true

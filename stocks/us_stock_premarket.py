@@ -11,7 +11,7 @@
 import os
 import sys
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -137,7 +137,7 @@ def run_us_premarket():
 
     msg = (
         f"📊 <b>미국장 프리마켓 브리핑 — US</b>\n"
-        f"📅 {datetime.now().strftime('%Y-%m-%d')} 22:30 KST\n"
+        f"📅 {datetime.now(timezone.utc).strftime('%Y-%m-%d')} 22:30 KST\n"
         f"━━━━━━━━━━━━━\n"
         f"🇺🇸 <b>미국 지수 현황</b>\n{idx_text}\n"
         f"━━━━━━━━━━━━━\n"

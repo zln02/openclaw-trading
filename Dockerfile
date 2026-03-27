@@ -1,52 +1,38 @@
-FROM node:20-bookworm-slim AS dashboard-builder
+FROM python:3.11-slim AS builder
 
-WORKDIR /dashboard
+WORKDIR /build
 
-COPY dashboard/package.json dashboard/package-lock.json ./
-RUN npm ci
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    g++ \
+    curl \
+    libffi-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-COPY dashboard/ ./
-RUN npm run build
+COPY requirements.txt .
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
 
 FROM python:3.11-slim
 
 WORKDIR /app
 
-# 시스템 의존성
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc libffi-dev curl && \
-    rm -rf /var/lib/apt/lists/*
+    curl \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
 
-# Python 의존성
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY --from=builder /install /usr/local
+COPY . .
 
-# 소스 코드 복사
-COPY common/ common/
-COPY btc/ btc/
-COPY stocks/ stocks/
-COPY agents/ agents/
-COPY quant/ quant/
-COPY execution/ execution/
-COPY memory/ memory/
-COPY scripts/ scripts/
-COPY --from=dashboard-builder /dashboard/dist/ dashboard/dist/
-RUN chmod +x scripts/docker_entrypoint.sh
+RUN chmod +x scripts/docker_entrypoint.sh && \
+    if [ -d "dashboard/dist" ]; then cp -r dashboard/dist/. btc/dist/ 2>/dev/null || true; fi
 
-# 환경변수
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 
-# 비루트 사용자로 실행
-RUN useradd --create-home --shell /usr/sbin/nologin openclaw && \
-    chown -R openclaw:openclaw /app
-USER openclaw
-
-# 대시보드 포트
 EXPOSE 8080
 
-# 기본 진입점: 대시보드
 ENTRYPOINT ["scripts/docker_entrypoint.sh"]
 CMD ["python", "btc/btc_dashboard.py"]

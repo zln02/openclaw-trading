@@ -15,8 +15,9 @@ def _resolve_openclaw_root() -> Path:
 
 
 OPENCLAW_ROOT = _resolve_openclaw_root()
+WORKSPACE_DIR = os.environ.get("OPENCLAW_WORKSPACE_DIR", "/home/wlsdud5035/.openclaw/workspace")
 WORKSPACE = Path(
-    os.environ.get("OPENCLAW_WORKSPACE_DIR", str(OPENCLAW_ROOT / "workspace"))
+    WORKSPACE_DIR
 ).expanduser()
 LOG_DIR = Path(os.environ.get("OPENCLAW_LOG_DIR", str(OPENCLAW_ROOT / "logs"))).expanduser()
 
@@ -57,6 +58,8 @@ STOCK_OVERVIEW_CACHE_TTL = 10
 BTC_NEWS_CACHE_TTL = 300
 BTC_FX_CACHE_TTL = 3600
 US_FX_CACHE_TTL = 300
+KR_MARKET_OPEN_MINUTES = 540
+KR_MARKET_CLOSE_MINUTES = 930
 
 # ── 기본 리스크 파라미터 (에이전트별 override 가능) ──────────────────
 # 실제 파라미터는 각 에이전트 파일의 RISK 딕셔너리가 우선 적용됨.
@@ -157,3 +160,23 @@ PARAM_OPT_IR_IMPROVE_MIN: float = 0.10 # IR 개선 최소값 (+10% 이상일 때
 # ── Attribution 다운웨이팅 임계값 ────────────────────────────────────────────
 ATTRIBUTION_DOWNWEIGHT_THRESHOLD: float = -0.5  # avg_contrib 이 이하 → 다운웨이팅
 ATTRIBUTION_DECAY_FACTOR: float = 0.5           # 다운웨이팅 계수 (weight × 이 값)
+
+API_RETRY_CONFIG = {
+    "max_retries": 3,
+    "base_wait_seconds": 2,
+    "backoff_multiplier": 2.0,
+    "max_wait_seconds": 30,
+    "telegram_timeout_seconds": 5,
+}
+
+ML_BLEND_CONFIG = {
+    "rule_weight": 0.6,
+    "ml_weight": 0.4,
+}
+
+ROUTER_THRESHOLDS = {
+    "krw_small": 1_000_000,
+    "krw_medium": 5_000_000,
+    "usd_small": 1_000,
+    "usd_medium": 5_000,
+}

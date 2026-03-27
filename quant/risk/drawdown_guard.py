@@ -8,7 +8,7 @@ Rules:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import List, Optional, Sequence
 
 from common.env_loader import load_env
@@ -33,7 +33,7 @@ def _to_date(value: str | date | datetime | None) -> date:
     if isinstance(value, date):
         return value
     if value is None:
-        return datetime.now().date()
+        return datetime.now(timezone.utc).date()
     text = str(value).strip()[:10]
     return datetime.strptime(text, "%Y-%m-%d").date()
 

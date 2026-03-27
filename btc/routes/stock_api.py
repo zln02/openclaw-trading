@@ -1,5 +1,6 @@
 """Korean stock-related API endpoints."""
 import json, time as _time, asyncio
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from collections import defaultdict
@@ -8,11 +9,13 @@ from fastapi.responses import HTMLResponse
 
 import sys as _sys
 _sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from common.env_loader import load_env
 from common.supabase_client import get_supabase
 from common.config import (
     WORKSPACE, STRATEGY_JSON,
     STOCK_TRADING_LOG, STOCK_CHECK_LOG, STOCK_PREMARKET_LOG, STOCK_COLLECTOR_LOG,
     MARKET_SUMMARY_CACHE_TTL, STOCK_OVERVIEW_CACHE_TTL,
+    KR_MARKET_OPEN_MINUTES, KR_MARKET_CLOSE_MINUTES,
 )
 from common.logger import get_logger
 
@@ -22,12 +25,18 @@ supabase = get_supabase()
 router = APIRouter()
 
 _kiwoom_client = None
+_CODE_RE = re.compile(r"^[A-Z]?[0-9]{6}$")
+
+
+def api_error(message: str) -> dict:
+    return {"error": message}
 
 
 def _get_kiwoom():
     global _kiwoom_client
     if _kiwoom_client is None:
         try:
+            load_env()
             import sys
             ws = str(WORKSPACE)
             if ws not in sys.path:
@@ -43,8 +52,8 @@ def is_market_open_now() -> bool:
     now = datetime.now(timezone.utc)
     if now.weekday() >= 5:
         return False
-    t = now.hour * 100 + now.minute
-    return 900 <= t <= 1530
+    current_minutes = now.hour * 60 + now.minute
+    return KR_MARKET_OPEN_MINUTES <= current_minutes <= KR_MARKET_CLOSE_MINUTES
 
 
 _name_cache: dict = {}
@@ -234,6 +243,8 @@ async def get_stocks_overview():
 
 @router.get("/api/stocks/price/{code}")
 async def get_stock_live_price(code: str):
+    if not _CODE_RE.match(code):
+        return api_error("잘못된 종목코드")
     db_code = code.lstrip("A") if code.startswith("A") else code
     kiwoom = _get_kiwoom()
     if kiwoom:
@@ -265,6 +276,8 @@ async def get_stock_live_price(code: str):
 @router.get("/api/stocks/realtime/price/{code}")
 async def get_stock_realtime_price(code: str):
     """Phase 9: KR realtime-like price snapshot."""
+    if not _CODE_RE.match(code):
+        return api_error("잘못된 종목코드")
     try:
         from common.data import get_price_snapshot
 
@@ -291,6 +304,8 @@ async def get_stock_realtime_price(code: str):
 @router.get("/api/stocks/realtime/orderbook/{code}")
 async def get_stock_realtime_orderbook(code: str):
     """Phase 9: KR orderbook snapshot (kiwoom fallback)."""
+    if not _CODE_RE.match(code):
+        return api_error("잘못된 종목코드")
     try:
         from common.data import fetch_kr_orderbook_snapshot
 
@@ -330,6 +345,8 @@ async def get_stock_realtime_alt_data(symbol: str):
 
 @router.get("/api/stocks/chart/{code}")
 async def get_stock_chart(code: str, interval: str = Query("1d"), limit: int = Query(65, ge=10, le=500)):
+    if not _CODE_RE.match(code):
+        return api_error("잘못된 종목코드")
     db_code = code.lstrip("A") if code.startswith("A") else code
     cache_key = (db_code, interval, limit)
     now = _time.time()
@@ -439,6 +456,8 @@ async def get_stock_chart(code: str, interval: str = Query("1d"), limit: int = Q
 
 @router.get("/api/stocks/indicators/{code}")
 async def get_stock_indicators(code: str):
+    if not _CODE_RE.match(code):
+        return api_error("잘못된 종목코드")
     db_code = code.lstrip("A") if code.startswith("A") else code
     if not supabase:
         return {"error": "Supabase 미연결"}
@@ -737,7 +756,8 @@ async def get_stocks_logs(source: str = Query("all")):
             lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
             return {"lines": lines[-80:]}
     except Exception as e:
-        return {"lines": [str(e)]}
+        log.error(f"stocks logs 조회 실패: {e}", exc_info=True)
+        return {"lines": ["로그 읽기 실패"]}
 
 
 @router.get("/api/kr/composite")

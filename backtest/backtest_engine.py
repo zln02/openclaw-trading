@@ -668,9 +668,9 @@ class BacktestEngine:
         _print_monthly_table(metrics.get("monthly_returns", {}))
 
         # ── 6. 저장 ──
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         result: Dict[str, Any] = {
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "days": self.days,
             "initial_capital": self.initial_capital,
             "final_capital": round(float(equity.iloc[-1]) if not equity.empty else 0.0, 0),

@@ -1,32 +1,20 @@
+version: '3.8'
+
 services:
   dashboard:
     build: .
     ports:
       - "8080:8080"
-    env_file: .env.runtime
+    env_file: .env
     environment:
-      - OPENCLAW_CONFIG_DIR=/app
-      - OPENCLAW_WORKSPACE_DIR=/app
-      - OPENCLAW_LOG_DIR=/app/logs
-      - OPENCLAW_BRAIN_PATH=/app/brain
-      - OPENCLAW_MEMORY_PATH=/app/memory
       - PYTHONPATH=/app
+      - OPENCLAW_CONFIG_DIR=/app
+      - OPENCLAW_LOG_DIR=/app/logs
     volumes:
       - ./brain:/app/brain
-      - ./memory:/app/memory
-      - ./certs:/app/certs:ro
       - ./logs:/app/logs
-      - ../.openclaw/logs:/app/logs/cron:ro
       - ./.docker-secrets:/run/local-secrets:ro
     restart: unless-stopped
-    read_only: true
-    user: "0:0"
-    tmpfs:
-      - /tmp
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 60s
@@ -35,107 +23,93 @@ services:
 
   btc-agent:
     build: .
-    command: ["bash", "scripts/run_agent_loop.sh", "600", "btc/btc_trading_agent.py"]
-    env_file: .env.runtime
+    command: ["bash", "-c", "while true; do python btc/btc_trading_agent.py; sleep 600; done"]
+    env_file: .env
     environment:
-      - OPENCLAW_CONFIG_DIR=/app
-      - OPENCLAW_WORKSPACE_DIR=/app
-      - OPENCLAW_LOG_DIR=/app/logs
-      - OPENCLAW_BRAIN_PATH=/app/brain
-      - OPENCLAW_MEMORY_PATH=/app/memory
       - PYTHONPATH=/app
+      - OPENCLAW_CONFIG_DIR=/app
+      - OPENCLAW_LOG_DIR=/app/logs
     volumes:
       - ./brain:/app/brain
-      - ./memory:/app/memory
       - ./logs:/app/logs
       - ./.docker-secrets:/run/local-secrets:ro
     restart: unless-stopped
-    read_only: true
-    user: "0:0"
-    tmpfs:
-      - /tmp
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
     depends_on:
-      - dashboard
+      dashboard:
+        condition: service_healthy
 
   kr-agent:
     build: .
-    command: ["python", "stocks/stock_trading_agent.py"]
-    env_file: .env.runtime
+    command: ["bash", "-c", "while true; do python stocks/stock_trading_agent.py; sleep 600; done"]
+    env_file: .env
     environment:
-      - OPENCLAW_CONFIG_DIR=/app
-      - OPENCLAW_WORKSPACE_DIR=/app
-      - OPENCLAW_LOG_DIR=/app/logs
-      - OPENCLAW_BRAIN_PATH=/app/brain
-      - OPENCLAW_MEMORY_PATH=/app/memory
       - PYTHONPATH=/app
+      - OPENCLAW_CONFIG_DIR=/app
+      - OPENCLAW_LOG_DIR=/app/logs
     volumes:
       - ./brain:/app/brain
-      - ./memory:/app/memory
-      - ./logs:/app/logs
-      - ./.docker-secrets:/run/local-secrets:ro
-    restart: "no"
-    read_only: true
-    user: "0:0"
-    tmpfs:
-      - /tmp
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-
-  us-agent:
-    build: .
-    command: ["bash", "scripts/run_agent_loop.sh", "900", "stocks/us_stock_trading_agent.py"]
-    env_file: .env.runtime
-    environment:
-      - OPENCLAW_CONFIG_DIR=/app
-      - OPENCLAW_WORKSPACE_DIR=/app
-      - OPENCLAW_LOG_DIR=/app/logs
-      - OPENCLAW_BRAIN_PATH=/app/brain
-      - OPENCLAW_MEMORY_PATH=/app/memory
-      - PYTHONPATH=/app
-    volumes:
-      - ./brain:/app/brain
-      - ./memory:/app/memory
       - ./logs:/app/logs
       - ./.docker-secrets:/run/local-secrets:ro
     restart: unless-stopped
-    read_only: true
-    user: "0:0"
-    tmpfs:
-      - /tmp
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
+    depends_on:
+      dashboard:
+        condition: service_healthy
+
+  us-agent:
+    build: .
+    command: ["bash", "-c", "while true; do python stocks/us_stock_trading_agent.py; sleep 900; done"]
+    env_file: .env
+    environment:
+      - PYTHONPATH=/app
+      - OPENCLAW_CONFIG_DIR=/app
+      - OPENCLAW_LOG_DIR=/app/logs
+    volumes:
+      - ./brain:/app/brain
+      - ./logs:/app/logs
+      - ./.docker-secrets:/run/local-secrets:ro
+    restart: unless-stopped
+    depends_on:
+      dashboard:
+        condition: service_healthy
 
   telegram-bot:
     build: .
     command: ["python", "stocks/telegram_bot.py"]
-    env_file: .env.runtime
+    env_file: .env
     environment:
-      - OPENCLAW_CONFIG_DIR=/app
-      - OPENCLAW_WORKSPACE_DIR=/app
-      - OPENCLAW_LOG_DIR=/app/logs
-      - OPENCLAW_BRAIN_PATH=/app/brain
-      - OPENCLAW_MEMORY_PATH=/app/memory
       - PYTHONPATH=/app
+      - OPENCLAW_CONFIG_DIR=/app
+      - OPENCLAW_LOG_DIR=/app/logs
     volumes:
-      - ../.openclaw/.env:/app/.env:ro
       - ./brain:/app/brain
-      - ./memory:/app/memory
       - ./logs:/app/logs
       - ./.docker-secrets:/run/local-secrets:ro
     restart: unless-stopped
-    read_only: true
-    user: "0:0"
-    tmpfs:
-      - /tmp
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
+    depends_on:
+      dashboard:
+        condition: service_healthy
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=openclaw
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+
+volumes:
+  prometheus_data:
+  grafana_data:

@@ -9,7 +9,7 @@ OpenClaw 고급 Google Sheets 관리 모듈
 import os
 import json
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 import subprocess
@@ -118,7 +118,7 @@ class AdvancedSheetsManager:
             "quantity": {"btc": 0, "kr": 0, "us": 0, "total": 0},
             "avg_price": {"btc": 0, "kr": 0, "us": 0, "total": 0},
             "daily_pnl": {"btc": 0, "kr": 0, "us": 0, "total": 0},
-            "update_time": datetime.now().strftime("%Y-%m-%d %H:%M")
+            "update_time": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
         }
         
         # BTC 계산
@@ -271,7 +271,7 @@ class AdvancedSheetsManager:
         
         try:
             if self.supabase:
-                now = datetime.now()
+                now = datetime.now(timezone.utc)
                 
                 # 일일 데이터 (오늘)
                 today_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
@@ -442,7 +442,7 @@ class AdvancedSheetsManager:
             else:
                 table = "trade_executions"
                 time_col = "created_at"
-            cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
             res = (
                 self.supabase.table(table)
                 .select("*")
@@ -622,7 +622,7 @@ class AdvancedSheetsManager:
         for alert in alerts:
             message += f"• {alert.get('message', '')}\n"
         
-        message += f"\n⏰ 시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        message += f"\n⏰ 시간: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')}"
         
         return message
     
@@ -653,7 +653,7 @@ class AdvancedSheetsManager:
                 log.warning("GOOGLE_SHEET_ID 미설정 — 전략 이력 기록 건너뜀")
                 return False
 
-            date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
             row = [
                 date_str,
                 str(item),

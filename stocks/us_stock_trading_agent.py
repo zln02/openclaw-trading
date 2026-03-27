@@ -19,7 +19,7 @@ import os
 import sys
 import time
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional, List, Dict
 
@@ -31,7 +31,7 @@ from ta.volatility import BollingerBands
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from common.env_loader import load_env
 from common.telegram import send_telegram as _tg_send
-from common.supabase_client import get_supabase
+from common.supabase_client import _reset_client, get_supabase
 from common.logger import get_logger
 from common.retry import retry, retry_call
 from common.config import US_TRADING_LOG
@@ -53,6 +53,7 @@ except ImportError:
 
 load_env()
 _log = get_logger("us_agent", US_TRADING_LOG)
+KST = timezone(timedelta(hours=9))
 
 sys.path.insert(0, str(Path(__file__).parent))
 from us_momentum_backtest import scan_today_top_us, US_UNIVERSE, MomentumScore
@@ -88,6 +89,22 @@ RISK = {
     "max_sector_positions": 2,    # 동일 섹터 최대 2종목
     "volatility_sizing": True,    # ATR 기반 포지션 사이징
 }
+
+# --- Level 5: 자동 파라미터 반영 ---
+try:
+    from quant.param_optimizer import load_best_params as _load_opt_params
+    _opt_params = _load_opt_params()
+    if _opt_params:
+        _risk_overrideable = {"stop_loss", "invest_ratio", "max_positions", "cooldown_minutes"}
+        _applied = {}
+        for _k, _v in _opt_params.items():
+            if _k in _risk_overrideable and _v is not None:
+                RISK[_k] = _v
+                _applied[_k] = _v
+        if _applied:
+            _log.info(f"[Level5] agent_params 적용: {_applied}")
+except Exception as _e:
+    _log.debug(f"Level5 agent_params 로드 스킵: {_e}")
 
 RULES = {
     "buy_composite_min": 50,
@@ -215,7 +232,7 @@ def send_telegram(msg: str):
 
 def is_us_market_open() -> bool:
     """미국장 대략 개장 여부 (한국 시간 기준 23:30~06:00, 서머타임 무시)."""
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     h = now.hour
     return h >= 23 or h < 6
 
@@ -324,13 +341,13 @@ def count_today_buys() -> int:
     if not supabase:
         return 0
     try:
-        from datetime import timezone as _tz
-        today = datetime.now(_tz.utc).strftime("%Y-%m-%d")  # UTC 기준으로 Supabase 타임스탬프와 일치
+        today = datetime.now(KST).date()
+        today_start = datetime.combine(today, datetime.min.time()).replace(tzinfo=KST)
         res = (
             supabase.table(US_TRADE_TABLE)
             .select("id")
             .eq("trade_type", "BUY")
-            .gte("created_at", today)
+            .gte("created_at", today_start.isoformat())
             .execute()
         )
         return len(res.data or [])
@@ -890,6 +907,18 @@ def run_trading_cycle():
     _us_regime_adj_cache = {}          # 사이클 시작 시 레짐 캐시 초기화 → _get_us_regime_adj() 재호출
     _us_drift_cache = {}
     _get_us_regime_adj()               # 사이클 초기에 레짐 로드
+
+    global supabase
+    try:
+        supabase = get_supabase()
+        if not supabase:
+            log("Supabase 미연결 — 이번 사이클 스킵", "WARN")
+            return
+        supabase.table(US_TRADE_TABLE).select("id").limit(1).execute()
+    except Exception as e:
+        log(f"Supabase 쿼리 실패, 재연결 시도: {e}", "WARN")
+        _reset_client()
+        return
 
     log("=" * 50)
     log("🇺🇸 US 자동매매 사이클 시작")

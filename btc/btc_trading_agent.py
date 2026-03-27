@@ -6,18 +6,18 @@ BTC 자동매매 에이전트 v6 — Top-tier Quant
       동적 가중치 복합스코어, 적응형 트레일링, 부분익절
 """
 
-import os, json, sys, requests
-from datetime import datetime, timezone
+import os, json, sys, requests, math, time
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from common.env_loader import load_env
 from common.telegram import send_telegram as _tg_send, Priority as _TgPriority
-from common.supabase_client import get_supabase
+from common.supabase_client import _reset_client, get_supabase
 from common.logger import get_logger
 from common.retry import retry, retry_call
-from common.config import BTC_LOG
+from common.config import API_RETRY_CONFIG, BTC_LOG
 
 try:
     from common.sheets_logger import append_trade as _sheets_append
@@ -31,6 +31,7 @@ except ImportError:
 
 load_env()
 log = get_logger("btc_agent", BTC_LOG)
+KST = timezone(timedelta(hours=9))
 
 import pyupbit
 from openai import OpenAI
@@ -51,7 +52,8 @@ def _load_ic_weights() -> dict:
         if isinstance(w, dict):
             return {str(k): float(v) for k, v in w.items() if v is not None}
         return {}
-    except Exception:
+    except Exception as e:
+        log.debug(f"가중치 로드 실패: {e}")
         return {}
 
 
@@ -61,6 +63,12 @@ def _apply_weighted_score(components: dict, *, weights: dict) -> int:
     components: dict with keys like fg,rsi,bb,vol,trend,funding,ls,oi,bonus,regime_adj
     weights: dict from signal_evaluator (signal-name -> weight)
     """
+    if not weights:
+        return int(components.get("total", 0) or 0)
+    weights = {
+        k: v for k, v in weights.items()
+        if isinstance(v, (int, float)) and math.isfinite(v)
+    }
     if not weights:
         return int(components.get("total", 0) or 0)
 
@@ -105,6 +113,8 @@ def _apply_weighted_score(components: dict, *, weights: dict) -> int:
     # Re-scale to legacy 0-95-ish range then add bonus/regime_adj
     legacy_max = float(sum(default_w.values()))
     raw_scaled = raw * legacy_max
+    if not math.isfinite(raw_scaled):
+        raw_scaled = float(sum(components.get(k, 0) or 0 for k in base_parts))
     raw_scaled += float(components.get("bonus", 0) or 0)
     raw_scaled += float(components.get("regime_adj", 0) or 0)
     raw_scaled += float(components.get("news", 0) or 0)
@@ -136,7 +146,8 @@ def _read_last_buy_ts() -> float:
         import json as _json
         data = _json.loads(_LAST_BUY_FILE.read_text())
         return float(data.get("ts", 0.0))
-    except Exception:
+    except Exception as e:
+        log.debug(f"마지막 매수 시각 로드 실패: {e}")
         return 0.0
 
 def _write_last_buy_ts() -> None:
@@ -156,10 +167,31 @@ def _utc_today_iso() -> str:
     return datetime.now(timezone.utc).date().isoformat()
 
 
+def _upbit_call(func, *args, max_retries: int = 3, **kwargs):
+    """Upbit API 호출 래퍼 (429 대응)."""
+    retries = max_retries if max_retries is not None else API_RETRY_CONFIG["max_retries"]
+    for attempt in range(retries):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            error_str = str(e).lower()
+            if "429" in error_str or "too many" in error_str:
+                wait = min(
+                    API_RETRY_CONFIG["base_wait_seconds"]
+                    * (API_RETRY_CONFIG["backoff_multiplier"] ** attempt),
+                    API_RETRY_CONFIG["max_wait_seconds"],
+                )
+                log.warning(f"Upbit 429 Rate Limit, {wait}초 대기 (시도 {attempt + 1}/{retries})")
+                time.sleep(wait)
+                continue
+            raise
+    return func(*args, **kwargs)
+
+
 def _execute_sell_order(quantity: float, *, context: str) -> tuple[bool, str]:
     """Execute an Upbit market sell with consistent validation/error handling."""
     try:
-        result = upbit.sell_market_order("KRW-BTC", quantity)
+        result = _upbit_call(upbit.sell_market_order, "KRW-BTC", quantity, max_retries=1)
         if result is None or not isinstance(result, dict) or "error" in result:
             log.error(f"Upbit {context} 매도 실패: {result}")
             send_telegram(f"❌ BTC 매도 주문 실패 ({context})\n응답: {result}")
@@ -250,7 +282,8 @@ def has_valid_market_data(df) -> bool:
     try:
         required = {"open", "high", "low", "close", "volume"}
         return df is not None and not df.empty and required.issubset(set(df.columns))
-    except Exception:
+    except Exception as e:
+        log.debug(f"시장 데이터 유효성 검사 실패: {e}")
         return False
 
 # ── 기술적 지표 ───────────────────────────────────
@@ -300,8 +333,8 @@ def get_volume_analysis(df) -> dict:
                     h_avg = h_df["volume"].rolling(20).mean().iloc[-1]
                     if h_avg > 0:
                         ratio = round(h_cur / h_avg, 2)
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug(f"시간봉 거래량 계산 실패: {e}")
 
         if ratio >= 2.0:
             label = "🔥 거래량 급등 (강한 신호)"
@@ -314,7 +347,8 @@ def get_volume_analysis(df) -> dict:
 
         return {"current": round(cur, 4), "avg20": round(avg20, 4),
                 "ratio": ratio, "label": label}
-    except Exception:
+    except Exception as e:
+        log.debug(f"거래량 분석 실패: {e}")
         return {"ratio": 1.0, "label": "거래량 분석 실패"}
 
 
@@ -391,7 +425,8 @@ def get_fear_greed() -> dict:
         else:
             msg = f"🔴 극도 탐욕({value}) — 매수 금지"
         return {"value": value, "label": label, "msg": msg}
-    except Exception:
+    except Exception as e:
+        log.debug(f"공포탐욕지수 조회 실패: {e}")
         return {"value": 50, "label": "Unknown", "msg": "⚪ 중립(50)"}
 
 # ── 1시간봉 추세 ──────────────────────────────────
@@ -689,8 +724,8 @@ def open_position(entry_price, quantity, entry_krw) -> bool:
     try:
         supabase.table("btc_position").insert({**row, "highest_price": entry_price}).execute()
         return True
-    except Exception:
-        pass
+    except Exception as e:
+        log.debug(f"highest_price 포함 포지션 저장 실패: {e}")
     try:
         supabase.table("btc_position").insert(row).execute()
         return True
@@ -749,7 +784,8 @@ def open_position_with_context(
     try:
         supabase.table("btc_position").insert(ctx_row).execute()
         return True
-    except Exception:
+    except Exception as e:
+        log.debug(f"컨텍스트 포함 포지션 저장 실패: {e}")
         return open_position(entry_price, quantity, entry_krw)
 
 def close_all_positions(exit_price, *, exit_reason=None):
@@ -770,7 +806,8 @@ def close_all_positions(exit_price, *, exit_reason=None):
                 update_row["exit_reason"] = exit_reason
             try:
                 supabase.table("btc_position").update(update_row).eq("id", pos["id"]).execute()
-            except Exception:
+            except Exception as e:
+                log.debug(f"포지션 종료 상세 업데이트 실패: {e}")
                 # pnl/pnl_pct 컬럼 미존재 시 최소 업데이트 (btc_position_schema.sql 실행 전 graceful fallback)
                 fallback_row = {
                     "status":     "CLOSED",
@@ -779,18 +816,22 @@ def close_all_positions(exit_price, *, exit_reason=None):
                 }
                 if exit_reason:
                     fallback_row["exit_reason"] = exit_reason
-                supabase.table("btc_position").update(fallback_row).eq("id", pos["id"]).execute()
+                try:
+                    supabase.table("btc_position").update(fallback_row).eq("id", pos["id"]).execute()
+                except Exception as fallback_e:
+                    log.error(f"포지션 종료 fallback 업데이트 실패: {fallback_e}")
     except Exception as e:
         log.error(f"포지션 종료 실패: {e}")
 
 # ── 일일 손실 한도 ────────────────────────────────
 def check_daily_loss() -> bool:
     try:
-        today = _utc_today_iso()  # UTC 기준으로 Supabase 타임스탬프와 일치
+        today = datetime.now(KST).date()
+        today_start = datetime.combine(today, datetime.min.time()).replace(tzinfo=KST)
         res   = supabase.table("btc_position")\
                         .select("pnl, entry_krw")\
                         .eq("status", "CLOSED")\
-                        .gte("exit_time", today).execute()
+                        .gte("exit_time", today_start.isoformat()).execute()
         if not res.data:
             return False
         total_pnl = sum(float(r["pnl"] or 0) for r in res.data)
@@ -801,8 +842,8 @@ def check_daily_loss() -> bool:
                 f"봇 자동 정지 — 내일 재시작"
             )
             return True
-    except Exception:
-        pass
+    except Exception as e:
+        log.debug(f"일일 손실 체크 실패: {e}")
     return False
 
 # ── AI 분석 ───────────────────────────────────────
@@ -1040,8 +1081,8 @@ def execute_trade(
     if signal["confidence"] < RISK["min_confidence"]:
         return _result("SKIP", guard="min_confidence")
 
-    btc_balance = upbit.get_balance("BTC") or 0
-    krw_balance = upbit.get_balance("KRW") or 0
+    btc_balance = _upbit_call(upbit.get_balance, "BTC", max_retries=3) or 0
+    krw_balance = _upbit_call(upbit.get_balance, "KRW", max_retries=3) or 0
     pos         = get_open_position()
     price       = indicators["price"]
     log.info(f"잔고 스냅샷: KRW={float(krw_balance):,.0f} | BTC={float(btc_balance):.8f}")
@@ -1088,8 +1129,8 @@ def execute_trade(
                     supabase.table("btc_position").update(
                         {"highest_price": highest}
                     ).eq("id", pos["id"]).execute()
-                except Exception:
-                    pass
+                except Exception as e:
+                    log.debug(f"highest_price 업데이트 실패: {e}")
 
         # 적응형 트레일링 스탑: 수익 구간별 트레일링 % 조절
         if net_change > RISK["trailing_activate"] and highest > 0:
@@ -1163,8 +1204,8 @@ def execute_trade(
                     supabase.table("btc_position").update(
                         {"partial_1_sold": True, "partial_sold": True}
                     ).eq("id", pos["id"]).execute()
-                except Exception:
-                    pass
+                except Exception as e:
+                    log.debug(f"partial_1_sold 업데이트 실패: {e}")
             send_telegram(
                 f"🟡 <b>분할 익절 1단계 ({int(ratio*100)}%)</b>\n"
                 f"진입가: {entry_price:,}원 | 현재가: {price:,}원\n"
@@ -1187,8 +1228,8 @@ def execute_trade(
                     supabase.table("btc_position").update(
                         {"partial_2_sold": True}
                     ).eq("id", pos["id"]).execute()
-                except Exception:
-                    pass
+                except Exception as e:
+                    log.debug(f"partial_2_sold 업데이트 실패: {e}")
             send_telegram(
                 f"🟢 <b>분할 익절 2단계 ({int(ratio2*100)}%)</b>\n"
                 f"진입가: {entry_price:,}원 | 현재가: {price:,}원\n"
@@ -1230,7 +1271,7 @@ def execute_trade(
             return _result("INSUFFICIENT_KRW")
 
         if not DRY_RUN:
-            result = upbit.buy_market_order("KRW-BTC", invest_krw)
+            result = _upbit_call(upbit.buy_market_order, "KRW-BTC", invest_krw, max_retries=1)
             if result is None or not isinstance(result, dict) or "error" in result:
                 log.error(f"Upbit 매수 주문 실패: {result}")
                 send_telegram(f"❌ BTC 매수 주문 실패\n응답: {result}")
@@ -1305,8 +1346,8 @@ def execute_trade(
         if _sheets_append:
             try:
                 _sheets_append("btc", "매수", "BTC", price, qty, None, signal.get("reason", ""))
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug(f"BTC sheets 매수 기록 실패: {e}")
         return _result(f"BUY_{stage}차", stage=stage)
 
     # ── AI SELL ──
@@ -1330,8 +1371,8 @@ def execute_trade(
             try:
                 action = "손절" if pnl_pct is not None and pnl_pct < -2 else "익절" if pnl_pct is not None and pnl_pct > 2 else "매도"
                 _sheets_append("btc", action, "BTC", price, btc_balance, pnl_pct, signal.get("reason", ""))
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug(f"BTC sheets 매도 기록 실패: {e}")
         return _result("SELL")
 
     return _result("HOLD")
@@ -1379,6 +1420,18 @@ def save_log(indicators, signal, result, *, fg=None, volume=None, comp=None, fun
 
 # ── 메인 사이클 ───────────────────────────────────
 def run_trading_cycle():
+    global supabase
+
+    try:
+        supabase = get_supabase()
+        if not supabase:
+            log.warning("Supabase 미연결 — 이번 사이클 스킵")
+            return {"result": "SUPABASE_UNAVAILABLE"}
+        supabase.table("btc_position").select("id").limit(1).execute()
+    except Exception as e:
+        log.warning(f"Supabase 쿼리 실패, 재연결 시도: {e}")
+        _reset_client()
+        return {"result": "SUPABASE_RECONNECT"}
 
     # 일일 손실 한도 체크
     if check_daily_loss():
@@ -1447,7 +1500,11 @@ def run_trading_cycle():
     momentum   = get_daily_momentum()
     news       = _get_news_result()
     pos        = get_open_position()
-    kimchi     = get_kimchi_premium()
+    try:
+        kimchi = get_kimchi_premium()
+    except Exception as e:
+        log.warning(f"signal fetch failed: kimchi: {e}")
+        kimchi = 0.0
 
     # ── 온체인 데이터 (v6 신규) ──
     from common.market_data import (
@@ -1455,10 +1512,18 @@ def run_trading_cycle():
         get_btc_long_short_ratio, get_btc_whale_activity,
         get_market_regime,
     )
-    funding  = get_btc_funding_rate()
+    try:
+        funding = get_btc_funding_rate()
+    except Exception as e:
+        log.warning(f"signal fetch failed: funding: {e}")
+        funding = {"rate": 0.0, "signal": "NEUTRAL"}
     oi       = get_btc_open_interest()
     ls_ratio = get_btc_long_short_ratio()
-    whale    = get_btc_whale_activity()
+    try:
+        whale = get_btc_whale_activity()
+    except Exception as e:
+        log.warning(f"signal fetch failed: whale: {e}")
+        whale = {"unconfirmed_tx": 0.0, "signal": "NEUTRAL"}
 
     # ── 고래 시그널 분류 (기존 whale 데이터 재사용, 추가 API 호출 없음) ──
     whale_signal: dict = {}
@@ -1473,8 +1538,8 @@ def run_trading_cycle():
                 inflow_avg_btc=_bl,
                 outflow_avg_btc=_bl,
             )
-    except Exception:
-        pass
+    except Exception as e:
+        log.debug(f"고래 시그널 분류 실패: {e}")
 
     # ── 시장 레짐 (v6.1: 동적 가중치 실제 연동) ──
     try:
@@ -1525,8 +1590,8 @@ def run_trading_cycle():
 
             if patch:
                 supabase.table("btc_position").update(patch).eq("id", pos["id"]).execute()
-    except Exception:
-        pass
+    except Exception as e:
+        log.debug(f"OPEN 포지션 컨텍스트 backfill 실패: {e}")
 
     # 일일 리포트용 상태 캐시 저장
     try:
@@ -1540,8 +1605,8 @@ def run_trading_cycle():
             "rsi": rsi_d,
             "updated": _utc_now_iso(),
         }, ensure_ascii=False), encoding="utf-8")
-    except Exception:
-        pass
+    except Exception as e:
+        log.debug(f"BTC 상태 캐시 저장 실패: {e}")
 
     log.info(f"F&G: {fg['label']}({fg_value}) | 1h: {htf['trend']} | dRSI: {rsi_d} | 5mRSI: {rsi_5m}")
     log.info(f"BB: {momentum['bb_pct']:.0f}% | dVol: {momentum['vol_ratio_d']}x | 7d: {momentum['ret_7d']:+.1f}% | 30d: {momentum['ret_30d']:+.1f}%")
@@ -1757,7 +1822,8 @@ def build_hourly_summary() -> str:
         try:
             res = supabase.table("btc_position").select("pnl").eq("status", "CLOSED").gte("exit_time", today).execute()
             today_pnl = sum(float(r["pnl"] or 0) for r in (res.data or []))
-        except Exception:
+        except Exception as e:
+            log.debug(f"매시 요약 손익 계산 실패: {e}")
             today_pnl = 0
 
         pos_line = "포지션 없음"
@@ -1766,7 +1832,7 @@ def build_hourly_summary() -> str:
             pos_line = f"포지션 있음 @ {entry:,}원"
 
         msg = (
-            f"⏰ <b>BTC 매시 요약</b> {datetime.now().strftime('%m/%d %H:%M')}\n"
+            f"⏰ <b>BTC 매시 요약</b> {datetime.now(timezone.utc).strftime('%m/%d %H:%M')}\n"
             f"💰 가격: {price:,}원 | RSI: {rsi}\n"
             f"📊 {pos_line}\n"
             f"📈 1시간봉: {htf['trend']} | F&G: {fg['label']}({fg['value']})\n"

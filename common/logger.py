@@ -5,7 +5,7 @@ Usage:
     log = get_logger("btc_agent")
     log.info("매매 사이클 시작")
     log.trade("BTC 매수", price=142000000, qty=0.001)
-    log.warn("거래량 급감")
+    log.warning("거래량 급감")
 """
 from __future__ import annotations
 

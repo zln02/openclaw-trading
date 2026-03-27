@@ -209,7 +209,7 @@ class SlippageTracker:
         return self._query_local(start_iso, end_iso)
 
     def monthly_report(self, year_month: Optional[str] = None) -> dict:
-        ym = year_month or datetime.now().strftime("%Y-%m")
+        ym = year_month or datetime.now(timezone.utc).strftime("%Y-%m")
         start_iso, end_iso = _month_start_end(ym)
         rows = self.load_rows(start_iso, end_iso)
 

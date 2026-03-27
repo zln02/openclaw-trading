@@ -17,7 +17,7 @@ import argparse
 import json
 import math
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
@@ -80,7 +80,7 @@ def _to_iso_day(value: str | date | datetime | None = None) -> str:
     if isinstance(value, date):
         return value.isoformat()
     if value is None:
-        return datetime.now().date().isoformat()
+        return datetime.now(timezone.utc).date().isoformat()
     return str(value).strip()[:10]
 
 
@@ -90,7 +90,7 @@ def _parse_day(value: str | date | datetime | None = None) -> date:
     if isinstance(value, date):
         return value
     if value is None:
-        return datetime.now().date()
+        return datetime.now(timezone.utc).date()
     return datetime.strptime(str(value).strip()[:10], "%Y-%m-%d").date()
 
 
@@ -372,7 +372,7 @@ class RegimeClassifier:
             return {"ok": False, "error": f"xgboost unavailable: {exc}"}
 
         # build monthly samples
-        end = datetime.now().date()
+        end = datetime.now(timezone.utc).date()
         start = end - timedelta(days=max(years, 1) * 365)
 
         rows = []

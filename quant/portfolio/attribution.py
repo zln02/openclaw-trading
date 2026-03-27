@@ -158,7 +158,7 @@ class PerformanceAttribution:
         fac = self.factor_contribution(factor_exposure or {}, factor_return or {})
 
         return {
-            "month": month or datetime.now().strftime("%Y-%m"),
+            "month": month or datetime.now(timezone.utc).strftime("%Y-%m"),
             "brinson": br,
             "factor": fac,
             "summary": {

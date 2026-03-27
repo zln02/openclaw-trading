@@ -23,7 +23,7 @@ import json
 import time
 from pathlib import Path
 from typing import Dict, Optional, List
-from datetime import datetime
+from datetime import datetime, timezone
 
 try:
     from dotenv import load_dotenv
@@ -39,6 +39,7 @@ try:
     _ws = str(Path(__file__).resolve().parents[1])
     if _ws not in _sys.path:
         _sys.path.insert(0, _ws)
+    from common.env_loader import load_env as _load_common_env
     from common.logger import get_logger as _get_logger
     _kiwoom_log = _get_logger("kiwoom_client")
     def _log(msg: str, level: str = "INFO"):
@@ -54,9 +55,19 @@ try:
         else:
             _kiwoom_log.info(msg)
 except Exception:
+    _load_common_env = None  # type: ignore
+    import logging as _logging
+    _kiwoom_log = _logging.getLogger("kiwoom_client")
     def _log(msg: str, level: str = "INFO"):
-        ts = datetime.now().strftime("%H:%M:%S")
-        print(f"[kiwoom][{ts}] {level}: {msg}")
+        level_upper = level.upper()
+        if level_upper in ("TRADE",):
+            _kiwoom_log.info(f"[TRADE] {msg}")
+        elif level_upper == "WARN":
+            _kiwoom_log.warning(msg)
+        elif level_upper == "ERROR":
+            _kiwoom_log.error(msg)
+        else:
+            _kiwoom_log.info(msg)
 
 
 def _int(v) -> int:
@@ -112,6 +123,8 @@ class KiwoomAPIClient:
     MIN_REQUEST_INTERVAL = 0.6  # 429 완화
 
     def __init__(self, use_mock: Optional[bool] = None):
+        if _load_common_env is not None:
+            _load_common_env()
         project_root = find_project_root()
         env_path = project_root / ".env"
         _load_env_from_file(env_path)
@@ -223,8 +236,9 @@ class KiwoomAPIClient:
                 response = httpx.post(url, headers=headers, json=body, timeout=30.0)
 
                 if response.status_code == 429:
-                    _log(f"[{api_id}] Rate Limit (429) → 2초 대기 후 재시도", "WARN")
-                    time.sleep(2)
+                    wait = min(2 * (2 ** attempt), 30)
+                    _log(f"[{api_id}] Rate Limit (429) → {wait}초 대기 후 재시도", "WARN")
+                    time.sleep(wait)
                     continue
                 if response.status_code != 200:
                     raise Exception(
@@ -249,7 +263,7 @@ class KiwoomAPIClient:
             except Exception as e:
                 last_error = e
                 if attempt < retries:
-                    wait = (attempt + 1) * 1.0
+                    wait = min(2 * (2 ** attempt), 30)
                     _log(f"[{api_id}] 재시도 {attempt+1}/{retries} ({wait}초 후): {e}", "WARN")
                     time.sleep(wait)
 

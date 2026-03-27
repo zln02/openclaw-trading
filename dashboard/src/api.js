@@ -22,11 +22,36 @@ async function fetchJSON(path, timeoutMs = 10000, retries = 1) {
 
 /** 네트워크/API 오류 시 null 반환 (폴링에 유용) */
 async function fetchJSONSafe(path) {
-  try {
-    return await fetchJSON(path);
-  } catch {
-    return null;
+  let networkRetryUsed = false;
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      return await fetchJSON(path);
+    } catch (error) {
+      const message = String(error?.message || error || "");
+      const is429 = message.includes("429");
+      const isNetworkError =
+        error?.name === "AbortError" ||
+        message.includes("Failed to fetch") ||
+        message.includes("NetworkError");
+
+      if (is429 && attempt < 2) {
+        const wait = Math.min(2000 * Math.pow(2, attempt), 16000);
+        await new Promise((resolve) => setTimeout(resolve, wait));
+        continue;
+      }
+
+      if (isNetworkError && !networkRetryUsed) {
+        networkRetryUsed = true;
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        continue;
+      }
+
+      return null;
+    }
   }
+
+  return null;
 }
 
 // BTC

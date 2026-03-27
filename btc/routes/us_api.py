@@ -1,6 +1,7 @@
 """US stock-related API endpoints."""
 import time as _time
 import asyncio
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from fastapi import APIRouter, Query
@@ -18,6 +19,11 @@ supabase = get_supabase()
 router = APIRouter()
 
 _fx_cache = {"ts": 0, "rate": 0}
+_SYMBOL_RE = re.compile(r"^[A-Z]{1,5}$")
+
+
+def _invalid_symbol_response():
+    return {"error": "잘못된 심볼"}
 
 
 def _batch_fetch_prices(symbols: list) -> dict:
@@ -239,6 +245,9 @@ async def api_us_positions():
 
 @router.get("/api/us/chart/{symbol}")
 async def api_us_chart(symbol: str, period: str = Query("3mo"), interval: str = Query("1d")):
+    symbol = symbol.upper()
+    if not _SYMBOL_RE.match(symbol):
+        return _invalid_symbol_response()
     try:
         import yfinance as _yf_chart
         t = _yf_chart.Ticker(symbol)
@@ -271,7 +280,8 @@ async def api_us_logs():
         lines = text.splitlines()
         return {"lines": lines[-80:]}
     except Exception as e:
-        return {"lines": [f"로그 읽기 실패: {e}"]}
+        log.error(f"us logs 조회 실패: {e}", exc_info=True)
+        return {"lines": ["로그 읽기 실패"]}
 
 
 @router.get("/api/us/market")
@@ -335,6 +345,9 @@ async def api_us_realtime_news(
     limit: int = Query(10, ge=1, le=50),
 ):
     """Phase 9: normalized news snapshot for US-side dashboard widgets."""
+    symbol = symbol.upper()
+    if not _SYMBOL_RE.match(symbol):
+        return _invalid_symbol_response()
     try:
         from common.data import collect_news_once
 
@@ -352,6 +365,9 @@ async def api_us_realtime_news(
 @router.get("/api/us/realtime/price/{symbol}")
 async def api_us_realtime_price(symbol: str):
     """Phase 9: realtime-like US price snapshot."""
+    symbol = symbol.upper()
+    if not _SYMBOL_RE.match(symbol):
+        return _invalid_symbol_response()
     try:
         from common.data import get_price_snapshot
 
@@ -369,6 +385,9 @@ async def api_us_realtime_price(symbol: str):
 @router.get("/api/us/realtime/alt/{symbol}")
 async def api_us_realtime_alt(symbol: str):
     """Phase 9: alternative-data snapshot for US symbol."""
+    symbol = symbol.upper()
+    if not _SYMBOL_RE.match(symbol):
+        return _invalid_symbol_response()
     try:
         from common.data import get_alternative_data
 

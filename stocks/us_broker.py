@@ -182,7 +182,7 @@ class AlpacaBroker:
                 side=sd,
                 qty=round(q, 8),
                 order_type=order_t,
-                order_id=f"sim-{int(datetime.now().timestamp())}",
+                order_id=f"sim-{int(datetime.now(timezone.utc).timestamp())}",
                 raw={
                     "symbol": sym,
                     "side": sd,

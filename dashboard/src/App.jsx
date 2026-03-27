@@ -1,5 +1,6 @@
 import { Suspense, lazy } from "react";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
+import ErrorBoundary from "./components/ErrorBoundary";
 import Layout from "./components/Layout";
 import { PortfolioProvider } from "./context/PortfolioContext";
 
@@ -20,44 +21,46 @@ function RouteSkeleton() {
 export default function App() {
   return (
     <PortfolioProvider>
-    <BrowserRouter>
-      <Routes>
-        <Route element={<Layout />}>
-          <Route
-            index
-            element={
-              <Suspense fallback={<RouteSkeleton />}>
-                <BtcPage />
-              </Suspense>
-            }
-          />
-          <Route
-            path="/kr"
-            element={
-              <Suspense fallback={<RouteSkeleton />}>
-                <KrStockPage />
-              </Suspense>
-            }
-          />
-          <Route
-            path="/us"
-            element={
-              <Suspense fallback={<RouteSkeleton />}>
-                <UsStockPage />
-              </Suspense>
-            }
-          />
-          <Route
-            path="/agents"
-            element={
-              <Suspense fallback={<RouteSkeleton />}>
-                <AgentsPage />
-              </Suspense>
-            }
-          />
-        </Route>
-      </Routes>
-    </BrowserRouter>
+      <ErrorBoundary>
+        <BrowserRouter>
+          <Routes>
+            <Route element={<Layout />}>
+              <Route
+                index
+                element={
+                  <Suspense fallback={<RouteSkeleton />}>
+                    <BtcPage />
+                  </Suspense>
+                }
+              />
+              <Route
+                path="/kr"
+                element={
+                  <Suspense fallback={<RouteSkeleton />}>
+                    <KrStockPage />
+                  </Suspense>
+                }
+              />
+              <Route
+                path="/us"
+                element={
+                  <Suspense fallback={<RouteSkeleton />}>
+                    <UsStockPage />
+                  </Suspense>
+                }
+              />
+              <Route
+                path="/agents"
+                element={
+                  <Suspense fallback={<RouteSkeleton />}>
+                    <AgentsPage />
+                  </Suspense>
+                }
+              />
+            </Route>
+          </Routes>
+        </BrowserRouter>
+      </ErrorBoundary>
     </PortfolioProvider>
   );
 }

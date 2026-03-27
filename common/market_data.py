@@ -557,7 +557,7 @@ def check_earnings_proximity(symbol: str, days: int = 5) -> dict:
         else:
             ed = earnings_date
 
-        today = datetime.now().date()
+        today = datetime.now(timezone.utc).date()
         delta = (ed - today).days
 
         return {

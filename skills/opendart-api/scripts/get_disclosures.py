@@ -11,7 +11,7 @@ Usage:
 import argparse
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import requests
 
@@ -35,8 +35,8 @@ def get_disclosures(
         print("Error: DART_API_KEY 환경변수가 설정되지 않았습니다.", file=sys.stderr)
         return []
 
-    end_de = datetime.now().strftime("%Y%m%d")
-    bgn_de = (datetime.now() - timedelta(days=days)).strftime("%Y%m%d")
+    end_de = datetime.now(timezone.utc).strftime("%Y%m%d")
+    bgn_de = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y%m%d")
 
     url = f"{BASE_URL}/list.json"
     params = {

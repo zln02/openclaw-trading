@@ -9,7 +9,7 @@ OpenClaw 알림 시스템
 
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 
@@ -32,7 +32,7 @@ def _already_sent_daily_summary_today() -> bool:
     try:
         if _LAST_DAILY_ALERT_FILE.exists():
             with open(_LAST_DAILY_ALERT_FILE) as f:
-                return f.read().strip() == datetime.now().strftime("%Y-%m-%d")
+                return f.read().strip() == datetime.now(timezone.utc).strftime("%Y-%m-%d")
     except Exception:
         pass
     return False
@@ -41,7 +41,7 @@ def _already_sent_daily_summary_today() -> bool:
 def _mark_daily_summary_sent() -> None:
     try:
         _LAST_DAILY_ALERT_FILE.parent.mkdir(parents=True, exist_ok=True)
-        _LAST_DAILY_ALERT_FILE.write_text(datetime.now().strftime("%Y-%m-%d"))
+        _LAST_DAILY_ALERT_FILE.write_text(datetime.now(timezone.utc).strftime("%Y-%m-%d"))
     except Exception as e:
         log.warning("일일 요약 발송일 기록 실패: %s", e)
 
@@ -212,7 +212,7 @@ class AlertSystem:
         
         try:
             if self.supabase:
-                today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+                today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
                 
                 # BTC 거래
                 btc_res = self.supabase.table("btc_trades").select("*").gte("timestamp", today_start).execute()

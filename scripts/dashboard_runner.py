@@ -10,7 +10,7 @@ OpenClaw 통합 대시보드 실행기
 
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 # 프로젝트 경로 설정
@@ -35,7 +35,7 @@ class IntegratedDashboard:
         """전체 대시보드 업데이트 실행"""
         try:
             log.info("🚀 OpenClaw 통합 대시보드 업데이트 시작...")
-            start_time = datetime.now()
+            start_time = datetime.now(timezone.utc)
             
             success_count = 0
             total_tasks = 5
@@ -81,7 +81,7 @@ class IntegratedDashboard:
                 log.error("❌ 차트 데이터 생성 실패")
             
             # 결과 요약
-            end_time = datetime.now()
+            end_time = datetime.now(timezone.utc)
             duration = (end_time - start_time).total_seconds()
             
             success_rate = (success_count / total_tasks) * 100

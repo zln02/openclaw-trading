@@ -24,9 +24,11 @@ import uvicorn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from common.env_loader import load_env
-from common.config import DASHBOARD_PORT
+from common.config import DASHBOARD_LOG, DASHBOARD_PORT
+from common.logger import get_logger
 
 load_env()
+log = get_logger("btc_dashboard", DASHBOARD_LOG)
 
 app = FastAPI(
     title="OpenClaw Trading Dashboard",
@@ -179,6 +181,6 @@ if __name__ == "__main__":
         uvicorn_kwargs["ssl_certfile"] = ssl_certfile
         uvicorn_kwargs["ssl_keyfile"] = ssl_keyfile
     elif ssl_certfile or ssl_keyfile:
-        print("SSL_CERTFILE and SSL_KEYFILE must both be set. Starting without HTTPS.", file=sys.stderr)
+        log.info("SSL_CERTFILE and SSL_KEYFILE must both be set. Starting without HTTPS.")
 
     uvicorn.run(**uvicorn_kwargs)

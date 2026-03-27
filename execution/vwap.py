@@ -466,7 +466,7 @@ def _cli() -> int:
 
     executor = VWAPExecutor()
     out = executor.execute(order, simulate=not args.execute, respect_schedule=args.respect_schedule)
-    print(json.dumps(out, ensure_ascii=False, indent=2))
+    log.info(json.dumps(out, ensure_ascii=False, indent=2))
     return 0
 
 

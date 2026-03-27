@@ -13,7 +13,7 @@ from __future__ import annotations
 import argparse
 import math
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Callable, Dict, Iterable, List, Optional
 
 from common.env_loader import load_env
@@ -547,7 +547,7 @@ def _cli() -> int:
         market=args.market,
     )
 
-    today = datetime.now().date()
+    today = datetime.now(timezone.utc).date()
     start = today - timedelta(days=max(args.years, 1) * 365 + cfg.train_window + cfg.test_window)
 
     engine = WalkForwardBacktestEngine(config=cfg)

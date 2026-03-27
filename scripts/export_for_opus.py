@@ -5,7 +5,7 @@ Supabase에서 Opus 컨설팅용 데이터 추출
 """
 
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import sys
 from pathlib import Path
@@ -19,7 +19,7 @@ supabase = get_supabase()
 def export():
     lines = []
     lines.append("## 📊 Supabase 실제 데이터 스냅샷\n")
-    lines.append(f"추출 시각: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n")
+    lines.append(f"추출 시각: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')}\n")
 
     # ── 1. BTC 거래 내역 ─────────────────────────────────────
     # 실제 컬럼: id, timestamp, action, price, rsi, macd,
@@ -148,7 +148,7 @@ def export():
     # ── 4. 최근 7일 핵심 요약 ────────────────────────────────
     lines.append("\n### 4. 최근 7일 핵심 성과")
     try:
-        week_ago = (datetime.now() - timedelta(days=7)).isoformat()
+        week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
         btc_w = (
             supabase.table("btc_trades")
             .select("action, pnl_pct, pnl, confidence")

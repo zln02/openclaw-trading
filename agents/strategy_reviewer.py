@@ -11,7 +11,7 @@ import argparse
 import json
 import os
 from copy import deepcopy
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -35,7 +35,7 @@ def _to_date(value: str | date | datetime | None = None) -> date:
     if isinstance(value, date):
         return value
     if value is None:
-        return datetime.now().date()
+        return datetime.now(timezone.utc).date()
     return datetime.strptime(str(value)[:10], "%Y-%m-%d").date()
 
 
@@ -87,7 +87,7 @@ class StrategyReviewer:
     def load_current_strategy(self) -> dict:
         if not self.strategy_path.exists():
             return {
-                "date": datetime.now().date().isoformat(),
+                "date": datetime.now(timezone.utc).date().isoformat(),
                 "market_outlook": "중립",
                 "risk_level": "보통",
                 "factor_weights": {
