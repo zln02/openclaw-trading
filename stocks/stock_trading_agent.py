@@ -134,7 +134,7 @@ RULES = {
 # ─────────────────────────────────────────────
 # 유틸리티
 # ─────────────────────────────────────────────
-def log(msg: str, level: str = "INFO"):
+def log(msg: str, level: str = "INFO") -> None:
     """Backward-compat wrapper routing to structured logger."""
     _dispatch = {
         "INFO": _log.info, "WARN": _log.warning, "WARNING": _log.warning,

@@ -139,6 +139,23 @@ def run() -> None:
     except Exception as e:
         log.warning(f"상관관계 체크 실패: {e}")
 
+    try:
+        import psutil
+
+        mem = psutil.virtual_memory()
+        if mem.percent > 85:
+            issues.append(f"🧠 메모리 사용률 {mem.percent}% (>85%)")
+    except ImportError:
+        pass
+
+    try:
+        from common.supabase_client import get_supabase
+
+        sb = get_supabase()
+        sb.table("trade_executions").select("id").limit(1).execute()
+    except Exception as e:
+        issues.append(f"🗄️ Supabase 연결 실패: {e}")
+
     if issues:
         message = "\n".join(issues)
         log.warning(f"문제 발견:\n{message}")

@@ -9,6 +9,7 @@ BTC 자동매매 에이전트 v6 — Top-tier Quant
 import os, json, sys, requests, math, time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -328,7 +329,7 @@ def send_telegram(msg: str, priority: "_TgPriority" = _TgPriority.URGENT) -> Non
     _tg_send(msg, priority=priority)
 
 # ── 시장 데이터 ───────────────────────────────────
-def get_market_data():
+def get_market_data() -> Any | None:
     return pyupbit.get_ohlcv("KRW-BTC", interval="minute5", count=200)
 
 
@@ -508,7 +509,7 @@ def get_hourly_trend() -> dict:
         log.warning(f"1시간봉 조회 실패: {e}")
         return {"trend": "UNKNOWN", "ema20": 0, "ema50": 0, "rsi_1h": 50}
 
-def get_kimchi_premium():
+def get_kimchi_premium() -> float | None:
     try:
         binance = retry_call(requests.get,
             args=("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT",),
@@ -767,7 +768,7 @@ def calc_btc_composite(fg_value, rsi_d, bb_pct, vol_ratio_d, trend, ret_7d=0,
 
 
 # ── 포지션 관리 ───────────────────────────────────
-def get_open_position():
+def get_open_position() -> dict | None:
     try:
         res = supabase.table("btc_position")\
                       .select("*").eq("status", "OPEN")\
@@ -851,7 +852,7 @@ def open_position_with_context(
         log.debug(f"컨텍스트 포함 포지션 저장 실패: {e}")
         return open_position(entry_price, quantity, entry_krw)
 
-def close_all_positions(exit_price, *, exit_reason=None):
+def close_all_positions(exit_price, *, exit_reason=None) -> bool:
     try:
         res = supabase.table("btc_position")\
                       .select("*").eq("status", "OPEN").execute()
@@ -885,6 +886,8 @@ def close_all_positions(exit_price, *, exit_reason=None):
                     log.error(f"포지션 종료 fallback 업데이트 실패: {fallback_e}")
     except Exception as e:
         log.error(f"포지션 종료 실패: {e}")
+        return False
+    return True
 
 # ── 일일 손실 한도 ────────────────────────────────
 def check_daily_loss() -> bool:
@@ -1455,7 +1458,20 @@ def execute_trade(
     return _result("HOLD")
 
 # ── Supabase 로그 ─────────────────────────────────
-def save_log(indicators, signal, result, *, fg=None, volume=None, comp=None, funding=None, oi=None, ls_ratio=None, kimchi=None, market_regime=None):
+def save_log(
+    indicators,
+    signal,
+    result,
+    *,
+    fg=None,
+    volume=None,
+    comp=None,
+    funding=None,
+    oi=None,
+    ls_ratio=None,
+    kimchi=None,
+    market_regime=None,
+) -> None:
     try:
         result_code = result.get("result", "UNKNOWN") if isinstance(result, dict) else str(result)
         guard = result.get("guard") if isinstance(result, dict) else None
@@ -1496,7 +1512,7 @@ def save_log(indicators, signal, result, *, fg=None, volume=None, comp=None, fun
         log.error(f"Supabase 저장 실패: {e}")
 
 # ── 메인 사이클 ───────────────────────────────────
-def run_trading_cycle():
+def run_trading_cycle() -> dict:
     global supabase
 
     try:
@@ -1919,7 +1935,7 @@ def build_hourly_summary() -> str:
     except Exception as e:
         return f"⏰ BTC 매시 요약 생성 실패: {e}"
 
-def send_hourly_report():
+def send_hourly_report() -> None:
     """매시 정각 요약 — INFO 버퍼에 저장 (일일 리포트에 병합됨)."""
     msg = build_hourly_summary()
     send_telegram(msg, priority=_TgPriority.INFO)

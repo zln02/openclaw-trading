@@ -6,3 +6,12 @@ scrape_configs:
     static_configs:
       - targets: ['dashboard:8080']
     metrics_path: /health
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['localhost:9100']
+    scrape_interval: 30s
+  - job_name: 'openclaw-agents'
+    static_configs:
+      - targets: ['dashboard:8080']
+    metrics_path: '/api/metrics'
+    scrape_interval: 60s

@@ -99,3 +99,6 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 # 성과 리포트 (장 마감 후 16:00)
 0 16 * * 1-5 cd /home/wlsdud5035/openclaw && .venv/bin/python stocks/performance_report.py >> /home/wlsdud5035/.openclaw/logs/report.log 2>&1
+
+# === Self Healer (5분마다) ===
+*/5 * * * * cd /home/wlsdud5035/openclaw && /home/wlsdud5035/openclaw/.venv/bin/python agents/self_healer.py >> /home/wlsdud5035/openclaw/logs/self_healer.log 2>&1

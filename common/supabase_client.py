@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import time
+from typing import Any
 
 from common.logger import get_logger
 
@@ -38,7 +39,7 @@ _RECONNECT_ERRORS = (
 )
 
 
-def create_supabase_client(url: str, key: str):
+def create_supabase_client(url: str, key: str) -> Any | None:
     """Create a Supabase client without propagating SDK import/init failures."""
     if not url or not key:
         return None
@@ -79,7 +80,7 @@ def _reset_client() -> None:
     reset_client()
 
 
-def get_supabase():
+def get_supabase() -> Any:
     """Supabase 클라이언트를 반환 (지연 초기화, 자동 재연결)."""
     global _client, _last_connect_attempt
     if _client is not None:
@@ -124,7 +125,7 @@ def get_supabase():
     wait=wait_exponential(multiplier=1, min=1, max=10),
     reraise=True,
 )
-def run_query_with_retry(query_fn):
+def run_query_with_retry(query_fn) -> Any:
     """Execute a Supabase query with retry/backoff.
     연결 끊김 에러 발생 시 싱글턴을 리셋하여 재연결 후 재시도한다.
     """
@@ -140,6 +141,6 @@ def run_query_with_retry(query_fn):
         raise
 
 
-def run_table_query(table: str, query_fn):
+def run_table_query(table: str, query_fn) -> Any:
     """Convenience wrapper for table-scoped retryable queries."""
     return run_query_with_retry(lambda supabase: query_fn(supabase.table(table)))
