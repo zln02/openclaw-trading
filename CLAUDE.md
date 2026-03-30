@@ -6,8 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Development
 ```bash
-# Activate virtualenv (workspace, not repo root)
-source /home/wlsdud5035/.openclaw/workspace/.venv/bin/activate
+# Activate virtualenv
+source .venv/bin/activate
 
 # Run agents directly
 python btc/btc_trading_agent.py           # BTC (Upbit live trading)
@@ -69,6 +69,18 @@ Daily     08:30 → stocks/ml_model.py retrain (if ≥50 trades)
 
 **Company** (`company/`): CEO→specialist delegation (opus-4-6 → sonnet/haiku). Run: `python -m company --task "request"`. Bash sandbox with blocklist + `_safe_path()` workspace confinement.
 
+**Risk Management Layer**:
+
+- `quant/risk/drawdown_guard.py` — 3-tier drawdown rules (daily/weekly/monthly)
+- `quant/risk/position_sizer.py` — Kelly fractional sizing + ATR volatility adjustment
+- `quant/risk/correlation_monitor.py` — Cross-market concentration risk detection
+- `common/circuit_breaker.py` — Auto-recovery circuit breaker with file-based cooldown
+
+**Monitoring**:
+
+- `agents/self_healer.py` — 5min cron: dashboard, log freshness, disk, Docker, memory, Supabase, correlation
+- `prometheus.yml` — 3 scrape jobs: dashboard, node-exporter, agent metrics
+
 ## Code Rules
 
 1. Wrap all external API calls in `try/except` — Upbit, Kiwoom, OpenAI/Claude, Supabase, Telegram, Notion
@@ -77,6 +89,8 @@ Daily     08:30 → stocks/ml_model.py retrain (if ≥50 trades)
 4. Hardcode nothing: stop-loss/take-profit ratios, model names, sleep intervals, cooldowns, ports → all in `common/config.py`
 5. Add type hints to all public functions (return type required)
 6. Use `common/retry.py retry_call()` for network calls
+7. Use `common/api_utils.py` `api_success()`/`api_error()` for all FastAPI route responses
+8. All config values must come from `common/config.py` — never hardcode thresholds, ratios, timeouts
 
 ## Risk Files — Edit with Extreme Care
 
