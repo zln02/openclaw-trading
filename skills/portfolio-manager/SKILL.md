@@ -1,3 +1,8 @@
+---
+name: portfolio-manager
+description: 포트폴리오 현황 — 시장별 비중, 리밸런싱 상태, BTC/KR/US 배분
+---
+
 # Portfolio Manager 스킬
 
 사용자가 "포트폴리오 현황", "시장별 비중", "리밸런싱 상태", "BTC/KR/US 배분 보여줘" 같이 물으면 이 스킬을 사용한다.

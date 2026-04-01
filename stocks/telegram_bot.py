@@ -27,6 +27,8 @@ from supabase import create_client
 from common.config import WORKSPACE
 from common.env_loader import load_env
 
+AUDIT_LOG = Path.home() / ".openclaw" / "logs" / "telegram_command_audit.log"
+
 
 def _load_env():
     load_env()
@@ -40,6 +42,16 @@ TG_CHAT = os.environ.get("TELEGRAM_CHAT_ID", "")
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_KEY = os.environ.get("SUPABASE_SECRET_KEY", "")
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
+
+
+def _audit(event: str, chat_id: str, detail: str = "") -> None:
+    try:
+        line = f"{datetime.now().isoformat()} event={event} chat_id={chat_id} detail={detail}\n"
+        AUDIT_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with AUDIT_LOG.open("a", encoding="utf-8") as fh:
+            fh.write(line)
+    except Exception:
+        pass
 
 
 def send_message(text: str, chat_id: str | None = None, reply_markup: dict | None = None):
@@ -462,8 +474,12 @@ def _is_authorized(chat_id: str) -> bool:
     """발신자 검증: TG_CHAT 미설정 시 모든 명령 차단."""
     if not TG_CHAT:
         print(f"[보안] TELEGRAM_CHAT_ID 미설정 — 발신자({chat_id}) 차단")
+        _audit("blocked_missing_chat_id", chat_id)
         return False
-    return str(chat_id) == str(TG_CHAT)
+    allowed = str(chat_id) == str(TG_CHAT)
+    if not allowed:
+        _audit("blocked_unauthorized", chat_id)
+    return allowed
 
 
 def poll_updates():
@@ -497,6 +513,7 @@ def poll_updates():
                     if not _is_authorized(cid):
                         continue
                     data_cmd = cb.get("data") or ""
+                    _audit("callback_command", cid, data_cmd)
                     handle_command(f"/{data_cmd}", cid)
                     continue
 
@@ -508,6 +525,7 @@ def poll_updates():
                 text = msg.get("text") or ""
                 if not text:
                     continue
+                _audit("text_command", cid, text)
                 handle_command(text, cid)
         except Exception as e:
             print(f"poll_updates 오류: {e}")

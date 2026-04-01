@@ -14,25 +14,15 @@ XGBoost 분류 모델:
 """
 
 import os
-import json
 import sys
 import pickle
 from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
+from common.env_loader import load_env
 
-
-def _load_env():
-    p = Path('/home/wlsdud5035/.openclaw/openclaw.json')
-    if p.exists():
-        d = json.loads(p.read_text())
-        for k, v in (d.get('env') or {}).items():
-            if isinstance(v, str):
-                os.environ.setdefault(k, v)
-
-
-_load_env()
+load_env()
 
 from supabase import create_client  # noqa: E402
 

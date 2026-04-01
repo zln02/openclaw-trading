@@ -71,7 +71,9 @@ def load_env() -> None:
             pass
 
     env_files = [
+        OPENCLAW_ROOT / ".env.secure",
         OPENCLAW_ROOT / ".env",
+        WORKSPACE / ".env.secure",
         WORKSPACE / ".env",
         WORKSPACE / "skills" / "kiwoom-api" / ".env",
     ]

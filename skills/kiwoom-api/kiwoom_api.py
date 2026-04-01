@@ -136,7 +136,7 @@ def _load_config() -> KiwoomConfig:
         # fallback: openclaw.json 의 env 사용
         candidates = [
             Path.home() / ".openclaw" / "openclaw.json",
-            Path("/home/node/.openclaw/openclaw.json"),
+            Path("/home/wlsdud5035/.openclaw/openclaw.json"),
         ]
         for p in candidates:
             try:

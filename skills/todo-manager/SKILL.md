@@ -1,6 +1,11 @@
+---
+name: todo-manager
+description: 할일 관리 — brain/todos.md 기반 할일 추가, 완료, 삭제, 조회
+---
+
 # 할일 관리 (Todo Manager)
 
-할일 파일: /home/node/.openclaw/workspace/brain/todos.md
+할일 파일: /home/wlsdud5035/.openclaw/workspace/brain/todos.md
 
 ## 명령어
 - "할일 추가: [내용]" → todos.md에 체크박스로 추가 (- [ ] 내용)

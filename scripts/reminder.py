@@ -15,6 +15,7 @@ reminder.py — OpenClaw 리마인더 시스템
 
 import argparse
 import json
+import os
 import re
 import sys
 from datetime import datetime, timedelta
@@ -25,32 +26,20 @@ try:
 except ImportError:
     requests = None
 
+from common.env_loader import load_env
+
 WORKSPACE = Path(__file__).resolve().parent.parent
 BRAIN_DIR  = WORKSPACE / "brain"
 REMINDERS  = BRAIN_DIR / "reminders.json"
 
 WEEKDAY_KR = {1: "월", 2: "화", 3: "수", 4: "목", 5: "금", 6: "토", 7: "일"}
 
+load_env()
+
 
 # ── Telegram ──────────────────────────────────────────────────────────────────
 
 def _load_tg() -> tuple[str, str]:
-    for p in [
-        WORKSPACE.parent / "openclaw.json",
-        Path("/home/wlsdud5035/.openclaw/openclaw.json"),
-        Path("/home/node/.openclaw/openclaw.json"),
-    ]:
-        if p.exists():
-            try:
-                d = json.loads(p.read_text())
-                token = (d.get("env", {}).get("TELEGRAM_BOT_TOKEN")
-                         or d.get("channels", {}).get("telegram", {}).get("botToken", ""))
-                chat_id = d.get("env", {}).get("TELEGRAM_CHAT_ID", "")
-                if token:
-                    return token, chat_id
-            except Exception:
-                pass
-    import os
     return os.environ.get("TELEGRAM_BOT_TOKEN", ""), os.environ.get("TELEGRAM_CHAT_ID", "")
 
 

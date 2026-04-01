@@ -44,6 +44,24 @@ from openai import OpenAI
 from btc_news_collector import get_news_summary, get_news_result as _get_news_result
 
 
+def _parse_entry_time(value) -> datetime | None:
+    """Parse Supabase timestamps defensively.
+
+    Historical rows may contain strings, naive datetimes, or already-parsed datetimes.
+    """
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+        except ValueError:
+            return None
+    return None
+
+
 def _load_ic_weights() -> dict:
     """Load IC-derived weights exported by quant/signal_evaluator.py.
 
@@ -208,6 +226,20 @@ def send_telegram(msg: str, priority: "_TgPriority" = _TgPriority.URGENT) -> Non
 # ── 시장 데이터 ───────────────────────────────────
 def get_market_data():
     return pyupbit.get_ohlcv("KRW-BTC", interval="minute5", count=200)
+
+
+def _market_data_ready(df) -> bool:
+    return df is not None and not df.empty and {"close", "high", "low", "volume"}.issubset(df.columns)
+
+
+def _latest_market_price() -> float:
+    df = get_market_data()
+    if _market_data_ready(df):
+        try:
+            return float(df["close"].iloc[-1])
+        except Exception:
+            return 0.0
+    return 0.0
 
 # ── 기술적 지표 ───────────────────────────────────
 def calculate_indicators(df) -> dict:
@@ -850,6 +882,12 @@ def execute_trade(
     pos         = get_open_position()
     price       = indicators["price"]
 
+    if btc_balance > 0.00001 and not pos:
+        log.warning(
+            "BTC 잔고는 있으나 DB OPEN 포지션이 없음 — 잔고/DB 상태 불일치 가능 | "
+            f"btc_balance={btc_balance:.8f}"
+        )
+
     # ── 손절/익절 + 트레일링 스탑 ──
     if btc_balance > 0.00001 and pos:
         entry_price = float(pos["entry_price"])
@@ -1205,7 +1243,10 @@ def run_trading_cycle():
         if "WEEKLY_DELEVERAGE" in triggers:
             pos = get_open_position()
             btc_balance = upbit.get_balance("BTC") or 0
-            price = get_market_data()["close"].iloc[-1]
+            price = _latest_market_price()
+            if price <= 0:
+                log.warning("시장 데이터 없음 — WEEKLY_DELEVERAGE 가격 조회 실패, 즉시 매도 스킵")
+                return {"result": "MARKET_DATA_UNAVAILABLE"}
             if pos and btc_balance > 0.00001 and not DRY_RUN:
                 sell_qty = btc_balance * 0.5 * 0.9995
                 upbit.sell_market_order("KRW-BTC", sell_qty)
@@ -1222,7 +1263,10 @@ def run_trading_cycle():
         if decision.get("force_liquidate"):
             pos = get_open_position()
             btc_balance = upbit.get_balance("BTC") or 0
-            price = get_market_data()["close"].iloc[-1]
+            price = _latest_market_price()
+            if price <= 0:
+                log.warning("시장 데이터 없음 — FULL_STOP 가격 조회 실패, 강제청산 스킵")
+                return {"result": "MARKET_DATA_UNAVAILABLE"}
             if pos and btc_balance > 0.00001 and not DRY_RUN:
                 upbit.sell_market_order("KRW-BTC", btc_balance * 0.9995)
                 close_all_positions(price)
@@ -1259,11 +1303,9 @@ def run_trading_cycle():
                 .order("entry_time", desc=True) \
                 .limit(1).execute()
             if _cd_res.data:
-                _last_entry_str = _cd_res.data[0].get("entry_time", "")
-                if _last_entry_str:
-                    _last_entry = datetime.fromisoformat(
-                        _last_entry_str.replace("Z", "+00:00")
-                    )
+                _last_entry_raw = _cd_res.data[0].get("entry_time")
+                _last_entry = _parse_entry_time(_last_entry_raw)
+                if _last_entry is not None:
                     _elapsed_min = (
                         datetime.now(timezone.utc) - _last_entry
                     ).total_seconds() / 60
@@ -1274,12 +1316,19 @@ def run_trading_cycle():
                                 f"쿨다운 중 ({_elapsed_min:.0f}분 / {cooldown_min}분) — 매수 스킵"
                             )
                             buy_limit_reached = True  # 매수 차단 (매도 분석은 계속)
+                elif _last_entry_raw:
+                    log.warning(
+                        f"최근 entry_time 파싱 실패 — cooldown 우회 가능 | raw={_last_entry_raw!r}"
+                    )
         except Exception as _cd_e:
             log.debug(f"쿨다운 체크 실패 (무시): {_cd_e}")
 
     log.info("매매 사이클 시작")
 
     df         = get_market_data()
+    if not _market_data_ready(df):
+        log.warning("시장 데이터 조회 실패 또는 비정상 응답 — 사이클 스킵 | guard=market_data_unavailable, result=MARKET_DATA_UNAVAILABLE")
+        return {"result": "MARKET_DATA_UNAVAILABLE"}
     indicators = calculate_indicators(df)
     volume     = get_volume_analysis(df)
     fg         = get_fear_greed()
@@ -1527,15 +1576,26 @@ def run_trading_cycle():
         if signal["action"] == "BUY":
             signal["confidence"] = max(signal["confidence"], 78)
         elif signal["action"] == "HOLD" and indicators["macd"] > 0 and rsi_d < 60:
+            prev_reason = signal.get("reason", "")
             signal["action"] = "BUY"
             signal["confidence"] = 72
             signal["reason"] += " [거래량 폭발]"
+            log.warning(
+                "HOLD 신호가 거래량 폭발 규칙으로 BUY 승격됨 | "
+                f"macd={indicators['macd']}, rsi_d={rsi_d}, vol_ratio_5m={vol_r:.2f}, "
+                f"prev_reason={prev_reason}"
+            )
 
     # 김치 프리미엄 저평가
     if kimchi is not None and kimchi <= -2.0 and signal["action"] == "HOLD" and rsi_d < 55:
+        prev_reason = signal.get("reason", "")
         signal["action"] = "BUY"
         signal["confidence"] = max(signal.get("confidence", 0), 72)
         signal["reason"] += f" [김치 저평가 {kimchi:+.2f}%]"
+        log.warning(
+            "HOLD 신호가 김치 저평가 규칙으로 BUY 승격됨 | "
+            f"kimchi={kimchi:+.2f}%, rsi_d={rsi_d}, prev_reason={prev_reason}"
+        )
 
     result = execute_trade(
         signal,
@@ -1574,6 +1634,8 @@ def build_hourly_summary() -> str:
     """매시 요약 텍스트 생성 (가격·포지션·오늘 손익·F&G·1시간봉 추세)."""
     try:
         df = get_market_data()
+        if not _market_data_ready(df):
+            return "⏰ BTC 매시 요약 생성 실패: 시장 데이터 조회 실패"
         ind = calculate_indicators(df)
         price = int(ind["price"])
         rsi = ind["rsi"]
@@ -1620,6 +1682,9 @@ if __name__ == "__main__":
         pos = get_open_position()
         if pos:
             df = get_market_data()
+            if not _market_data_ready(df):
+                log.warning("시장 데이터 조회 실패 또는 비정상 응답 — BTC check 스킵 | guard=market_data_unavailable")
+                sys.exit(0)
             ind = calculate_indicators(df)
             fg = get_fear_greed()
             vol = get_volume_analysis(df)

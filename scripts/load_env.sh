@@ -10,14 +10,17 @@ set -u
 OPENCLAW_ROOT="${OPENCLAW_CONFIG_DIR:-${OPENCLAW_STATE_DIR:-$HOME/.openclaw}}"
 OPENCLAW_ROOT="${OPENCLAW_ROOT/#\~/$HOME}"
 OPENCLAW_JSON="${OPENCLAW_CONFIG_PATH:-$OPENCLAW_ROOT/openclaw.json}"
+OPENCLAW_ENV_SECURE="$OPENCLAW_ROOT/.env.secure"
 OPENCLAW_ENV="$OPENCLAW_ROOT/.env"
 WORKSPACE="${OPENCLAW_WORKSPACE_DIR:-$OPENCLAW_ROOT/workspace}"
 WORKSPACE="${WORKSPACE/#\~/$HOME}"
 LOG_DIR="${OPENCLAW_LOG_DIR:-$OPENCLAW_ROOT/logs}"
 LOG_DIR="${LOG_DIR/#\~/$HOME}"
+OPENCLAW_SECRET_DIR="${OPENCLAW_SECRET_DIR:-$OPENCLAW_ROOT/.docker-secrets}"
+OPENCLAW_SECRET_DIR="${OPENCLAW_SECRET_DIR/#\~/$HOME}"
 
 emit_openclaw_env_pairs() {
-    python3 - "$OPENCLAW_JSON" "$OPENCLAW_ENV" "$WORKSPACE" <<'PY'
+    python3 - "$OPENCLAW_JSON" "$OPENCLAW_ENV_SECURE" "$OPENCLAW_ENV" "$WORKSPACE" "$OPENCLAW_SECRET_DIR" <<'PY'
 import json
 import re
 import sys
@@ -26,8 +29,15 @@ from pathlib import Path
 openclaw_json = Path(sys.argv[1])
 env_files = [
     Path(sys.argv[2]),
-    Path(sys.argv[3]) / ".env",
-    Path(sys.argv[3]) / "skills" / "kiwoom-api" / ".env",
+    Path(sys.argv[3]),
+    Path(sys.argv[4]) / ".env.secure",
+    Path(sys.argv[4]) / ".env",
+    Path(sys.argv[4]) / "skills" / "kiwoom-api" / ".env",
+]
+secret_dirs = [
+    Path("/run/secrets/openclaw"),
+    Path(sys.argv[4]) / ".docker-secrets",
+    Path(sys.argv[5]),
 ]
 key_re = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 loaded = {}
@@ -77,13 +87,31 @@ for path in env_files:
             value = value[:hash_index].rstrip()
         loaded.setdefault(key, value.replace("\\n", "\n"))
 
+for secret_dir in secret_dirs:
+    if not secret_dir.exists() or not secret_dir.is_dir():
+        continue
+    try:
+        children = list(secret_dir.iterdir())
+    except Exception:
+        continue
+    for child in children:
+        if not child.is_file():
+            continue
+        key = child.name.strip()
+        if not key_re.match(key):
+            continue
+        try:
+            loaded.setdefault(key, child.read_text(encoding="utf-8").strip())
+        except Exception:
+            continue
+
 for key, value in loaded.items():
     emit(key, value)
 PY
 }
 
 load_openclaw_env() {
-    export OPENCLAW_ROOT OPENCLAW_JSON OPENCLAW_ENV WORKSPACE LOG_DIR
+    export OPENCLAW_ROOT OPENCLAW_JSON OPENCLAW_ENV_SECURE OPENCLAW_ENV WORKSPACE LOG_DIR OPENCLAW_SECRET_DIR
     while IFS= read -r -d '' key && IFS= read -r -d '' value; do
         export "$key=$value"
     done < <(emit_openclaw_env_pairs)

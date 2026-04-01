@@ -21,24 +21,14 @@ ML + 리스크 전체 파이프라인 백테스터 v1.0
 """
 
 import os
-import json
 import sys
 from datetime import datetime
 from pathlib import Path
 
 import numpy as np
+from common.env_loader import load_env
 
-
-def _load_env():
-    p = Path('/home/wlsdud5035/.openclaw/openclaw.json')
-    if p.exists():
-        d = json.loads(p.read_text())
-        for k, v in (d.get('env') or {}).items():
-            if isinstance(v, str):
-                os.environ.setdefault(k, v)
-
-
-_load_env()
+load_env()
 
 # ml_model은 같은 디렉토리(stocks/)에 있으므로 sys.path에 추가
 _STOCKS_DIR = str(Path(__file__).parent)
@@ -308,4 +298,3 @@ if __name__ == '__main__':
     result = run_ml_backtest(days)
     if result:
         print('\n요약:', json.dumps(result, indent=2, ensure_ascii=False))
-

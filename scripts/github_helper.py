@@ -16,7 +16,7 @@ github_helper.py — OpenClaw GitHub 연동 (REST API)
 """
 
 import argparse
-import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,28 +27,19 @@ except ImportError:
     print("❌ pip install requests")
     sys.exit(1)
 
+from common.env_loader import load_env
+
 WORKSPACE = Path(__file__).resolve().parent.parent
+load_env()
 
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
 def _load_config() -> dict:
-    for p in [
-        WORKSPACE.parent / "openclaw.json",
-        Path("/home/wlsdud5035/.openclaw/openclaw.json"),
-        Path("/home/node/.openclaw/openclaw.json"),
-    ]:
-        if p.exists():
-            try:
-                d = json.loads(p.read_text())
-                return d.get("env", {})
-            except Exception:
-                pass
-    return {}
+    return dict(os.environ)
 
 
 def _get_token() -> str:
-    import os
     cfg = _load_config()
     return cfg.get("GITHUB_TOKEN") or os.environ.get("GITHUB_TOKEN", "")
 

@@ -12,23 +12,13 @@
 """
 
 import os
-import json
 import math
 from datetime import datetime, timedelta
-from pathlib import Path
 
 import requests
+from common.env_loader import load_env
 
-def _load_env():
-    p = Path('/home/wlsdud5035/.openclaw/openclaw.json')
-    if p.exists():
-        d = json.loads(p.read_text())
-        for k, v in (d.get('env') or {}).items():
-            if isinstance(v, str):
-                os.environ.setdefault(k, v)
-
-
-_load_env()
+load_env()
 
 from supabase import create_client
 
@@ -236,4 +226,3 @@ if __name__ == '__main__':
     import sys
     mkt = sys.argv[1] if len(sys.argv) > 1 else "kr"
     generate_report(market=mkt)
-
