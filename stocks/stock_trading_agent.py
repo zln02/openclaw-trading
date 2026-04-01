@@ -25,7 +25,7 @@ from common.telegram import send_telegram as _tg_send
 from common.supabase_client import _reset_client, get_supabase
 from common.logger import get_logger
 from common.retry import retry, retry_call
-from common.config import ML_BLEND_CONFIG, STOCK_TRADING_LOG, WORKSPACE_DIR
+from common.config import BRAIN_PATH, ML_BLEND_CONFIG, STOCK_TRADING_LOG, WORKSPACE_DIR
 from common.equity_loader import (
     append_equity_snapshot,
     get_effective_market_weight,
@@ -151,7 +151,7 @@ def _load_kr_ml_drift_report(force: bool = False) -> dict:
     global _kr_drift_cache
     if _kr_drift_cache and not force:
         return _kr_drift_cache
-    path = Path(__file__).resolve().parents[1] / 'brain' / 'ml' / 'drift_report.json'
+    path = BRAIN_PATH / 'ml' / 'drift_report.json'
     if not path.exists():
         _kr_drift_cache = {}
         return _kr_drift_cache
@@ -202,7 +202,7 @@ def _apply_kr_drift_gate(signal: dict) -> dict:
 
 
 def is_market_open() -> bool:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(KST)
     if now.weekday() >= 5:
         return False
     t = now.hour * 100 + now.minute
@@ -1125,8 +1125,8 @@ def get_trading_signal(
 
     # ML 신호 항상 수집
     try:
-        from ml_model import get_ml_signal, MODEL_DIR  # 같은 디렉토리
-        if (MODEL_DIR / 'horizon_3d').exists():
+        from ml_model import MODEL_DIR, get_ml_signal  # 같은 디렉토리
+        if (MODEL_DIR / 'ensemble_meta.json').exists():
             ml = get_ml_signal(stock['code'])
             ml_confidence = float(ml.get('confidence', 0))
             ml_source = ml.get('source', 'ML_XGBOOST')
@@ -1475,20 +1475,24 @@ def execute_buy(
         log(f"{name} SmartRouter: {decision.get('route', 'MARKET')} / 슬리피지 {slippage.get('avg_abs_slippage_bps', 0):.1f}bps")
     except ConnectionError as e:
         log(f'{name} 매수 주문 연결 실패: {e}', 'ERROR')
-        send_telegram(f'❌ <b>{name} 매수 주문 실패</b>\n연결 오류: {e}')
-        return {'result': 'ORDER_FAILED', 'error': str(e)}
+        _log.error(f"{name} 매수 주문 연결 실패: {e}", exc_info=True)
+        send_telegram(f'❌ <b>{name} 매수 주문 실패</b>\n연결 오류')
+        return {'result': 'ORDER_FAILED', 'error': '연결 오류'}
     except TimeoutError as e:
         log(f'{name} 매수 주문 타임아웃: {e}', 'ERROR')
-        send_telegram(f'❌ <b>{name} 매수 주문 실패</b>\n타임아웃: {e}')
-        return {'result': 'ORDER_FAILED', 'error': str(e)}
+        _log.error(f"{name} 매수 주문 타임아웃: {e}", exc_info=True)
+        send_telegram(f'❌ <b>{name} 매수 주문 실패</b>\n타임아웃')
+        return {'result': 'ORDER_FAILED', 'error': '타임아웃'}
     except ValueError as e:
         log(f'{name} 매수 주문 값 오류: {e}', 'ERROR')
-        send_telegram(f'❌ <b>{name} 매수 주문 실패</b>\n파라미터 오류: {e}')
-        return {'result': 'ORDER_FAILED', 'error': str(e)}
+        _log.error(f"{name} 매수 주문 값 오류: {e}", exc_info=True)
+        send_telegram(f'❌ <b>{name} 매수 주문 실패</b>\n파라미터 오류')
+        return {'result': 'ORDER_FAILED', 'error': '파라미터 오류'}
     except Exception as e:
         log(f'{name} 매수 주문 실패: {e}', 'ERROR')
-        send_telegram(f'❌ <b>{name} 매수 주문 실패</b>\n{e}')
-        return {'result': 'ORDER_FAILED', 'error': str(e)}
+        _log.error(f"{name} 매수 주문 실패: {e}", exc_info=True)
+        send_telegram(f'❌ <b>{name} 매수 주문 실패</b>\n주문 처리 실패')
+        return {'result': 'ORDER_FAILED', 'error': '주문 처리 실패'}
         # ↑ 주문 실패 시 여기서 return → DB 저장 안 됨 (v1 버그 수정)
 
     # ── DB 저장 (주문 성공 후에만) ──

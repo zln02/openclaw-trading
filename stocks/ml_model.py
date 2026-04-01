@@ -25,19 +25,10 @@ import numpy as np
 _WORKSPACE_ROOT = Path(__file__).resolve().parents[1]
 if str(_WORKSPACE_ROOT) not in sys.path:
     sys.path.insert(0, str(_WORKSPACE_ROOT))
+from common.env_loader import load_env
 from common.logger import get_logger
 
-
-def _load_env():
-    p = Path('/home/wlsdud5035/.openclaw/openclaw.json')
-    if p.exists():
-        d = json.loads(p.read_text())
-        for k, v in (d.get('env') or {}).items():
-            if isinstance(v, str):
-                os.environ.setdefault(k, v)
-
-
-_load_env()
+load_env()
 log = get_logger(__name__)
 
 from supabase import create_client  # noqa: E402
@@ -775,10 +766,16 @@ def _load_meta_model(horizon_key: str = '3d'):
         return None
     try:
         return joblib.load(meta_path)
-    except Exception:
+    except Exception as e:
+        log.warning(f"joblib 메타 모델 로드 실패, 제한적 pickle fallback 시도: {e}")
         try:
+            resolved_meta_path = meta_path.resolve()
+            resolved_model_dir = MODEL_DIR.resolve()
+            if resolved_model_dir not in resolved_meta_path.parents or resolved_meta_path.suffix != '.pkl':
+                log.warning(f'신뢰되지 않은 메타 모델 경로 거부: {resolved_meta_path}')
+                return None
             import pickle
-            with open(meta_path, 'rb') as fp:
+            with open(resolved_meta_path, 'rb') as fp:
                 return pickle.load(fp)
         except Exception as e:
             log.debug(f'메타 모델 로드 실패: {e}')

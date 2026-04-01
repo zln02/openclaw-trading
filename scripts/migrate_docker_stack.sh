@@ -10,7 +10,7 @@ cd /home/wlsdud5035/.openclaw/workspace
 docker compose down
 
 echo "=== 3. openclaw 통합 스택 시작 ==="
-cd /home/wlsdud5035/openclaw
+cd /home/wlsdud5035/quant-agent
 docker compose up -d
 
 echo "=== 4. 상태 확인 ==="

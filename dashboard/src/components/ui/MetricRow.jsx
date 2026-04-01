@@ -1,10 +1,8 @@
 import clsx from "clsx";
+import { getSignalColor } from "../../utils/signalColor";
 
-export function getSignalColor(value) {
-  if (value <= 30) return "#ff4757";
-  if (value <= 70) return "#ffa502";
-  return "#00d4aa";
-}
+// Re-export for backwards-compat (BtcPage imports this)
+export { getSignalColor };
 
 export default function MetricRow({
   label,
@@ -24,22 +22,25 @@ export default function MetricRow({
         <span className="text-xs uppercase tracking-[0.12em] text-[color:var(--text-secondary)]">
           {label}
         </span>
-        <span
-          className={clsx(
-            "numeric text-sm text-[color:var(--text-primary)]",
-            compact && "text-xs",
-          )}
-        >
+        <span className={clsx("numeric text-sm text-[color:var(--text-primary)]", compact && "text-xs")}>
           {valueLabel ?? value}
         </span>
       </div>
+
+      {/* /optimize: transform:scaleX instead of width — composite layer only, no layout reflow */}
+      {/* /harden:  role=progressbar + aria attrs for screen readers */}
+      {/* /quieter: boxShadow glow removed */}
       <div className={clsx("overflow-hidden rounded-full bg-white/5", compact ? "h-1.5" : "h-2")}>
         <div
-          className="h-full rounded-full transition-[width] duration-300"
+          role="progressbar"
+          aria-valuenow={normalized}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-label={label}
+          className="h-full w-full origin-left rounded-full transition-transform duration-300"
           style={{
-            width: `${normalized}%`,
             backgroundColor: fill,
-            boxShadow: normalized > 0 ? `0 0 12px ${fill}66` : "none",
+            transform: `scaleX(${normalized / 100})`,
           }}
         />
       </div>

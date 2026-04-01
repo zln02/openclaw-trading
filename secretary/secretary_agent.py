@@ -6,6 +6,7 @@ import os
 import json
 from pathlib import Path
 from typing import Any, Callable
+from common.logger import get_logger
 
 # .env 로드 (python-dotenv 사용 시)
 try:
@@ -19,6 +20,8 @@ except ImportError:
 from core.notion_skill import create_notion_note, update_notion_todo, query_notion_database
 from core.agency_memory import search_learned, apply_pending_to_learned
 
+log = get_logger("secretary_agent")
+
 
 def create_notion_note_tool(title: str, content: str = "", parent_page_id: str = "") -> dict[str, Any]:
     """노션에 노트(페이지) 생성. parent_page_id 없으면 .env의 NOTION_PAGE_ID 사용."""
@@ -26,7 +29,8 @@ def create_notion_note_tool(title: str, content: str = "", parent_page_id: str =
         pid = parent_page_id.strip() or None
         return create_notion_note(title=title, content=content, parent_page_id=pid)
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        log.error(f"create_notion_note_tool 실패: {e}", exc_info=True)
+        return {"ok": False, "error": "internal_error"}
 
 
 def update_notion_todo_tool(
@@ -42,7 +46,8 @@ def update_notion_todo_tool(
         t = title.strip() or None
         return update_notion_todo(page_id=pid, database_id=dbid, title=t, done=done)
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        log.error(f"update_notion_todo_tool 실패: {e}", exc_info=True)
+        return {"ok": False, "error": "internal_error"}
 
 
 def query_notion_todo_tool(done_only: bool | None = None, database_id: str = "") -> dict[str, Any]:
@@ -51,7 +56,8 @@ def query_notion_todo_tool(done_only: bool | None = None, database_id: str = "")
         dbid = database_id.strip() or None
         return query_notion_database(database_id=dbid, filter_done=done_only)
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        log.error(f"query_notion_todo_tool 실패: {e}", exc_info=True)
+        return {"ok": False, "error": "internal_error"}
 
 
 def memory_search_learned_tool(keyword: str = "", limit: int = 10) -> dict[str, Any]:
@@ -60,7 +66,8 @@ def memory_search_learned_tool(keyword: str = "", limit: int = 10) -> dict[str, 
         items = search_learned(keyword=keyword, limit=limit)
         return {"ok": True, "items": items}
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        log.error(f"memory_search_learned_tool 실패: {e}", exc_info=True)
+        return {"ok": False, "error": "internal_error"}
 
 
 def apply_learning_approval_tool(pending_id: str = "") -> dict[str, Any]:
@@ -69,7 +76,8 @@ def apply_learning_approval_tool(pending_id: str = "") -> dict[str, Any]:
         pid = int(pending_id.strip()) if pending_id and pending_id.strip().isdigit() else None
         return apply_pending_to_learned(pending_id=pid)
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        log.error(f"apply_learning_approval_tool 실패: {e}", exc_info=True)
+        return {"ok": False, "error": "internal_error"}
 
 
 # Gmail 스타일과 동일하게 TOOLS 리스트: 이름 -> (설명, 함수)

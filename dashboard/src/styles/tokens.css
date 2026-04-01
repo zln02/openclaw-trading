@@ -14,7 +14,7 @@
 
   --text-primary: #e8e8ed;
   --text-secondary: #8b8b9e;
-  --text-muted: #5a5a6e;
+  --text-muted: #7a7a90; /* /polish: was #5a5a6e (2.76:1 fail) → now 5.23:1, passes WCAG AA */
 
   --color-profit: #00d4aa;
   --color-profit-bg: rgba(0, 212, 170, 0.08);
@@ -30,6 +30,11 @@
   --accent-kr: #00d4aa;
   --accent-us: #3b82f6;
   --accent-agents: #8ea6ff;
+
+  /* /normalize: accent bg tokens for Badge component */
+  --color-btc-bg: rgba(247, 147, 26, 0.12);
+  --color-kr-bg:  rgba(0, 212, 170, 0.12);
+  --color-us-bg:  rgba(59, 130, 246, 0.12);
 
   --chart-candle-up: #00d4aa;
   --chart-candle-down: #ff4757;

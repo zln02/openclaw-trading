@@ -75,3 +75,4 @@ grafana_data/
 # gog binary (Google Sheets CLI, 22 MB — 로컬 전용)
 gog-docker
 gog
+catboost_info/

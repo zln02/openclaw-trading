@@ -522,7 +522,8 @@ def handle_ai_chat(text: str, chat_id: str) -> str:
             return f"{reply}\n\n{get_help_text()}"
         return reply
     except Exception as e:
-        return f"⚠️ AI 응답 오류: {str(e)[:120]}\n\n{get_help_text()}"
+        log.error(f"AI 응답 처리 실패: {e}", exc_info=True)
+        return f"⚠️ AI 응답을 사용할 수 없습니다.\n\n{get_help_text()}"
 
 
 def handle_command(cmd: str, chat_id: str):

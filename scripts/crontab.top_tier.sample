@@ -6,99 +6,99 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 # --- Core trading loops ---
 # BTC 사이클 (10분)
-*/10 * * * * /home/wlsdud5035/openclaw/scripts/run_btc_cron.sh >> /home/wlsdud5035/.openclaw/logs/btc_trading.log 2>&1
+*/10 * * * * /home/wlsdud5035/quant-agent/scripts/run_btc_cron.sh >> /home/wlsdud5035/.openclaw/logs/btc_trading.log 2>&1
 # BTC 1분 체크
-* * * * * /home/wlsdud5035/openclaw/scripts/run_btc_cron.sh check >> /home/wlsdud5035/.openclaw/logs/btc_check.log 2>&1
+* * * * * /home/wlsdud5035/quant-agent/scripts/run_btc_cron.sh check >> /home/wlsdud5035/.openclaw/logs/btc_check.log 2>&1
 
 # KR 주식 사이클 (평일 장중 10분)
-*/10 9-15 * * 1-5 /home/wlsdud5035/openclaw/scripts/run_stock_cron.sh >> /home/wlsdud5035/.openclaw/logs/stock_trading.log 2>&1
+*/10 9-15 * * 1-5 /home/wlsdud5035/quant-agent/scripts/run_stock_cron.sh >> /home/wlsdud5035/.openclaw/logs/stock_trading.log 2>&1
 # KR 손절/익절 체크 (평일 장중 1분)
-* 9-15 * * 1-5 /home/wlsdud5035/openclaw/scripts/run_stock_cron.sh check >> /home/wlsdud5035/.openclaw/logs/stock_check.log 2>&1
+* 9-15 * * 1-5 /home/wlsdud5035/quant-agent/scripts/run_stock_cron.sh check >> /home/wlsdud5035/.openclaw/logs/stock_check.log 2>&1
 # KR 장전
-0 8 * * 1-5 /home/wlsdud5035/openclaw/scripts/run_stock_cron.sh premarket >> /home/wlsdud5035/.openclaw/logs/stock_premarket.log 2>&1
+0 8 * * 1-5 /home/wlsdud5035/quant-agent/scripts/run_stock_cron.sh premarket >> /home/wlsdud5035/.openclaw/logs/stock_premarket.log 2>&1
 
 # US 주식 사이클 (KST 기준 야간, 15분)
-*/15 22-23,0-5 * * 1-5 /home/wlsdud5035/openclaw/scripts/run_us_cron.sh >> /home/wlsdud5035/.openclaw/logs/us_trading.log 2>&1
+*/15 22-23,0-5 * * 1-5 /home/wlsdud5035/quant-agent/scripts/run_us_cron.sh >> /home/wlsdud5035/.openclaw/logs/us_trading.log 2>&1
 # US 체크 (야간 5분)
-*/5 22-23,0-5 * * 1-5 /home/wlsdud5035/openclaw/scripts/run_us_cron.sh check >> /home/wlsdud5035/.openclaw/logs/us_check.log 2>&1
+*/5 22-23,0-5 * * 1-5 /home/wlsdud5035/quant-agent/scripts/run_us_cron.sh check >> /home/wlsdud5035/.openclaw/logs/us_check.log 2>&1
 # US 장전
-30 22 * * 1-5 /home/wlsdud5035/openclaw/scripts/run_us_cron.sh premarket >> /home/wlsdud5035/.openclaw/logs/us_premarket.log 2>&1
+30 22 * * 1-5 /home/wlsdud5035/quant-agent/scripts/run_us_cron.sh premarket >> /home/wlsdud5035/.openclaw/logs/us_premarket.log 2>&1
 
 # --- Top-tier Phase 14/15/16 signal jobs ---
 # Phase 14: BTC 시그널(오더플로우/캐리/아비/고래)
-*/5 * * * * KR_SYMBOL=005930 US_SYMBOL=AAPL /home/wlsdud5035/openclaw/scripts/run_top_tier_cron.sh phase14 >> /home/wlsdud5035/.openclaw/logs/phase14_signals.log 2>&1
+*/5 * * * * KR_SYMBOL=005930 US_SYMBOL=AAPL /home/wlsdud5035/quant-agent/scripts/run_top_tier_cron.sh phase14 >> /home/wlsdud5035/.openclaw/logs/phase14_signals.log 2>&1
 
 # Phase 15: KR 시그널(호가/수급/DART/섹터)
-*/10 9-15 * * 1-5 KR_SYMBOL=005930 /home/wlsdud5035/openclaw/scripts/run_top_tier_cron.sh phase15 >> /home/wlsdud5035/.openclaw/logs/phase15_signals.log 2>&1
+*/10 9-15 * * 1-5 KR_SYMBOL=005930 /home/wlsdud5035/quant-agent/scripts/run_top_tier_cron.sh phase15 >> /home/wlsdud5035/.openclaw/logs/phase15_signals.log 2>&1
 
 # Phase 16: US 시그널(브로커 상태/옵션/숏인터레스트)
-*/15 22-23,0-5 * * 1-5 US_SYMBOL=AAPL /home/wlsdud5035/openclaw/scripts/run_top_tier_cron.sh phase16 >> /home/wlsdud5035/.openclaw/logs/phase16_signals.log 2>&1
+*/15 22-23,0-5 * * 1-5 US_SYMBOL=AAPL /home/wlsdud5035/quant-agent/scripts/run_top_tier_cron.sh phase16 >> /home/wlsdud5035/.openclaw/logs/phase16_signals.log 2>&1
 
 # --- Phase 18 monitoring/reporting ---
 # 알림 매니저 (2분)
-*/2 * * * * ALERT_DRAWDOWN=-0.01 ALERT_VAR95=0.018 ALERT_CORR_SHIFT=0.05 ALERT_VOLUME_SPIKE=1.4 /home/wlsdud5035/openclaw/scripts/run_top_tier_cron.sh phase18-alert >> /home/wlsdud5035/.openclaw/logs/alert_manager.log 2>&1
+*/2 * * * * ALERT_DRAWDOWN=-0.01 ALERT_VAR95=0.018 ALERT_CORR_SHIFT=0.05 ALERT_VOLUME_SPIKE=1.4 /home/wlsdud5035/quant-agent/scripts/run_top_tier_cron.sh phase18-alert >> /home/wlsdud5035/.openclaw/logs/alert_manager.log 2>&1
 
 # 일간 리포트 (매일 22:00 KST — INFO 버퍼 포함)
-0 22 * * * /home/wlsdud5035/openclaw/scripts/run_top_tier_cron.sh phase18-daily >> /home/wlsdud5035/.openclaw/logs/daily_report.log 2>&1
+0 22 * * * /home/wlsdud5035/quant-agent/scripts/run_top_tier_cron.sh phase18-daily >> /home/wlsdud5035/.openclaw/logs/daily_report.log 2>&1
 
 # 주간 리포트 (일요일 21:00 KST)
-0 21 * * 0 /home/wlsdud5035/openclaw/scripts/run_top_tier_cron.sh phase18-weekly >> /home/wlsdud5035/.openclaw/logs/weekly_report.log 2>&1
+0 21 * * 0 /home/wlsdud5035/quant-agent/scripts/run_top_tier_cron.sh phase18-weekly >> /home/wlsdud5035/.openclaw/logs/weekly_report.log 2>&1
 
 # 헬스체크
-*/5 * * * * /home/wlsdud5035/openclaw/scripts/check_health.sh >> /home/wlsdud5035/.openclaw/logs/health_check.log 2>&1
+*/5 * * * * /home/wlsdud5035/quant-agent/scripts/check_health.sh >> /home/wlsdud5035/.openclaw/logs/health_check.log 2>&1
 
 # --- Level 4/5 Research Loop (매주 자동) ---
 # 토요일 22:00 — Alpha Researcher (파라미터 그리드서치 + walk-forward IC)
-0 22 * * 6 /home/wlsdud5035/openclaw/scripts/run_alpha_researcher.sh >> /home/wlsdud5035/.openclaw/logs/alpha_researcher.log 2>&1
+0 22 * * 6 /home/wlsdud5035/quant-agent/scripts/run_alpha_researcher.sh >> /home/wlsdud5035/.openclaw/logs/alpha_researcher.log 2>&1
 
 # 일요일 23:00 — Signal Evaluator (IC/IR 계산 + weights.json 업데이트)
-0 23 * * 0 /home/wlsdud5035/openclaw/scripts/run_signal_evaluator.sh >> /home/wlsdud5035/.openclaw/logs/signal_evaluator.log 2>&1
+0 23 * * 0 /home/wlsdud5035/quant-agent/scripts/run_signal_evaluator.sh >> /home/wlsdud5035/.openclaw/logs/signal_evaluator.log 2>&1
 
 # 일요일 23:30 — Param Optimizer (attribution + 자율 파라미터 조정 + 텔레그램 알림)
-30 23 * * 0 /home/wlsdud5035/openclaw/scripts/run_param_optimizer.sh >> /home/wlsdud5035/.openclaw/logs/param_optimizer.log 2>&1
+30 23 * * 0 /home/wlsdud5035/quant-agent/scripts/run_param_optimizer.sh >> /home/wlsdud5035/.openclaw/logs/param_optimizer.log 2>&1
 
 # 일요일 23:45 — Portfolio Rebalance (risk parity target weights 생성)
-45 23 * * 0 /home/wlsdud5035/openclaw/scripts/run_portfolio_rebalance.sh >> /home/wlsdud5035/.openclaw/logs/portfolio_rebalance.log 2>&1
+45 23 * * 0 /home/wlsdud5035/quant-agent/scripts/run_portfolio_rebalance.sh >> /home/wlsdud5035/.openclaw/logs/portfolio_rebalance.log 2>&1
 
 # 매일 07:00 — Cross-Market Portfolio Manager (BTC/KR/US/cash 동적 배분)
-0 7 * * * /home/wlsdud5035/openclaw/scripts/run_cross_market_allocation.sh >> /home/wlsdud5035/.openclaw/logs/cross_market_allocation.log 2>&1
+0 7 * * * /home/wlsdud5035/quant-agent/scripts/run_cross_market_allocation.sh >> /home/wlsdud5035/.openclaw/logs/cross_market_allocation.log 2>&1
 
 # KR ML 드리프트 모니터 (평일 08:25 — PSI/KS 체크, 위험 시 자동 retrain)
-25 8 * * 1-5 /home/wlsdud5035/openclaw/.venv/bin/python /home/wlsdud5035/openclaw/stocks/ml_drift_monitor.py --auto-retrain >> /home/wlsdud5035/.openclaw/logs/ml_drift_monitor.log 2>&1
+25 8 * * 1-5 /home/wlsdud5035/quant-agent/.venv/bin/python /home/wlsdud5035/quant-agent/stocks/ml_drift_monitor.py --auto-retrain >> /home/wlsdud5035/.openclaw/logs/ml_drift_monitor.log 2>&1
 
 # KR ML 재학습 체크 (매일 08:30 — 50회 체결 이상 시 자동 retrain)
-30 8 * * 1-5 /home/wlsdud5035/openclaw/.venv/bin/python /home/wlsdud5035/openclaw/stocks/ml_model.py retrain 3d 50 >> /home/wlsdud5035/.openclaw/logs/ml_retrain.log 2>&1
+30 8 * * 1-5 /home/wlsdud5035/quant-agent/.venv/bin/python /home/wlsdud5035/quant-agent/stocks/ml_model.py retrain 3d 50 >> /home/wlsdud5035/.openclaw/logs/ml_retrain.log 2>&1
 
 # KR 롱숏 DRY-RUN 플랜 (평일 08:40 — long_short_plan.json 생성)
-40 8 * * 1-5 /home/wlsdud5035/openclaw/scripts/run_long_short_cycle.sh plan >> /home/wlsdud5035/.openclaw/logs/long_short_cycle.log 2>&1
+40 8 * * 1-5 /home/wlsdud5035/quant-agent/scripts/run_long_short_cycle.sh plan >> /home/wlsdud5035/.openclaw/logs/long_short_cycle.log 2>&1
 
 # KR 롱숏 중립성 모니터 (평일 장중 30분마다)
-0,30 9-15 * * 1-5 /home/wlsdud5035/openclaw/scripts/run_neutrality_monitor.sh --no-send >> /home/wlsdud5035/.openclaw/logs/neutrality_monitor.log 2>&1
+0,30 9-15 * * 1-5 /home/wlsdud5035/quant-agent/scripts/run_neutrality_monitor.sh --no-send >> /home/wlsdud5035/.openclaw/logs/neutrality_monitor.log 2>&1
 
 # BTC DEX/CEX 차익 모니터 (10초 간격으로는 systemd 권장, cron 샘플은 1분)
-*/1 * * * * /home/wlsdud5035/openclaw/scripts/run_dex_price_monitor.sh --no-send >> /home/wlsdud5035/.openclaw/logs/dex_price_monitor.log 2>&1
+*/1 * * * * /home/wlsdud5035/quant-agent/scripts/run_dex_price_monitor.sh --no-send >> /home/wlsdud5035/.openclaw/logs/dex_price_monitor.log 2>&1
 
 # BTC DEX/CEX 차익 DRY-RUN 실행기 (모니터 직후)
-*/1 * * * * /home/wlsdud5035/openclaw/scripts/run_arb_executor.sh --no-send >> /home/wlsdud5035/.openclaw/logs/arb_executor.log 2>&1
+*/1 * * * * /home/wlsdud5035/quant-agent/scripts/run_arb_executor.sh --no-send >> /home/wlsdud5035/.openclaw/logs/arb_executor.log 2>&1
 
 # US ML 드리프트 모니터 (평일 22:20 — PSI/KS 체크, 위험 시 자동 retrain)
-20 22 * * 1-5 /home/wlsdud5035/openclaw/.venv/bin/python /home/wlsdud5035/openclaw/stocks/us_ml_drift_monitor.py --auto-retrain >> /home/wlsdud5035/.openclaw/logs/us_ml_drift_monitor.log 2>&1
+20 22 * * 1-5 /home/wlsdud5035/quant-agent/.venv/bin/python /home/wlsdud5035/quant-agent/stocks/us_ml_drift_monitor.py --auto-retrain >> /home/wlsdud5035/.openclaw/logs/us_ml_drift_monitor.log 2>&1
 
 # --- Data collection ---
 # KR 분봉 수집 (장중 30분마다)
-*/30 9-15 * * 1-5 cd /home/wlsdud5035/openclaw && .venv/bin/python stocks/stock_data_collector.py intraday >> /home/wlsdud5035/.openclaw/logs/intraday.log 2>&1
+*/30 9-15 * * 1-5 cd /home/wlsdud5035/quant-agent && .venv/bin/python stocks/stock_data_collector.py intraday >> /home/wlsdud5035/.openclaw/logs/intraday.log 2>&1
 
 # KR 일봉 OHLCV 수집 (장 마감 후)
-30 16 * * 1-5 cd /home/wlsdud5035/openclaw && .venv/bin/python stocks/stock_data_collector.py extended >> /home/wlsdud5035/.openclaw/logs/ohlcv_collect.log 2>&1
+30 16 * * 1-5 cd /home/wlsdud5035/quant-agent && .venv/bin/python stocks/stock_data_collector.py extended >> /home/wlsdud5035/.openclaw/logs/ohlcv_collect.log 2>&1
 
 # KR 일봉 OHLCV 수집 (평일 18:00)
-0 18 * * 1-5 cd /home/wlsdud5035/openclaw && .venv/bin/python3 stocks/stock_data_collector.py ohlcv >> /home/wlsdud5035/.openclaw/logs/stock_collector.log 2>&1
+0 18 * * 1-5 cd /home/wlsdud5035/quant-agent && .venv/bin/python3 stocks/stock_data_collector.py ohlcv >> /home/wlsdud5035/.openclaw/logs/stock_collector.log 2>&1
 
 # KR 재무제표 수집 (매주 월요일 07:00)
-0 7 * * 1 cd /home/wlsdud5035/openclaw && .venv/bin/python stocks/stock_data_collector.py financials >> /home/wlsdud5035/.openclaw/logs/financials.log 2>&1
+0 7 * * 1 cd /home/wlsdud5035/quant-agent && .venv/bin/python stocks/stock_data_collector.py financials >> /home/wlsdud5035/.openclaw/logs/financials.log 2>&1
 
 # 성과 리포트 (장 마감 후 16:00)
-0 16 * * 1-5 cd /home/wlsdud5035/openclaw && .venv/bin/python stocks/performance_report.py >> /home/wlsdud5035/.openclaw/logs/report.log 2>&1
+0 16 * * 1-5 cd /home/wlsdud5035/quant-agent && .venv/bin/python stocks/performance_report.py >> /home/wlsdud5035/.openclaw/logs/report.log 2>&1
 
 # === Self Healer (5분마다) ===
-*/5 * * * * cd /home/wlsdud5035/openclaw && /home/wlsdud5035/openclaw/.venv/bin/python agents/self_healer.py >> /home/wlsdud5035/openclaw/logs/self_healer.log 2>&1
+*/5 * * * * cd /home/wlsdud5035/quant-agent && /home/wlsdud5035/quant-agent/.venv/bin/python agents/self_healer.py >> /home/wlsdud5035/quant-agent/logs/self_healer.log 2>&1

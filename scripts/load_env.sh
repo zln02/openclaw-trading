@@ -32,11 +32,13 @@ import sys
 from pathlib import Path
 
 openclaw_json = Path(sys.argv[1])
+workspace = Path(sys.argv[3])
 env_files = [
     Path(sys.argv[2]),
-    Path(sys.argv[3]) / ".env",
-    Path(sys.argv[3]) / "skills" / "kiwoom-api" / ".env",
+    workspace / ".env",
+    workspace / "skills" / "kiwoom-api" / ".env",
 ]
+secret_dirs = [Path("/run/local-secrets"), workspace / ".docker-secrets"]
 key_re = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 loaded = {}
 locked_keys = {"OPENCLAW_WORKSPACE_DIR"}
@@ -91,6 +93,23 @@ for path in env_files:
         if hash_index != -1:
             value = value[:hash_index].rstrip()
         loaded.setdefault(key, value.replace("\\n", "\n"))
+
+for secret_dir in secret_dirs:
+    if not secret_dir.is_dir():
+        continue
+    try:
+        secret_files = sorted(secret_dir.iterdir())
+    except Exception:
+        continue
+    for secret_file in secret_files:
+        if not secret_file.is_file() or not key_re.match(secret_file.name):
+            continue
+        try:
+            value = secret_file.read_text(encoding="utf-8").strip()
+        except Exception:
+            continue
+        if value:
+            loaded.setdefault(secret_file.name, value)
 
 for key, value in loaded.items():
     emit(key, value)

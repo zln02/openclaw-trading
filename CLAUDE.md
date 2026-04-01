@@ -1,6 +1,19 @@
-# CLAUDE.md
+# quant-agent — 개인 자동매매 플랫폼
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+@btc/CLAUDE.md
+@agents/CLAUDE.md
+@quant/CLAUDE.md
+@execution/CLAUDE.md
+
+BTC(Upbit 실거래) / KR(Kiwoom 모의) / US(yfinance 시뮬) 3시장 자동매매. Claude 5-에이전트 팀.
+
+## 절대 규칙
+- **`btc/` 실거래 코드 수정 시 반드시 Plan Mode 먼저**
+- `.env` 파일 절대 커밋 금지
+- `DrawdownGuard` / `CircuitBreaker` 변경 시 테스트 필수
+- `/sell_all` 명령 확인 단계 제거 금지
+
+---
 
 ## Commands
 
@@ -120,3 +133,17 @@ Chart timeframes:
 - US: `5d/1mo/3mo/6mo/1y/5y` with `interval` (yfinance periods)
 
 `usePolling(fn, intervalMs, [deps])` — re-fetches when deps change (e.g. selected timeframe/symbol).
+
+## Design Context (Dashboard)
+
+> 전체 내용: `.impeccable.md` 참조
+
+**사용 맥락**: 사후 분석·리뷰 (거래 후 에이전트 결정 검토)
+**방향**: 깔끔한 모던 대시보드 — 카드 중심, 큰 숫자, 충분한 여백
+
+**5 Design Principles**:
+1. **계층 명확화** — 종합 점수 > 가격/PnL > 개별 신호 > 로그 순 시각 무게
+2. **차트 우선** — 캔들스틱에 최대 공간 (사후 분석 목적)
+3. **정보 축소** — 핵심만 노출, 부가 정보는 탭/접기
+4. **에이전트 로그 가독성** — BUY/SELL/HOLD + 이유 타임라인으로
+5. **조용한 색상** — teal(이익)·red(손실)·btc-orange(점수) 3색만 강조

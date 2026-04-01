@@ -6,17 +6,18 @@ const CLASS_STYLES = {
   neutral: "bg-[color:var(--color-neutral-bg)] text-[color:var(--text-secondary)]",
   info: "bg-[color:var(--color-info-bg)] text-[color:var(--color-info)]",
   warning: "bg-[color:var(--color-warning-bg)] text-[color:var(--color-warning)]",
-  btc: "bg-[rgba(247,147,26,0.12)] text-[color:var(--accent-btc)]",
-  kr: "bg-[rgba(0,212,170,0.12)] text-[color:var(--accent-kr)]",
-  us: "bg-[rgba(59,130,246,0.12)] text-[color:var(--accent-us)]",
+  btc: "bg-[color:var(--color-btc-bg)] text-[color:var(--accent-btc)]",
+  kr:  "bg-[color:var(--color-kr-bg)]  text-[color:var(--accent-kr)]",
+  us:  "bg-[color:var(--color-us-bg)]  text-[color:var(--accent-us)]",
 };
 
+// /normalize: CSS variables instead of hard-coded hex
 const INLINE_STYLES = {
-  buy: { background: "rgba(0,212,170,0.08)", color: "#00d4aa" },
-  sell: { background: "rgba(255,71,87,0.08)", color: "#ff4757" },
-  hold: { background: "rgba(255,255,255,0.08)", color: "#8b8b9e" },
-  bullish: { background: "rgba(0,212,170,0.08)", color: "#00d4aa" },
-  bearish: { background: "rgba(255,71,87,0.08)", color: "#ff4757" },
+  buy:     { background: "var(--color-profit-bg)", color: "var(--color-profit)" },
+  sell:    { background: "var(--color-loss-bg)",   color: "var(--color-loss)" },
+  hold:    { background: "var(--color-neutral-bg)", color: "var(--text-secondary)" },
+  bullish: { background: "var(--color-profit-bg)", color: "var(--color-profit)" },
+  bearish: { background: "var(--color-loss-bg)",   color: "var(--color-loss)" },
 };
 
 export default function Badge({ variant = "neutral", children, className = "" }) {

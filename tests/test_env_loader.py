@@ -42,11 +42,15 @@ class EnvLoaderTests(unittest.TestCase):
             root = Path(td) / "state"
             workspace = root / "workspace"
             skill_dir = workspace / "skills" / "kiwoom-api"
+            secrets_dir = workspace / ".docker-secrets"
             workspace.mkdir(parents=True)
             skill_dir.mkdir(parents=True)
+            secrets_dir.mkdir(parents=True)
             (root / ".env").write_text("ROOT_ONLY=root\nSHARED=from-root\n", encoding="utf-8")
             (workspace / ".env").write_text("WORK_ONLY=workspace\nSHARED=from-workspace\n", encoding="utf-8")
             (skill_dir / ".env").write_text("SKILL_ONLY=skill\n", encoding="utf-8")
+            (secrets_dir / "SUPABASE_URL").write_text("https://example.supabase.co", encoding="utf-8")
+            (secrets_dir / "SUPABASE_SECRET_KEY").write_text("secret-from-docker-secrets", encoding="utf-8")
             config_path = root / "openclaw.json"
             config_path.write_text(
                 json.dumps(
@@ -78,6 +82,8 @@ class EnvLoaderTests(unittest.TestCase):
                 self.assertEqual(os.environ["JSON_ONLY"], "json-value")
                 self.assertEqual(os.environ["SHARED"], "from-root")
                 self.assertEqual(os.environ["TELEGRAM_BOT_TOKEN"], "telegram-from-json")
+                self.assertEqual(os.environ["SUPABASE_URL"], "https://example.supabase.co")
+                self.assertEqual(os.environ["SUPABASE_SECRET_KEY"], "secret-from-docker-secrets")
 
 
 if __name__ == "__main__":

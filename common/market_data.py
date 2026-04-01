@@ -9,9 +9,11 @@ from typing import Dict, Optional, Tuple
 from functools import lru_cache
 
 from common.cache import get_cached as _cached_get, set_cached as _set_cache_new
+from common.logger import get_logger
 from common.retry import retry
 
 CACHE_TTL = 300  # 5분
+log = get_logger("market_data")
 
 
 def _cached(key: str, ttl: int = CACHE_TTL):
@@ -65,7 +67,8 @@ def get_btc_funding_rate() -> dict:
         _set_cache("btc_funding", result)
         return result
     except Exception as e:
-        return {"rate": 0, "avg": 0, "rates": [], "signal": "NEUTRAL", "error": str(e)}
+        log.error(f"BTC 펀딩비 조회 실패: {e}", exc_info=True)
+        return {"rate": 0, "avg": 0, "rates": [], "signal": "NEUTRAL", "error": "funding_fetch_failed"}
 
 
 # ── BTC 오픈 인터레스트 (Binance) ────────────────────
@@ -362,7 +365,8 @@ def get_dart_financial_score(stock_code: str, supabase_client) -> dict:
             "fiscal_year": latest.get("fiscal_year", "?"),
         }
     except Exception as e:
-        return {"score": 0, "grade": "N/A", "detail": str(e)}
+        log.error(f"KR 멀티팩터 계산 실패: {e}", exc_info=True)
+        return {"score": 0, "grade": "N/A", "detail": "calculation_failed"}
 
 
 # ── US 멀티팩터 스코어 (밸류 + 퀄리티 + 모멘텀) ────
@@ -464,7 +468,8 @@ def calc_us_multifactor(symbol: str) -> dict:
             "detail": " | ".join(details[:5]),
         }
     except Exception as e:
-        return {"score": 0, "grade": "N/A", "detail": str(e)}
+        log.error(f"US 멀티팩터 계산 실패: {e}", exc_info=True)
+        return {"score": 0, "grade": "N/A", "detail": "calculation_failed"}
 
 
 # ── US 마켓 레짐 (SPY 200MA + VIX) ──────────────────

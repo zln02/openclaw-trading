@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # BTC 자산 equity 스냅샷을 호스트에서 직접 기록 (Docker 컨테이너 read-only 우회)
-# cron: */10 * * * * /home/wlsdud5035/openclaw/scripts/record_btc_equity.sh
+# cron: */10 * * * * /home/wlsdud5035/quant-agent/scripts/record_btc_equity.sh
 set -euo pipefail
 
 source "$(dirname "$0")/load_env.sh"

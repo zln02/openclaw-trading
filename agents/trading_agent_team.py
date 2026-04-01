@@ -69,8 +69,8 @@ def get_btc_indicators() -> dict:
         return {**indicators, "volume_score": volume.get("score", 0),
                 "volume_ratio": volume.get("ratio", 1.0)}
     except Exception as e:
-        log.warning(f"BTC 지표 조회 실패: {e}")
-        return {"rsi": 50, "error": str(e)}
+        log.error(f"BTC 지표 조회 실패: {e}", exc_info=True)
+        return {"rsi": 50, "error": "indicator_fetch_failed"}
 
 
 @beta_tool
@@ -216,8 +216,8 @@ def send_telegram_report(message: str, priority: str = "normal") -> dict:
         send_telegram(message, priority=priority)
         return {"ok": True}
     except Exception as e:
-        log.warning(f"텔레그램 전송 실패: {e}")
-        return {"ok": False, "error": str(e)}
+        log.error(f"텔레그램 전송 실패: {e}", exc_info=True)
+        return {"ok": False, "error": "telegram_send_failed"}
 
 
 @beta_tool

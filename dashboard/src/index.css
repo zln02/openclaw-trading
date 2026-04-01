@@ -1,4 +1,4 @@
-@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700;800&display=swap");
+/* Google Fonts moved to index.html <link> tags (non-render-blocking) */
 @import "./styles/tokens.css";
 
 @tailwind base;

@@ -17,4 +17,4 @@ if [ -d "$LOG_DIR" ]; then
 fi
 
 # cron:
-# 0 4 * * 0 /home/wlsdud5035/openclaw/scripts/cleanup_sessions.sh >> /home/wlsdud5035/.openclaw/logs/cleanup.log 2>&1
+# 0 4 * * 0 /home/wlsdud5035/quant-agent/scripts/cleanup_sessions.sh >> /home/wlsdud5035/.openclaw/logs/cleanup.log 2>&1

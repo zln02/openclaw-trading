@@ -1,7 +1,7 @@
 /** @type {import('tailwindcss').Config} */
 export default {
   content: ["./index.html", "./src/**/*.{js,ts,jsx,tsx}"],
-  darkMode: "class",
+  // darkMode removed: theme uses CSS custom properties, not Tailwind dark: utilities
   theme: {
     extend: {
       colors: {
