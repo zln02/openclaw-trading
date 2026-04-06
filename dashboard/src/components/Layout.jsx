@@ -10,7 +10,7 @@ const NAV = [
   { to: "/", label: "BTC", icon: Bitcoin },
   { to: "/kr", label: "KR", icon: Landmark },
   { to: "/us", label: "US", icon: Globe2 },
-  { to: "/agents", label: "Agents", icon: Bot },
+  { to: "/agents", label: "Status", icon: Bot },
 ];
 
 const formatTime = (value) =>
@@ -58,11 +58,11 @@ function LayoutInner() {
     },
     total: {
       value: totalAsset,
-      delta:
-        ((Number(btc?.summary?.unrealized_pnl_pct || 0) +
-          Number(kr?.cumulative_pnl_pct || 0) +
-          Number(us?.summary?.total_pnl_pct || 0)) /
-          3) || 0,
+      delta: totalAsset > 0
+        ? (btcAsset * Number(btc?.summary?.unrealized_pnl_pct || 0)
+          + krAsset * Number(kr?.cumulative_pnl_pct || 0)
+          + usAssetKrw * Number(us?.summary?.total_pnl_pct || 0)) / totalAsset
+        : 0,
       prefix: "₩",
     },
   };
@@ -78,9 +78,23 @@ function LayoutInner() {
       <div className="bg-orb bg-orb-1" />
       <div className="bg-orb bg-orb-2" />
       <div className="bg-orb bg-orb-3" />
-      <div className="dot-grid" />
-      <div className="scanlines" />
       <div className="app-content">
+        <a
+          href="#main-content"
+          className="sr-only"
+          style={{
+            position: 'absolute',
+            left: '-9999px',
+            top: 'auto',
+            width: '1px',
+            height: '1px',
+            overflow: 'hidden',
+          }}
+          onFocus={(e) => { e.target.style.position = 'fixed'; e.target.style.left = '16px'; e.target.style.top = '16px'; e.target.style.width = 'auto'; e.target.style.height = 'auto'; e.target.style.zIndex = '9999'; e.target.style.padding = '12px 20px'; e.target.style.background = 'var(--bg-secondary)'; e.target.style.color = 'var(--text-primary)'; e.target.style.borderRadius = '8px'; e.target.style.border = '2px solid var(--accent-purple)'; }}
+          onBlur={(e) => { e.target.style.position = 'absolute'; e.target.style.left = '-9999px'; e.target.style.width = '1px'; e.target.style.height = '1px'; }}
+        >
+          Skip to main content
+        </a>
         <header className="navbar-shell">
           <div className="container" style={{ display: "flex", alignItems: "center", gap: 18, justifyContent: "space-between" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
@@ -138,11 +152,12 @@ function LayoutInner() {
               <button
                 onClick={toggle}
                 title={lang === "ko" ? "Switch to English" : "한국어로 전환"}
+                aria-label={lang === "ko" ? "Switch to English" : "한국어로 전환"}
                 style={{
                   background: "rgba(255,255,255,0.07)",
                   border: "1px solid rgba(255,255,255,0.12)",
                   borderRadius: 8,
-                  padding: "4px 10px",
+                  padding: "8px 14px",
                   cursor: "pointer",
                   color: "var(--text-primary)",
                   fontSize: 13,
@@ -162,7 +177,7 @@ function LayoutInner() {
           </div>
         </header>
 
-        <main style={{ padding: "24px 0 40px" }}>
+        <main id="main-content" style={{ padding: "24px 0 40px" }}>
           <div className="container">
             <HeroBanner metrics={metrics} />
             <Outlet context={{ currentPath: location.pathname, regime, updatedAt }} />

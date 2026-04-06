@@ -1,96 +1,313 @@
-import { Bot, BrainCircuit, FileSearch, GitBranch, Shield, TimerReset } from "lucide-react";
-import { useMemo, useState } from "react";
-import { getAgentDecisions } from "../api";
+import {
+  Activity,
+  AlertTriangle,
+  BarChart2,
+  Brain,
+  CheckCircle2,
+  Globe2,
+  Landmark,
+  Bitcoin,
+  TrendingUp,
+  XCircle,
+} from "lucide-react";
+import { useMemo } from "react";
+import { getBtcComposite, getKrComposite, getUsComposite, getRiskPortfolio } from "../api";
 import usePolling from "../hooks/usePolling";
 import { useLang } from "../hooks/useLang";
-import { compactTime } from "../lib/format";
 import GlassCard from "../components/ui/GlassCard";
 import LoadingSkeleton from "../components/ui/LoadingSkeleton";
-import { EmptyState } from "../components/ui/PageState";
 import StatusBadge from "../components/ui/StatusBadge";
 
-const AGENTS = [
-  { name: "Orchestrator", model: "Claude Opus", icon: Bot },
-  { name: "Market Analyst", model: "Claude Sonnet", icon: BrainCircuit },
-  { name: "News Analyst", model: "Claude Sonnet", icon: FileSearch },
-  { name: "Risk Manager", model: "Claude Opus", icon: Shield },
-  { name: "Reporter", model: "Claude Sonnet", icon: GitBranch },
-];
+// ── helpers ──────────────────────────────────────────────────────────────────
+
+function MetricRow({ label, value, sub, highlight }) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
+        padding: "10px 0",
+        borderBottom: "1px solid rgba(255,255,255,0.05)",
+      }}
+    >
+      <span className="subtle" style={{ fontSize: 13 }}>{label}</span>
+      <span
+        style={{
+          fontWeight: 700,
+          fontSize: 14,
+          color: highlight
+            ? highlight === "ok"
+              ? "var(--profit)"
+              : "var(--loss)"
+            : "var(--text-primary)",
+        }}
+      >
+        {value}
+        {sub ? (
+          <span className="subtle" style={{ fontWeight: 400, marginLeft: 6, fontSize: 12 }}>
+            {sub}
+          </span>
+        ) : null}
+      </span>
+    </div>
+  );
+}
+
+function StatusIcon({ ok }) {
+  return ok ? (
+    <CheckCircle2 size={16} color="var(--profit)" />
+  ) : (
+    <XCircle size={16} color="var(--loss)" />
+  );
+}
+
+function MarketStatusCard({ icon: Icon, label, composite, loading }) {
+  const { t } = useLang();
+
+  if (loading) return <LoadingSkeleton height={200} />;
+
+  const regime = composite?.regime || composite?.trend || "UNKNOWN";
+  const dailyLossPct = composite?.daily_loss_pct ?? null;
+  const isLossExceeded = composite?.is_daily_loss_exceeded ?? false;
+  const signal = composite?.signal || composite?.final_signal || "—";
+  const todayTrades = composite?.today_trades ?? composite?.today_count ?? "—";
+  const winRate = composite?.win_rate ?? composite?.cumulative_win_rate ?? null;
+
+  return (
+    <GlassCard className="card-pad">
+      <div className="panel-title">
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <Icon size={18} />
+          <h2>{label}</h2>
+        </div>
+        <StatusBadge status={regime} />
+      </div>
+
+      <MetricRow
+        label={t("Signal")}
+        value={signal}
+      />
+      <MetricRow
+        label={t("Today Trades")}
+        value={todayTrades}
+      />
+      {winRate !== null && (
+        <MetricRow
+          label={t("Win Rate")}
+          value={`${Number(winRate).toFixed(1)}%`}
+          highlight={Number(winRate) >= 50 ? "ok" : "warn"}
+        />
+      )}
+      {dailyLossPct !== null && (
+        <MetricRow
+          label={t("Daily PnL")}
+          value={`${Number(dailyLossPct).toFixed(2)}%`}
+          highlight={isLossExceeded ? "warn" : "ok"}
+        />
+      )}
+      {isLossExceeded && (
+        <div
+          style={{
+            marginTop: 10,
+            padding: "8px 12px",
+            borderRadius: 8,
+            background: "rgba(239,68,68,0.12)",
+            border: "1px solid rgba(239,68,68,0.3)",
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            fontSize: 13,
+            color: "var(--red)",
+          }}
+        >
+          <AlertTriangle size={14} />
+          {t("Daily loss limit exceeded — trading halted")}
+        </div>
+      )}
+    </GlassCard>
+  );
+}
+
+// ── main ──────────────────────────────────────────────────────────────────────
 
 export default function AgentsPage() {
   const { t } = useLang();
-  const { data, loading } = usePolling(() => getAgentDecisions(20), 30000);
-  const [expanded, setExpanded] = useState(null);
-  const decisions = useMemo(() => data?.decisions || [], [data]);
+
+  const { data: risk, loading: riskLoading } = usePolling(getRiskPortfolio, 60000);
+  const { data: btc, loading: btcLoading } = usePolling(getBtcComposite, 30000);
+  const { data: kr, loading: krLoading } = usePolling(getKrComposite, 30000);
+  const { data: us, loading: usLoading } = usePolling(getUsComposite, 30000);
+
+  const riskData = useMemo(() => risk?.data || risk || null, [risk]);
+
+  const regime = riskData?.regime || "UNKNOWN";
+  const mdd = riskData?.mdd ?? null;
+  const driftStatus = riskData?.drift_status || "NO_DATA";
+  const icHealth = riskData?.ic_health ?? null;
+  const dailyVar = riskData?.daily_var ?? null;
+
+  const driftOk = driftStatus === "OK" || driftStatus === "STABLE";
+  const icActiveRatio =
+    icHealth && icHealth.total_weights > 0
+      ? icHealth.active_weights / icHealth.total_weights
+      : null;
 
   return (
     <div className="stack">
       <div className="page-heading">
         <div>
-          <h1>{t("AI Agent Operations")}</h1>
-          <p>{t("Specialist-agent orchestration, decision traces, and research loop visibility for trading supervision.")}</p>
+          <h1>{t("System Status")}</h1>
+          <p>{t("Cross-market risk, regime, ML drift, and IC health at a glance.")}</p>
         </div>
       </div>
 
+      {/* ── Top summary row ── */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 14 }}>
+        {/* Regime */}
+        <GlassCard className="card-pad" style={{ textAlign: "center" }}>
+          <div className="subtle" style={{ fontSize: 12, marginBottom: 8 }}>{t("Market Regime")}</div>
+          {riskLoading ? (
+            <LoadingSkeleton height={32} />
+          ) : (
+            <StatusBadge status={regime} />
+          )}
+        </GlassCard>
+
+        {/* MDD */}
+        <GlassCard className="card-pad" style={{ textAlign: "center" }}>
+          <div className="subtle" style={{ fontSize: 12, marginBottom: 8 }}>{t("Max Drawdown")}</div>
+          {riskLoading ? (
+            <LoadingSkeleton height={32} />
+          ) : (
+            <div
+              style={{
+                fontSize: 22,
+                fontWeight: 800,
+                color: mdd !== null && mdd < -10 ? "var(--red)" : "var(--text-primary)",
+              }}
+            >
+              {mdd !== null ? `${Number(mdd).toFixed(1)}%` : "—"}
+            </div>
+          )}
+        </GlassCard>
+
+        {/* Daily VaR */}
+        <GlassCard className="card-pad" style={{ textAlign: "center" }}>
+          <div className="subtle" style={{ fontSize: 12, marginBottom: 8 }}>{t("Daily VaR (95%)")}</div>
+          {riskLoading ? (
+            <LoadingSkeleton height={32} />
+          ) : (
+            <div style={{ fontSize: 22, fontWeight: 800 }}>
+              {dailyVar !== null ? `${Number(dailyVar).toFixed(2)}%` : "—"}
+            </div>
+          )}
+        </GlassCard>
+
+        {/* ML Drift */}
+        <GlassCard className="card-pad" style={{ textAlign: "center" }}>
+          <div className="subtle" style={{ fontSize: 12, marginBottom: 8 }}>{t("ML Drift")}</div>
+          {riskLoading ? (
+            <LoadingSkeleton height={32} />
+          ) : (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+              <StatusIcon ok={driftOk} />
+              <span style={{ fontWeight: 700, fontSize: 14 }}>{driftStatus}</span>
+            </div>
+          )}
+        </GlassCard>
+
+        {/* IC Health */}
+        <GlassCard className="card-pad" style={{ textAlign: "center" }}>
+          <div className="subtle" style={{ fontSize: 12, marginBottom: 8 }}>{t("IC Active Weights")}</div>
+          {riskLoading ? (
+            <LoadingSkeleton height={32} />
+          ) : (
+            <div style={{ fontSize: 22, fontWeight: 800 }}>
+              {icHealth
+                ? `${icHealth.active_weights} / ${icHealth.total_weights}`
+                : "—"}
+            </div>
+          )}
+          {icActiveRatio !== null && (
+            <div
+              className="subtle"
+              style={{ fontSize: 12, marginTop: 4 }}
+            >
+              {`${(icActiveRatio * 100).toFixed(0)}% active`}
+            </div>
+          )}
+        </GlassCard>
+      </div>
+
+      {/* ── Per-market status ── */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 14 }}>
+        <MarketStatusCard
+          icon={Bitcoin}
+          label="BTC"
+          composite={btc}
+          loading={btcLoading}
+        />
+        <MarketStatusCard
+          icon={Landmark}
+          label="KR"
+          composite={kr}
+          loading={krLoading}
+        />
+        <MarketStatusCard
+          icon={Globe2}
+          label="US"
+          composite={us}
+          loading={usLoading}
+        />
+      </div>
+
+      {/* ── Risk / Research Loop detail ── */}
       <div className="tv-grid">
-        <div className="tv-main tv-stack">
+        <div className="tv-main">
           <GlassCard className="card-pad">
-            <div className="symbol-header">
-              <div>
-                <div className="symbol-code">{t("AGENT DESK")}</div>
-                <div className="symbol-meta">
-                  <span className="toolbar-chip">{t("Decision Feed")}</span>
-                  <span className="toolbar-chip">{t("Last 20")}</span>
-                  <span className="toolbar-chip mono">{decisions.length} Events</span>
-                </div>
-              </div>
-            </div>
             <div className="panel-title">
-              <h2>{t("Decision Timeline")}</h2>
-              <TimerReset size={18} color="var(--text-secondary)" />
+              <h2>{t("Risk Parameters")}</h2>
+              <Activity size={18} color="var(--text-secondary)" />
             </div>
-            {loading ? (
-              <LoadingSkeleton height={420} />
+            {riskLoading ? (
+              <LoadingSkeleton height={180} />
             ) : (
-              <div className="stack" style={{ gap: 12 }}>
-                {decisions.slice(0, 20).map((decision, index) => {
-                  const isOpen = expanded === index;
-                  return (
-                    <button
-                      key={decision.id || index}
-                      type="button"
-                      onClick={() => setExpanded(isOpen ? null : index)}
-                      style={{
-                        textAlign: "left",
-                        border: "1px solid rgba(255,255,255,0.06)",
-                        background: "rgba(255,255,255,0.02)",
-                        borderRadius: 10,
-                        padding: 14,
-                        color: "inherit",
-                        cursor: "pointer",
-                      }}
-                    >
-                      <div style={{ display: "grid", gridTemplateColumns: "160px 100px 1fr", gap: 16, alignItems: "start" }}>
-                        <div className="mono subtle">{compactTime(decision.created_at)}</div>
-                        <StatusBadge status={decision.decision || "TRANSITION"} />
-                        <div>
-                          <strong>{decision.market?.toUpperCase?.() || "MARKET"}</strong>
-                          <div className="subtle" style={{ marginTop: 8 }}>
-                            {decision.reasoning || t("No reasoning attached.")}
-                          </div>
-                        </div>
-                      </div>
-                      {isOpen ? (
-                        <div style={{ marginTop: 14, paddingTop: 14, borderTop: "1px solid rgba(255,255,255,0.06)" }}>
-                          <div className="subtle">{t("Confidence:")} {decision.confidence ?? "—"}%</div>
-                          <div style={{ marginTop: 8 }}>{decision.details || decision.reasoning || t("No extra agent details.")}</div>
-                        </div>
-                      ) : null}
-                    </button>
-                  );
-                })}
-                {decisions.length === 0 ? <EmptyState message={t("No agent decisions recorded.")} /> : null}
-              </div>
+              <>
+                <MetricRow
+                  label={t("Total Assets (KRW)")}
+                  value={riskData?.total_assets != null
+                    ? `₩${Number(riskData.total_assets).toLocaleString()}`
+                    : "—"}
+                />
+                <MetricRow
+                  label="BTC"
+                  value={riskData?.btc_value != null
+                    ? `₩${Number(riskData.btc_value).toLocaleString()}`
+                    : "—"}
+                />
+                <MetricRow
+                  label="KR"
+                  value={riskData?.kr_value != null
+                    ? `₩${Number(riskData.kr_value).toLocaleString()}`
+                    : "—"}
+                />
+                <MetricRow
+                  label="US"
+                  value={riskData?.us_value != null
+                    ? `₩${Number(riskData.us_value).toLocaleString()}`
+                    : "—"}
+                />
+                <MetricRow
+                  label={t("Max Drawdown")}
+                  value={mdd !== null ? `${Number(mdd).toFixed(2)}%` : "—"}
+                  highlight={mdd !== null && mdd < -10 ? "warn" : "ok"}
+                />
+                <MetricRow
+                  label={t("Daily VaR (95%)")}
+                  value={dailyVar !== null ? `${Number(dailyVar).toFixed(2)}%` : "—"}
+                />
+              </>
             )}
           </GlassCard>
         </div>
@@ -98,19 +315,30 @@ export default function AgentsPage() {
         <aside className="tv-side">
           <GlassCard className="card-pad">
             <div className="panel-title">
-              <h2>{t("Agent Team Topology")}</h2>
-              <Bot size={18} color="var(--text-secondary)" />
+              <h2>{t("Research Loop Schedule")}</h2>
+              <Brain size={18} color="var(--text-secondary)" />
             </div>
-            <div className="agent-topology">
-              {AGENTS.map(({ name, model, icon: Icon }, index) => (
-                <div key={name} className="agent-node">
-                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
-                    <Icon size={18} />
-                    <strong>{t(name)}</strong>
-                  </div>
-                  <div className="subtle">{t(model)}</div>
-                  <div style={{ marginTop: 12 }}>
-                    <StatusBadge status={index === 3 ? "RISK_ON" : "TRANSITION"} />
+            <div className="stack" style={{ gap: 14 }}>
+              {[
+                { name: "Alpha Researcher", schedule: "Sat 22:00 KST", icon: BarChart2 },
+                { name: "Signal Evaluator", schedule: "Sun 23:00 KST", icon: TrendingUp },
+                { name: "Param Optimizer", schedule: "Sun 23:30 KST", icon: Brain },
+                { name: "ML Retrain", schedule: t("Daily 08:30 KST"), icon: Activity },
+              ].map(({ name, schedule, icon: Icon }) => (
+                <div
+                  key={name}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 12,
+                    padding: "10px 0",
+                    borderBottom: "1px solid rgba(255,255,255,0.05)",
+                  }}
+                >
+                  <Icon size={15} color="var(--text-secondary)" style={{ flexShrink: 0 }} />
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 700, fontSize: 13 }}>{t(name)}</div>
+                    <div className="subtle" style={{ fontSize: 12, marginTop: 2 }}>{schedule}</div>
                   </div>
                 </div>
               ))}
@@ -119,27 +347,35 @@ export default function AgentsPage() {
 
           <GlassCard className="card-pad">
             <div className="panel-title">
-              <h2>{t("Level 5 Research Loop")}</h2>
-              <GitBranch size={18} color="var(--text-secondary)" />
+              <h2>{t("IC / Signal Health")}</h2>
+              <BarChart2 size={18} color="var(--text-secondary)" />
             </div>
-            <div className="stack" style={{ gap: 14 }}>
-              {[
-                ["Alpha Researcher", "Sat 22:00"],
-                ["Signal Evaluator", "Sun 23:00"],
-                ["Param Optimizer", "Sun 23:30"],
-              ].map(([name, time]) => (
-                <div key={name} className="agent-node">
-                  <div style={{ fontWeight: 700 }}>{t(name)}</div>
-                  <div className="subtle" style={{ marginTop: 6 }}>{t("Last scheduled run:")} {time}</div>
-                </div>
-              ))}
-              <div className="agent-node">
-                <div style={{ fontWeight: 700, marginBottom: 8 }}>{t("weights.json snapshot")}</div>
-                <div className="subtle mono" style={{ whiteSpace: "pre-wrap", fontSize: 12 }}>
-                  {`btc_momentum: 0.34\nkr_ml_overlay: 0.22\nus_breakout: 0.18\nrisk_overlay: 0.26`}
-                </div>
-              </div>
-            </div>
+            {riskLoading ? (
+              <LoadingSkeleton height={100} />
+            ) : (
+              <>
+                <MetricRow
+                  label={t("Active Weights")}
+                  value={icHealth ? icHealth.active_weights : "—"}
+                />
+                <MetricRow
+                  label={t("Total Weights")}
+                  value={icHealth ? icHealth.total_weights : "—"}
+                />
+                <MetricRow
+                  label={t("Coverage")}
+                  value={icActiveRatio !== null
+                    ? `${(icActiveRatio * 100).toFixed(0)}%`
+                    : "—"}
+                  highlight={icActiveRatio !== null && icActiveRatio >= 0.5 ? "ok" : "warn"}
+                />
+                <MetricRow
+                  label={t("ML Drift Status")}
+                  value={driftStatus}
+                  highlight={driftOk ? "ok" : "warn"}
+                />
+              </>
+            )}
           </GlassCard>
         </aside>
       </div>

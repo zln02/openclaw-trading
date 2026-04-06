@@ -14,6 +14,8 @@ export default function StatusBadge({ status = "TRANSITION" }) {
   return (
     <span
       className="pill"
+      role="status"
+      aria-label={`Market regime: ${key}`}
       style={{
         background: tone.bg,
         color: tone.color,

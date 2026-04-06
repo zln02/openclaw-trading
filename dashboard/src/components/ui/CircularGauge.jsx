@@ -1,15 +1,21 @@
 import PropTypes from "prop-types";
 
+const GAUGE_COLORS = { high: '#22c55e', mid: '#8b5cf6', low: '#ef4444' };
+
 export default function CircularGauge({ value = 0, label, subtitle, size = 220 }) {
   const clamped = Math.min(Math.max(Number(value) || 0, 0), 100);
   const radius = size / 2 - 18;
   const circumference = 2 * Math.PI * radius;
   const offset = circumference - (clamped / 100) * circumference;
-  const stroke = clamped >= 70 ? "#22c55e" : clamped >= 45 ? "#8b5cf6" : "#ef4444";
+  const stroke = clamped >= 70 ? GAUGE_COLORS.high : clamped >= 45 ? GAUGE_COLORS.mid : GAUGE_COLORS.low;
   const gradId = `gauge-${String(label || "").replace(/[^a-zA-Z0-9]/g, "")}`;
 
   return (
-    <div style={{ position: "relative", width: size, height: size, margin: "0 auto" }}>
+    <div
+      role="img"
+      aria-label={label ? `${label}: ${clamped}` : `${clamped}`}
+      style={{ position: "relative", width: size, height: size, margin: "0 auto" }}
+    >
       {/* SVG는 -90도 회전 (12시 방향 시작) */}
       <svg width={size} height={size} style={{ transform: "rotate(-90deg)", display: "block" }}>
         <defs>

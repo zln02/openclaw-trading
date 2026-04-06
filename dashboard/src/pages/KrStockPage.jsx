@@ -29,11 +29,14 @@ export default function KrStockPage() {
   const { data: trades, loading: tradesLoading } = usePolling(getStockTrades, 30000);
   const { data: strategy } = usePolling(getStockStrategy, 60000);
 
-  const positions = portfolio?.positions || portfolio?.holdings || [];
+  // krPortfolio(Supabase 기반)를 우선, 키움 portfolio는 fallback
+  const positions = krPortfolio?.open_positions?.length
+    ? krPortfolio.open_positions
+    : portfolio?.positions || portfolio?.holdings || [];
   const krSummary = krPortfolio?.summary || {};
   const donutData = positions.map((row) => ({
-    name: row.stock_name || row.name || row.stock_code,
-    value: Number(row.weight || row.evaluation_amount || row.market_value || 0),
+    name: row.stock_name || row.name || row.code || row.stock_code,
+    value: Number(row.evaluation || row.weight || row.evaluation_amount || row.market_value || 0),
   }));
   const mlSignals = useMemo(
     () => [
@@ -95,15 +98,15 @@ export default function KrStockPage() {
       {/* ── 포트폴리오 요약 배너 ── */}
       <div className="portfolio-banner">
         <div className="pf-tile">
-          <div className="pf-label">투자금</div>
+          <div className="pf-label">{t("투자금")}</div>
           <div className="pf-value mono">{krw(krSummary.total_invested || portfolio?.total_purchase || 0)}</div>
         </div>
         <div className="pf-tile">
-          <div className="pf-label">평가금</div>
+          <div className="pf-label">{t("평가금")}</div>
           <div className="pf-value mono">{krw(krSummary.total_eval || portfolio?.total_evaluation || 0)}</div>
         </div>
         <div className="pf-tile">
-          <div className="pf-label">미실현 손익</div>
+          <div className="pf-label">{t("미실현 손익")}</div>
           <div className={`pf-value mono ${Number(krSummary.unrealized_pnl || 0) >= 0 ? "profit" : "loss"}`}>
             {krSummary.total_invested
               ? pct(((krSummary.total_eval - krSummary.total_invested) / krSummary.total_invested) * 100)
@@ -112,11 +115,11 @@ export default function KrStockPage() {
           </div>
         </div>
         <div className="pf-tile">
-          <div className="pf-label">가용 KRW</div>
+          <div className="pf-label">{t("가용 KRW")}</div>
           <div className="pf-value mono">{krw(krSummary.krw_balance || portfolio?.deposit || 0)}</div>
         </div>
         <div className="pf-tile">
-          <div className="pf-label">보유 종목</div>
+          <div className="pf-label">{t("보유 종목")}</div>
           <div className="pf-value mono">{positions.length}종목</div>
         </div>
       </div>
@@ -169,7 +172,7 @@ export default function KrStockPage() {
               {chartLoading ? (
                 <LoadingSkeleton height={300} />
               ) : (
-                <LightweightPriceChart title={`${activeSymbol} Price`} data={chartSeries.length > 0 ? chartSeries : activeCurve} />
+                <LightweightPriceChart data={chartSeries.length > 0 ? chartSeries : activeCurve} />
               )}
             </GlassCard>
           </DeferredRender>
@@ -193,12 +196,12 @@ export default function KrStockPage() {
               <table>
                 <thead>
                   <tr>
-                    <th>{t("Name")}</th>
-                    <th>{t("Qty")}</th>
-                    <th>{t("Avg")}</th>
-                    <th>{t("Now")}</th>
-                    <th>{t("PnL")}</th>
-                    <th>{t("Factor")}</th>
+                    <th scope="col">{t("Name")}</th>
+                    <th scope="col">{t("Qty")}</th>
+                    <th scope="col">{t("Avg")}</th>
+                    <th scope="col">{t("Now")}</th>
+                    <th scope="col">{t("PnL")}</th>
+                    <th scope="col">{t("Factor")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -212,8 +215,8 @@ export default function KrStockPage() {
                           <div className="subtle mono" style={{ fontSize: 12 }}>{row.stock_code || "—"}</div>
                         </td>
                         <td>{row.quantity || row.qty || 0}</td>
-                        <td>{krw(row.avg_price || row.purchase_price)}</td>
-                        <td>{krw(row.current_price || row.price)}</td>
+                        <td>{krw(row.avg_entry || row.price || row.avg_price || row.purchase_price)}</td>
+                        <td>{krw(row.current_price || 0)}</td>
                         <td className={pnl >= 0 ? "profit mono" : "loss mono"}>{pct(pnl)}</td>
                         <td className="mono">{factor.toFixed(0)}</td>
                       </tr>

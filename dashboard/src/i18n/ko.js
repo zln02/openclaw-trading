@@ -123,6 +123,18 @@ const ko = {
   "Last scheduled run:": "최근 실행:",
   "weights.json snapshot": "가중치 스냅샷",
 
+  // Portfolio Banner
+  "투자금": "투자금",
+  "평가금": "평가금",
+  "미실현 손익": "미실현 손익",
+  "가용 KRW": "가용 KRW",
+  "스코어 / 임계": "스코어 / 임계",
+  "보유 종목": "보유 종목",
+  "투자금 (USD)": "투자금 (USD)",
+  "평가금 (USD)": "평가금 (USD)",
+  "환율 (USD/KRW)": "환율 (USD/KRW)",
+  "오픈 포지션": "오픈 포지션",
+
   // Common
   "AGENT DESK": "에이전트 데스크",
   "BTC Price": "BTC 가격",

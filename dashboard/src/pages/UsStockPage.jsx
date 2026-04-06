@@ -82,26 +82,26 @@ export default function UsStockPage() {
       {/* ── 포트폴리오 요약 배너 ── */}
       <div className="portfolio-banner">
         <div className="pf-tile">
-          <div className="pf-label">투자금 (USD)</div>
+          <div className="pf-label">{t("투자금 (USD)")}</div>
           <div className="pf-value mono">{usd(usSummary.total_invested || 0)}</div>
         </div>
         <div className="pf-tile">
-          <div className="pf-label">평가금 (USD)</div>
+          <div className="pf-label">{t("평가금 (USD)")}</div>
           <div className="pf-value mono">{usd(usSummary.total_current || 0)}</div>
         </div>
         <div className="pf-tile">
-          <div className="pf-label">미실현 손익</div>
+          <div className="pf-label">{t("미실현 손익")}</div>
           <div className={`pf-value mono ${Number(usSummary.unrealized_pnl_pct || 0) >= 0 ? "profit" : "loss"}`}>
             {pct(usSummary.unrealized_pnl_pct || 0)}
             {usSummary.unrealized_pnl ? ` (${usd(usSummary.unrealized_pnl)})` : ""}
           </div>
         </div>
         <div className="pf-tile">
-          <div className="pf-label">환율 (USD/KRW)</div>
+          <div className="pf-label">{t("환율 (USD/KRW)")}</div>
           <div className="pf-value mono">{Number(fx?.rate || fx?.usdkrw || 0).toLocaleString()}</div>
         </div>
         <div className="pf-tile">
-          <div className="pf-label">오픈 포지션</div>
+          <div className="pf-label">{t("오픈 포지션")}</div>
           <div className="pf-value mono">{openPositions.length}개</div>
         </div>
       </div>
@@ -160,7 +160,7 @@ export default function UsStockPage() {
               {chartLoading || marketLoading ? (
                 <LoadingSkeleton height={300} />
               ) : (
-                <LightweightPriceChart title={`${activeSymbol} Price`} data={chartSeries.length > 0 ? chartSeries : activeCurve} />
+                <LightweightPriceChart data={chartSeries.length > 0 ? chartSeries : activeCurve} />
               )}
             </GlassCard>
           </DeferredRender>
@@ -212,12 +212,12 @@ export default function UsStockPage() {
                 <table>
                   <thead>
                     <tr>
-                      <th>{t("Symbol")}</th>
-                      <th>{t("5d")}</th>
-                      <th>{t("20d")}</th>
-                      <th>{t("Volume")}</th>
-                      <th>{t("Near High")}</th>
-                      <th>{t("Score")}</th>
+                      <th scope="col">{t("Symbol")}</th>
+                      <th scope="col">{t("5d")}</th>
+                      <th scope="col">{t("20d")}</th>
+                      <th scope="col">{t("Volume")}</th>
+                      <th scope="col">{t("Near High")}</th>
+                      <th scope="col">{t("Score")}</th>
                     </tr>
                   </thead>
                   <tbody>

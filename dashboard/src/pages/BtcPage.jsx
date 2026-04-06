@@ -128,26 +128,26 @@ export default function BtcPage() {
       {/* ── 포트폴리오 요약 배너 ── */}
       <div className="portfolio-banner">
         <div className="pf-tile">
-          <div className="pf-label">투자금</div>
+          <div className="pf-label">{t("투자금")}</div>
           <div className="pf-value mono">{krw(btcSummary.total_invested || 0)}</div>
         </div>
         <div className="pf-tile">
-          <div className="pf-label">평가금</div>
+          <div className="pf-label">{t("평가금")}</div>
           <div className="pf-value mono">{krw(btcSummary.estimated_asset || btcSummary.total_eval || 0)}</div>
         </div>
         <div className="pf-tile">
-          <div className="pf-label">미실현 손익</div>
+          <div className="pf-label">{t("미실현 손익")}</div>
           <div className={`pf-value mono ${Number(btcSummary.unrealized_pnl_pct || 0) >= 0 ? "profit" : "loss"}`}>
             {pct(btcSummary.unrealized_pnl_pct || 0)}
             {btcSummary.unrealized_pnl ? ` (${krw(btcSummary.unrealized_pnl)})` : ""}
           </div>
         </div>
         <div className="pf-tile">
-          <div className="pf-label">가용 KRW</div>
+          <div className="pf-label">{t("가용 KRW")}</div>
           <div className="pf-value mono">{krw(btcSummary.krw_balance || 0)}</div>
         </div>
         <div className="pf-tile">
-          <div className="pf-label">스코어 / 임계</div>
+          <div className="pf-label">{t("스코어 / 임계")}</div>
           <div className={`pf-value mono ${compositeTotal >= buyThreshold ? "profit" : "loss"}`}>
             {compositeTotal} / {buyThreshold}
           </div>
@@ -243,7 +243,7 @@ export default function BtcPage() {
                 </div>
               </div>
             </div>
-            {candlesLoading ? <LoadingSkeleton height={420} /> : <LightweightPriceChart title={t("Price Panel")} data={candleSeries} />}
+            {candlesLoading ? <LoadingSkeleton height={420} /> : <LightweightPriceChart data={candleSeries} />}
           </GlassCard>
 
           <div className="split-2">
