@@ -163,11 +163,11 @@ MAX_GAS_GWEI: float = 30.0
 MAX_ARB_SLIPPAGE_BPS: float = 30.0
 
 # ── Alpha Researcher 파라미터 공간 (None이면 alpha_researcher.py 내 기본값 사용) ──
+# v6.2 B7: atr_multiplier 제거
 ALPHA_PARAM_SPACE: dict | None = {
     "rsi_window":        [7, 14, 21],
     "momentum_lookback": [5, 10, 20],
     "bb_window":         [15, 20, 30],
-    "atr_multiplier":    [1.5, 2.0, 2.5],
 }
 
 # ── Param Optimizer 자율 조정 임계값 ──────────────────────────────────────────
@@ -178,3 +178,7 @@ PARAM_OPT_IR_IMPROVE_MIN: float = 0.10 # IR 개선 최소값 (+10% 이상일 때
 # ── Attribution 다운웨이팅 임계값 ────────────────────────────────────────────
 ATTRIBUTION_DOWNWEIGHT_THRESHOLD: float = -0.5  # avg_contrib 이 이하 → 다운웨이팅
 ATTRIBUTION_DECAY_FACTOR: float = 0.5           # 다운웨이팅 계수 (weight × 이 값)
+
+# ── Daily Defense Check 임계값 ────────────────────────────────────────────
+DAILY_DEFENSE_WIN_RATE_THRESHOLD: float = 0.40   # 최근 7일 승률 이 이하 → 방어 모드
+DEFENSE_INVEST_RATIO_MULT: float = 0.50          # 방어 모드 시 invest_ratio 배수

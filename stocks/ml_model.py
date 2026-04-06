@@ -13,6 +13,7 @@ XGBoost 분류 모델:
     python3 stocks/ml_model.py predict_all    # 전체 종목 예측
 """
 
+import json
 import os
 import sys
 import pickle
@@ -107,7 +108,16 @@ INTERACTION_FEATURES = [
     'regime_rsi',         # regime_encoded × rsi_14 (레짐×RSI 교차)
 ]
 
-FEATURE_NAMES.extend(OHLCV_EXTRA_FEATURES + INTERACTION_FEATURES + FACTOR_FEATURES + MARKET_FEATURES + SUPPLY_FEATURES)
+# v6.2 C2: 멀티타임프레임 피처 (45 → 50)
+MTF_FEATURES = [
+    'weekly_momentum',   # 5일 수익률
+    'monthly_momentum',  # 20일 수익률
+    'weekly_rsi',        # 5일 기반 RSI
+    'trend_alignment_mtf',  # MA5>MA20>MA60 정렬 여부 (0 or 1)
+    'vol_regime',        # 20일 변동성 / 60일 변동성
+]
+
+FEATURE_NAMES.extend(OHLCV_EXTRA_FEATURES + INTERACTION_FEATURES + FACTOR_FEATURES + MARKET_FEATURES + SUPPLY_FEATURES + MTF_FEATURES)
 
 HORIZON_CONFIGS = {
     '1d': {'target_days': 1, 'target_return': 0.01, 'label': 'short'},
@@ -620,6 +630,40 @@ def extract_features(closes, volumes, highs, lows, idx, stock_code: str | None =
     else:
         features.extend([0.0] * (len(FACTOR_FEATURES) + len(MARKET_FEATURES) + len(SUPPLY_FEATURES)))
 
+    # v6.2 C2: 멀티타임프레임 피처
+    # weekly_momentum: 5일 수익률
+    weekly_momentum = (c[-1] / c[-6] - 1) * 100 if len(c) >= 6 else 0.0
+
+    # monthly_momentum: 20일 수익률
+    monthly_momentum = (c[-1] / c[-21] - 1) * 100 if len(c) >= 21 else 0.0
+
+    # weekly_rsi: 5일 기반 RSI
+    if len(c) >= 6:
+        _delta5 = [c[i] - c[i - 1] for i in range(max(1, len(c) - 5), len(c))]
+        _gain5 = sum(max(d, 0) for d in _delta5) / max(len(_delta5), 1)
+        _loss5 = sum(max(-d, 0) for d in _delta5) / max(len(_delta5), 1)
+        _rs5 = _gain5 / max(_loss5, 1e-10)
+        weekly_rsi = 100 - (100 / (1 + _rs5))
+    else:
+        weekly_rsi = 50.0
+
+    # trend_alignment_mtf: ma5 > ma20 이고 ma20 > ma60이면 1 (ma5/ma20/ma60은 위에서 이미 계산됨)
+    trend_alignment_mtf = 1.0 if (ma5 > ma20 and ma20 > ma60) else 0.0
+
+    # vol_regime: 20일 변동성 / 60일 변동성
+    _rets = [c[i] / c[i - 1] - 1 for i in range(1, len(c))]
+    _vol20 = (sum(r ** 2 for r in _rets[-20:]) / max(len(_rets[-20:]), 1)) ** 0.5 if len(_rets) >= 20 else 0.0
+    _vol60 = (sum(r ** 2 for r in _rets[-60:]) / max(len(_rets[-60:]), 1)) ** 0.5 if len(_rets) >= 60 else 1e-10
+    vol_regime = _vol20 / max(_vol60, 1e-10)
+
+    features.extend([
+        weekly_momentum,
+        monthly_momentum,
+        weekly_rsi,
+        trend_alignment_mtf,
+        vol_regime,
+    ])
+
     return features
 
 
@@ -764,23 +808,34 @@ def _build_catboost_model(scale_pos_weight: float = 1.0):
 
 
 def _fit_model(model, X_train, y_train, X_valid=None, y_valid=None):
+    # v6.2 A3: 10d 과적합 방지 — early_stopping_rounds 적용
     if model is None:
         return None
     model_name = model.__class__.__name__.lower()
     if 'catboost' in model_name:
         if X_valid is not None and y_valid is not None and len(X_valid) > 0:
-            model.fit(X_train, y_train, eval_set=(X_valid, y_valid), verbose=False)
+            model.fit(X_train, y_train, eval_set=(X_valid, y_valid), verbose=False, early_stopping_rounds=20)
         else:
             model.fit(X_train, y_train, verbose=False)
         return model
     if 'lgbm' in model_name:
         if X_valid is not None and y_valid is not None and len(X_valid) > 0:
-            model.fit(X_train, y_train, eval_set=[(X_valid, y_valid)])
+            model.fit(
+                X_train, y_train,
+                eval_set=[(X_valid, y_valid)],
+                callbacks=[__import__('lightgbm').early_stopping(stopping_rounds=20, verbose=False)],
+            )
         else:
             model.fit(X_train, y_train)
         return model
+    # XGBoost 3.x: early_stopping_rounds는 생성자/set_params로 설정
     if X_valid is not None and y_valid is not None and len(X_valid) > 0:
-        model.fit(X_train, y_train, eval_set=[(X_valid, y_valid)], verbose=False)
+        model.set_params(early_stopping_rounds=20)
+        model.fit(
+            X_train, y_train,
+            eval_set=[(X_valid, y_valid)],
+            verbose=False,
+        )
     else:
         model.fit(X_train, y_train, verbose=False)
     return model
@@ -828,7 +883,7 @@ def _build_base_models(scale_pos_weight: float = 1.0) -> dict:
     return models
 
 
-def walk_forward_validate(X: np.ndarray, y: np.ndarray, n_splits: int = 5) -> dict:
+def walk_forward_validate(X: np.ndarray, y: np.ndarray, n_splits: int = 8) -> dict:  # v6.2 A3: 10d 과적합 방지
     """
     Walk-forward 교차검증 (시계열 전용).
 
@@ -986,7 +1041,7 @@ def train_model(horizon_key: str = '3d'):
         print('데이터 부족 (최소 100개 필요)')
         return
 
-    wf = walk_forward_validate(X, y, n_splits=5)
+    wf = walk_forward_validate(X, y, n_splits=8)  # v6.2 A3: 10d 과적합 방지
 
     split_idx = int(len(X) * 0.8)
     X_train, X_test = X[:split_idx], X[split_idx:]
@@ -1007,7 +1062,7 @@ def train_model(horizon_key: str = '3d'):
     base_auc = {}
 
     if use_ensemble:
-        tscv = TimeSeriesSplit(n_splits=5)
+        tscv = TimeSeriesSplit(n_splits=8)  # v6.2 A3: 10d 과적합 방지
         oof_preds = {name: np.full(len(X_train), np.nan, dtype=float) for name in base_model_names}
 
         for fold, (tr_idx, val_idx) in enumerate(tscv.split(X_train), 1):

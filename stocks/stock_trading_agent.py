@@ -16,6 +16,7 @@ import time
 import sys
 import requests
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo  # v6.2 B2: KST 시간대 통일
 from pathlib import Path
 from typing import Optional
 
@@ -30,19 +31,25 @@ from common.utils import generate_order_id, check_order_idempotency
 from common.equity_loader import (
     append_equity_snapshot,
     get_effective_market_weight,
-    load_drawdown_state,
     load_equity_curve,
     load_recent_trades,
     save_drawdown_state,
 )
 from execution.smart_router import SmartRouter
-from quant.risk.drawdown_guard import DrawdownGuard, DrawdownGuardState
+from quant.drift_detector import ConceptDriftDetector  # v6.2 C3: 드리프트 감지
+from quant.risk.drawdown_guard import DrawdownGuard
+from quant.risk.drawdown_state_store import DrawdownStateStore
 from quant.risk.position_sizer import KellyPositionSizer
 
 try:
     from common.sheets_logger import append_trade as _sheets_append
 except ImportError:
     _sheets_append = None
+
+try:
+    from common.openclaw_notify import notify_openclaw
+except ImportError:
+    notify_openclaw = None
 
 load_env()
 _log = get_logger("stock_agent", STOCK_TRADING_LOG)
@@ -58,6 +65,7 @@ OPENAI_KEY = os.environ.get('OPENAI_API_KEY', '')
 supabase = get_supabase()
 kiwoom = KiwoomClient()
 _kr_drift_cache: dict = {}
+_drift_detector = ConceptDriftDetector()  # v6.2 C3: 드리프트 감지 인스턴스
 
 RISK = {
     "invest_ratio": 0.25,
@@ -169,7 +177,7 @@ def _apply_kr_drift_gate(signal: dict) -> dict:
 
 
 def is_market_open() -> bool:
-    now = datetime.now()
+    now = datetime.now(ZoneInfo("Asia/Seoul"))
     if now.weekday() >= 5:
         return False
     t = now.hour * 100 + now.minute
@@ -226,6 +234,8 @@ def _get_kr_dynamic_sl_tp(code: str) -> tuple:
 # ─────────────────────────────────────────────
 _cache = {}  # 간단한 메모리 캐시 (사이클 단위 리셋)
 _kr_buy_blocked = False
+# audit fix: CrossMarket 리스크 — 모듈 레벨 싱글턴 (매 사이클 재사용)
+_cmr_instance = None
 
 
 def _calc_rsi(closes: list, period: int = 14) -> float:
@@ -669,14 +679,14 @@ def _apply_drawdown_guard_kr() -> bool:
         _kr_buy_blocked = False
         return False
 
-    guard = DrawdownGuard()
+    _dd_store = DrawdownStateStore()
+    guard = DrawdownGuard(store=_dd_store)
     returns = guard.returns_from_equity_curve(equity_curve)
-    prev_state = DrawdownGuardState(**load_drawdown_state('kr'))
     decision = guard.evaluate(
         daily_return=returns.get('daily_return', 0.0),
         weekly_return=returns.get('weekly_return', 0.0),
         monthly_return=returns.get('monthly_return', 0.0),
-        state=prev_state,
+        market='kr',
     )
     save_drawdown_state('kr', decision['state'].__dict__)
     _kr_buy_blocked = not decision.get('allow_new_buys', True)
@@ -785,8 +795,10 @@ def check_cooldown(code: str) -> bool:
 # ─────────────────────────────────────────────
 def check_daily_loss() -> bool:
     """오늘 일일 손실 한도 도달 시 True (거래 중단)"""
+    # v6.2 B2: KST 시간대 통일 — 한국 기준 "오늘" 사용
     try:
-        today = datetime.now(timezone.utc).date().isoformat()
+        _KST = ZoneInfo("Asia/Seoul")
+        today = datetime.now(_KST).date().isoformat()
         closed_today = (
             supabase.table('trade_executions')
             .select('*')
@@ -904,8 +916,9 @@ def rule_based_signal(
     cs = 0
     buy_reasons = []
 
-    # 레짐 가중치 적용 (사이클에서 로드된 경우 반영)
-    _regime_adj = globals().get('_regime_adj_cache', {})
+    # 레짐 가중치 적용 (TTL 30분 캐시)
+    from agents.regime_classifier import get_regime_cached
+    _regime_adj = get_regime_cached(1800)
     _mom_mult = _regime_adj.get('momentum_mult', 1.0)
     _val_mult = _regime_adj.get('value_mult', 1.0)
     _qual_mult = _regime_adj.get('quality_mult', 1.0)
@@ -999,6 +1012,8 @@ def analyze_with_ai(
     except Exception:
         pass
 
+    momentum = None  # 기본값 — except 경로에서 NameError 방지
+    dart = None
     try:
         from openai import OpenAI
         client = OpenAI(api_key=OPENAI_KEY)
@@ -1097,7 +1112,10 @@ def analyze_with_ai(
         if 'insufficient_quota' in err_str or '429' in err_str:
             from common.cache import set_cached
             set_cached('openai:quota_exceeded', True, ttl=7200)
-        dart = _get_dart_score(stock['code'])
+        if momentum is None:
+            momentum = calc_momentum_score(stock['code'])
+        if dart is None:
+            dart = _get_dart_score(stock['code'])
         result = rule_based_signal(indicators, kospi, weekly, has_position, supply, momentum, dart)
         result['source'] = 'RULE_FALLBACK'
         return result
@@ -1139,6 +1157,23 @@ def get_trading_signal(
     except Exception:
         pass
 
+    # v6.2 B4: ML 신호에 레짐 전달 — 레짐 조회 후 ML confidence 보정에 활용
+    _current_kr_regime = "TRANSITION"
+    _regime_ml_mult = 1.0
+    try:
+        from agents.regime_classifier import get_regime_cached as _get_regime_cached
+        _kr_regime_adj = _get_regime_cached(1800)
+        _current_kr_regime = _kr_regime_adj.get("regime", "TRANSITION")
+        # 레짐별 ML 신호 가중치: RISK_OFF/CRISIS 시 ML 고확률 기준 상향
+        _regime_ml_mult = {
+            "RISK_ON":    1.05,   # 강세장: ML 신뢰도 소폭 상향
+            "TRANSITION": 1.00,
+            "RISK_OFF":   0.90,   # 약세장: ML 신뢰도 10% 하향 (보수적)
+            "CRISIS":     0.80,   # 위기: ML 신뢰도 20% 하향
+        }.get(_current_kr_regime, 1.0)
+    except Exception:
+        pass
+
     # ML 신호 항상 수집
     try:
         from ml_model import get_ml_signal, MODEL_DIR  # 같은 디렉토리
@@ -1146,23 +1181,28 @@ def get_trading_signal(
             ml = get_ml_signal(stock['code'])
             ml_confidence = float(ml.get('confidence', 0))
             ml_source = ml.get('source', 'ML_XGBOOST')
+            # v6.2 B4: 레짐 반영 ML confidence 보정
+            ml_confidence_adj = round(ml_confidence * _regime_ml_mult, 1)
+            if _regime_ml_mult != 1.0:
+                log(f"  ML 레짐({_current_kr_regime}) 보정: {ml_confidence:.1f}% → {ml_confidence_adj:.1f}%", 'INFO')
+            ml_confidence = ml_confidence_adj
             # 고확률 ML → 즉시 BUY
             ml_action = ml.get('action')
             if ml_action in ('BUY', 'STRONG_BUY', 'SWING_BUY') and ml_confidence >= 78:
                 log(
-                    f"  ML 고확률 {ml_action}: {ml_confidence:.1f}% [{ml_source}]",
+                    f"  ML 고확률 {ml_action}: {ml_confidence:.1f}% [{ml_source}] regime={_current_kr_regime}",
                     'INFO',
                 )
                 return _apply_kr_drift_gate({
                     'action': 'BUY',
                     'confidence': ml_confidence,
-                    'reason': f"ML 모델 {ml_action} 확률 {ml_confidence:.1f}%",
+                    'reason': f"ML 모델 {ml_action} 확률 {ml_confidence:.1f}% [레짐={_current_kr_regime}]",
                     'source': 'ML_MULTI_HORIZON',
                     'ml_score': ml_confidence,
                     'ml_confidence': ml_confidence,
                 })
             if ml_confidence >= 65:
-                log(f"  ML 보조신호: {ml_confidence:.1f}% → 룰/AI 블렌딩", 'INFO')
+                log(f"  ML 보조신호: {ml_confidence:.1f}% → 룰/AI 블렌딩 [레짐={_current_kr_regime}]", 'INFO')
     except Exception as e:
         log(f'  ML 모델 오류: {e}', 'WARN')
 
@@ -1183,28 +1223,17 @@ def get_trading_signal(
         dart = _get_dart_score(stock['code'])
         base_signal = rule_based_signal(indicators, kospi, weekly, has_position, supply, momentum, dart)
 
-    # v6: 동적 ML 블렌딩 — ML 정확도 기반 가중치 적응형
+    # audit fix: ML IC -0.411 역신호 — 임시 비활성화. IC 양수 전환 후 복원
+    # ML 예측은 드리프트 감지용으로 계속 실행, 최종 confidence에는 반영 안 함
+    # (원복 시: _rule_w, _ml_w = 0.60, 0.40 또는 동적 accuracy 기반으로 교체)
     if base_signal.get('action') == 'BUY' and ml_confidence > 0:
         base_conf = float(base_signal.get('confidence', 0))
-        # ML 정확도 로드
-        try:
-            from ml_model import load_performance_metrics
-            _ml_perf = load_performance_metrics('3d')
-            _ml_accuracy = float(_ml_perf.get('accuracy', 0.5))
-        except Exception:
-            _ml_accuracy = 0.5
-        # 정확도 기반 가중치
-        if _ml_accuracy >= 0.65:
-            _rule_w, _ml_w = 0.50, 0.50
-        elif _ml_accuracy >= 0.55:
-            _rule_w, _ml_w = 0.70, 0.30
-        else:
-            _rule_w, _ml_w = 0.90, 0.10
+        _rule_w, _ml_w = 1.0, 0.0
         blended = round(base_conf * _rule_w + ml_confidence * _ml_w, 1)
         base_signal['confidence'] = blended
         base_signal['reason'] = (
             base_signal.get('reason', '')
-            + f" [ML블렌딩(acc={_ml_accuracy:.0%}):{_rule_w:.0%}R+{_ml_w:.0%}M→{blended:.0f}%]"
+            + f" [ML블렌딩(비활성화):1.0R+0.0M→{blended:.0f}%]"
         )
 
     base_signal['ml_score'] = round(ml_confidence, 2)
@@ -1292,7 +1321,7 @@ def execute_buy(
     weekly: dict = None,
 ) -> dict:
     """매수 실행 (모든 검증 포함)"""
-    global _kr_buy_blocked
+    global _kr_buy_blocked, _cmr_instance
     code = stock['code']
     name = stock['name']
     price = indicators.get('price', 0)
@@ -1302,6 +1331,18 @@ def execute_buy(
 
     if _kr_buy_blocked:
         return {'result': 'BLOCKED_DRAWDOWN'}
+
+    # audit fix: CrossMarket 리스크 체크
+    try:
+        from quant.risk.cross_market_manager import CrossMarketRiskManager
+        if _cmr_instance is None:
+            _cmr_instance = CrossMarketRiskManager()
+        cm_result = _cmr_instance.evaluate()
+        if cm_result.buy_blocked:
+            log(f'{name}: CrossMarket 리스크 차단: {cm_result.block_reasons}', 'WARN')
+            return {'result': 'CROSS_MARKET_BLOCKED', 'reasons': cm_result.block_reasons}
+    except Exception as _e:
+        log(f'{name}: CrossMarket 체크 실패 (무시): {_e}', 'WARN')
 
     # 신뢰도 체크
     if signal.get('confidence', 0) < RISK['min_confidence']:
@@ -1429,27 +1470,39 @@ def execute_buy(
     stage_ratio = RISK['split_ratios'][split_stage - 1]
     invest_krw = total_invest * stage_ratio
 
+    # v6.2 C1: Half Kelly 동적 포지션 사이징 — 50건 미만 시 보수적 기본값 사용
     recent_trades = load_recent_trades('kr', limit=100)
-    if len(recent_trades) >= 50:
+    _n_kr_trades = len(recent_trades)
+    if _n_kr_trades >= 50:
         wins = [t['pnl_pct'] for t in recent_trades if t.get('pnl_pct', 0) > 0]
         losses = [abs(t['pnl_pct']) for t in recent_trades if t.get('pnl_pct', 0) < 0]
-        win_rate = len(wins) / len(recent_trades) if recent_trades else 0.0
+        win_rate = len(wins) / _n_kr_trades if _n_kr_trades else 0.0
         avg_win = sum(wins) / len(wins) if wins else 0.02
         avg_loss = sum(losses) / len(losses) if losses else 0.03
-        atr_pct = _estimate_atr_pct_kr(code, price)
-        current_exposure = _get_kr_market_weight(account_equity)
-        sizing = KellyPositionSizer().size_position(
-            account_equity=account_equity,
-            price=price,
-            win_rate=win_rate,
-            payoff_ratio=avg_win / max(avg_loss, 0.001),
-            current_total_exposure=current_exposure,
-            atr_pct=atr_pct,
-            conviction=max(0.0, min(1.0, signal.get('confidence', 0) / 100.0)),
-        )
-        kelly_invest = account_equity * float(sizing.get('capped_fraction', 0.0)) * stage_ratio
-        if kelly_invest > 0:
-            invest_krw = min(invest_krw, kelly_invest) if split_stage > 1 else kelly_invest
+    else:
+        # 거래 이력 부족 — 보수적 기본값
+        win_rate = 0.40
+        avg_win = 0.03
+        avg_loss = 0.025
+    atr_pct = _estimate_atr_pct_kr(code, price)
+    current_exposure = _get_kr_market_weight(account_equity)
+    sizing = KellyPositionSizer().size_position(
+        account_equity=account_equity,
+        price=price,
+        win_rate=win_rate,
+        payoff_ratio=avg_win / max(avg_loss, 0.001),
+        current_total_exposure=current_exposure,
+        atr_pct=atr_pct,
+        conviction=max(0.0, min(1.0, signal.get('confidence', 0) / 100.0)),
+    )
+    kelly_fraction_val = float(sizing.get('capped_fraction', 0.0))
+    config_invest_ratio = RISK['invest_ratio'] * stage_ratio
+    # min(Kelly, config) — Half Kelly가 config 상한 초과 방지
+    effective_ratio = min(kelly_fraction_val, config_invest_ratio) if kelly_fraction_val > 0 else config_invest_ratio
+    kelly_invest = account_equity * effective_ratio
+    if kelly_invest > 0:
+        invest_krw = kelly_invest
+        log(f'{name} [C1] Half Kelly: kelly={kelly_fraction_val:.3f} cfg={config_invest_ratio:.3f} eff={effective_ratio:.3f} → {invest_krw:,.0f}원')
 
     # v3: ATR 기반 변동성 포지션 사이징
     if RISK.get('volatility_sizing'):
@@ -1509,6 +1562,12 @@ def execute_buy(
         return {'result': 'ORDER_FAILED', 'error': str(e)}
         # ↑ 주문 실패 시 여기서 return → DB 저장 안 됨 (v1 버그 수정)
 
+    # P1-5: SmartRouter 응답 None 검증 — 체결 실패 가능성 차단
+    if order_result is None:
+        log(f'{name} 주문 응답 None — 체결 실패 가능, DB 저장 건너뜀', 'ERROR')
+        send_telegram(f'🚨 {name} 매수 주문 응답 None — 수동 확인 필요')
+        return {'result': 'ORDER_FAILED', 'error': 'order_response_none'}
+
     # ── DB 저장 (주문 성공 후에만) ──
     insert_data = {
         'trade_type': 'BUY',
@@ -1566,7 +1625,14 @@ def execute_buy(
         try:
             supabase.table('trade_executions').insert(insert_data).execute()
         except Exception as e2:
-            log(f'{name} DB 저장 실패: {e2}', 'ERROR')
+            log(f'{name} DB 저장 2차 실패: {e2}', 'ERROR')
+            send_telegram(f'🚨 {name} 매수 체결됐으나 DB 저장 실패 — 수동 확인 필요\n코드: {code}')
+
+    if notify_openclaw:
+        try:
+            notify_openclaw("kr_buy", f"KR 매수: {name}", metadata={"stock": name, "price": price})
+        except Exception:
+            pass
 
     # ── 알림 ──
     avg_entry = calc_avg_entry_price(get_position_for_stock(code))
@@ -1584,6 +1650,14 @@ def execute_buy(
             _sheets_append("kr", "매수", code, price, quantity, None, signal.get("reason", ""))
         except Exception:
             pass
+
+    # audit fix: Prometheus 메트릭 연동
+    try:
+        from common.prometheus_metrics import record_trade, set_signal_score
+        record_trade("KR", "buy")
+        set_signal_score("KR", "composite", float(signal.get('confidence', 0) or 0))
+    except Exception:
+        pass
 
     return {
         'result': 'BUY',
@@ -1659,6 +1733,12 @@ def execute_sell(stock: dict, signal: dict, indicators: dict, reason_prefix: str
         send_telegram(f'❌ <b>{name} 매도 주문 실패</b>\n{e}')
         return {'result': 'ORDER_FAILED', 'error': err_str}
 
+    # P1-5: SmartRouter 응답 None 검증 — 체결 실패 가능성 차단
+    if order_result is None:
+        log(f'{name} 매도 주문 응답 None — 체결 실패 가능, DB 업데이트 건너뜀', 'ERROR')
+        send_telegram(f'🚨 {name} 매도 주문 응답 None — 수동 확인 필요')
+        return {'result': 'ORDER_FAILED', 'error': 'order_response_none'}
+
     # ── DB 업데이트 (주문 성공 후에만) ──
     for p in positions:
         pid = p.get('trade_id')
@@ -1695,6 +1775,26 @@ def execute_sell(stock: dict, signal: dict, indicators: dict, reason_prefix: str
     except Exception as e:
         log(f'{name} 매도 기록 저장 실패: {e}', 'ERROR')
 
+    if notify_openclaw:
+        try:
+            notify_openclaw("kr_sell", f"KR 매도: {name}", metadata={"stock": name, "price": price})
+        except Exception:
+            pass
+
+    # v6.2 C3: 드리프트 감지 — 매도 시점에 예측/실제 수익 기록
+    try:
+        _predicted_score = float(signal.get('ml_score', signal.get('confidence', 50.0)) / 100.0) if isinstance(signal, dict) else 0.5
+        _actual_result = 1 if pnl_pct > 0 else 0
+        _is_drift = _drift_detector.update(_predicted_score, _actual_result)
+        if _is_drift:
+            send_telegram(
+                f'⚠️ <b>ML 드리프트 감지</b>\n'
+                f'최근 {_drift_detector.window}건 예측 AUC 기준 미달\n'
+                f'재학습 권장: python stocks/ml_model.py retrain'
+            )
+    except Exception as _drift_e:
+        log(f'드리프트 업데이트 실패: {_drift_e}', 'WARNING')
+
     # ── 알림 ──
     emoji = '✅' if pnl_pct > 0 else '🛑'
     send_telegram(
@@ -1712,6 +1812,14 @@ def execute_sell(stock: dict, signal: dict, indicators: dict, reason_prefix: str
             _sheets_append("kr", action, code, price, total_qty, pnl_pct, reason)
         except Exception:
             pass
+
+    # audit fix: Prometheus 메트릭 연동
+    try:
+        from common.prometheus_metrics import record_trade, set_pnl
+        record_trade("KR", "sell")
+        set_pnl("KR", float(pnl_pct))
+    except Exception:
+        pass
 
     return {
         'result': 'SELL',
@@ -1839,7 +1947,11 @@ def check_stop_loss_take_profit():
                     sell_qty = max(1, int(total_qty * RISK.get('partial_tp_ratio', 0.50)))
                     log(f'{name} 부분 익절: {net_pnl_pct*100:.2f}%, {sell_qty}주 매도', 'TRADE')
                     try:
-                        kiwoom.place_order(stock_code=code, order_type='sell', quantity=sell_qty, price=0)
+                        order_result = kiwoom.place_order(stock_code=code, order_type='sell', quantity=sell_qty, price=0)
+                        if order_result is None:
+                            log(f'{name} 부분익절 주문 실패 — DB 업데이트 건너뜀', 'ERROR')
+                            send_telegram(f'🚨 {name} 부분익절 주문 실패 — 수동 확인 필요')
+                            continue
                         # 첫 번째 레코드의 수량을 차감하여 잔여 수량 반영
                         remaining_to_deduct = sell_qty
                         for t in trades:
@@ -1915,54 +2027,20 @@ def check_stop_loss_take_profit():
 # ─────────────────────────────────────────────
 # 메인 사이클
 # ─────────────────────────────────────────────
-def _get_regime_factor_adj() -> dict:
-    """레짐별 KR 팩터 가중치 조정값 반환 (Phase 3-B).
-
-    RISK_OFF: value/quality ↑, momentum ↓
-    RISK_ON:  momentum ↑, value ↓
-    Returns dict with 'momentum_mult', 'value_mult', 'quality_mult'
-    """
-    defaults = {"momentum_mult": 1.0, "value_mult": 1.0, "quality_mult": 1.0, "regime": "UNKNOWN"}
-    try:
-        import sys as _sys
-        _WORKSPACE_ROOT = str(Path(__file__).resolve().parents[1])
-        if _WORKSPACE_ROOT not in _sys.path:
-            _sys.path.insert(0, _WORKSPACE_ROOT)
-        from agents.regime_classifier import RegimeClassifier
-        result = RegimeClassifier().classify()
-        regime = result.get("regime", "TRANSITION")
-        adj = {
-            "RISK_ON":     {"momentum_mult": 1.30, "value_mult": 0.80, "quality_mult": 1.00},
-            "TRANSITION":  {"momentum_mult": 1.00, "value_mult": 1.00, "quality_mult": 1.00},
-            "RISK_OFF":    {"momentum_mult": 0.70, "value_mult": 1.30, "quality_mult": 1.30},
-            "CRISIS":      {"momentum_mult": 0.40, "value_mult": 1.50, "quality_mult": 1.50},
-        }.get(regime, defaults)
-        adj["regime"] = regime
-        log(
-            f"KR 레짐 적응형 가중치: {regime} "
-            f"(mom×{adj['momentum_mult']} val×{adj['value_mult']})"
-        )
-        return adj
-    except Exception as e:
-        log(f'레짐 조회 실패 (기본값 사용): {e}', 'WARN')
-        return defaults
-
-
-# 레짐 가중치 캐시 (사이클 내 재사용)
-_regime_adj_cache: dict = {}
-
-
 def run_trading_cycle():
-    global _cache, _dart_cache, _regime_adj_cache, _kr_buy_blocked, _kr_drift_cache
+    global _cache, _dart_cache, _kr_buy_blocked, _kr_drift_cache
     _cache = {}
     _dart_cache = {}
     _kr_drift_cache = {}
     _kr_buy_blocked = False
-    _regime_adj_cache = _get_regime_factor_adj()  # 레짐별 팩터 가중치 사이클 초기 로드
+
+    # 레짐별 팩터 가중치 (TTL 30분 캐시)
+    from agents.regime_classifier import get_regime_cached
+    _regime_adj = get_regime_cached(1800)
 
     # v6: 레짐별 리스크 파라미터 런타임 오버라이드
     from common.config import REGIME_RISK_OVERRIDES
-    _current_regime = _regime_adj_cache.get("regime", "TRANSITION")
+    _current_regime = _regime_adj.get("regime", "TRANSITION")
     _regime_override = REGIME_RISK_OVERRIDES.get(_current_regime, {})
     if _regime_override:
         if "max_positions" in _regime_override:
@@ -2151,6 +2229,13 @@ def run_trading_cycle():
 
     log('주식 매매 사이클 완료')
     log('=' * 50)
+
+    # audit fix: Prometheus 메트릭 연동
+    try:
+        from common.prometheus_metrics import record_agent_cycle
+        record_agent_cycle("KR", "success")
+    except Exception:
+        pass
 
 
 # ─────────────────────────────────────────────

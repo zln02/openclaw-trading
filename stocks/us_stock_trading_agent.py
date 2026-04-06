@@ -15,13 +15,12 @@ v2 변경사항:
     .venv/bin/python stocks/us_stock_trading_agent.py status   # 보유 현황
 """
 
-import os
 import sys
 import time
-import requests
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, List, Dict
+from zoneinfo import ZoneInfo  # v6.2 B2: ET 시간대 통일
 
 import yfinance as yf
 import pandas as pd
@@ -33,18 +32,17 @@ from common.env_loader import load_env
 from common.telegram import send_telegram as _tg_send
 from common.supabase_client import get_supabase
 from common.logger import get_logger
-from common.retry import retry, retry_call
 from common.config import US_TRADING_LOG
 from common.utils import generate_order_id, check_order_idempotency
 from common.equity_loader import (
     append_equity_snapshot,
     get_effective_market_weight,
-    load_drawdown_state,
     load_equity_curve,
     load_recent_trades,
     save_drawdown_state,
 )
-from quant.risk.drawdown_guard import DrawdownGuard, DrawdownGuardState
+from quant.risk.drawdown_guard import DrawdownGuard
+from quant.risk.drawdown_state_store import DrawdownStateStore
 from quant.risk.position_sizer import KellyPositionSizer
 from execution.smart_router import SmartRouter
 
@@ -53,6 +51,16 @@ try:
 except ImportError:
     _sheets_append = None
 
+try:
+    from stocks.us_broker import AlpacaBroker as _AlpacaBroker
+except ImportError:
+    _AlpacaBroker = None
+
+try:
+    from quant.drift_detector import ConceptDriftDetector as _ConceptDriftDetector
+except Exception:
+    _ConceptDriftDetector = None
+
 # v6: SmartRouter 인스턴스 (US 모의투자용 — 슬리피지 추적 + 주문 크기별 라우팅 로깅)
 _smart_router = SmartRouter()
 
@@ -60,7 +68,7 @@ load_env()
 _log = get_logger("us_agent", US_TRADING_LOG)
 
 sys.path.insert(0, str(Path(__file__).parent))
-from us_momentum_backtest import scan_today_top_us, US_UNIVERSE, MomentumScore
+from us_momentum_backtest import scan_today_top_us, US_UNIVERSE
 
 supabase = get_supabase()
 
@@ -94,6 +102,7 @@ RISK = {
     "volatility_sizing": True,    # ATR 기반 포지션 사이징
     "max_hold_days": 20,           # v6: 좀비 포지션 하드 컷오프
     "indicator_fail_max": 3,       # v6: 지표 N회 연속 실패 시 강제 매도
+    "max_daily_loss": -0.08,       # audit fix: 일일 손실 한도 (-8%)
 }
 
 RULES = {
@@ -107,10 +116,12 @@ RULES = {
 US_TRADE_TABLE = "us_trade_executions"
 STOP_FLAG = Path(__file__).parent / "US_STOP_TRADING"
 
-# 레짐 가중치 사이클 캐시
-_us_regime_adj_cache: Dict = {}
 _us_buy_blocked = False
 _us_drift_cache: Dict = {}
+# audit fix: CrossMarket 리스크 — 모듈 레벨 싱글턴 (매 사이클 재사용)
+_cmr_instance = None
+# P1-10: ConceptDriftDetector US 연동
+_us_drift_detector = _ConceptDriftDetector() if _ConceptDriftDetector is not None else None
 
 
 def _get_us_ml_signal(symbol: str) -> dict:
@@ -177,33 +188,6 @@ def _apply_us_drift_gate(signal: dict) -> dict:
     return adjusted
 
 
-def _get_us_regime_adj() -> Dict:
-    """레짐별 US 팩터 가중치 조정값 반환 (Phase 3-B)."""
-    global _us_regime_adj_cache
-    if _us_regime_adj_cache:
-        return _us_regime_adj_cache
-    defaults = {"momentum_mult": 1.0, "value_mult": 1.0, "quality_mult": 1.0, "regime": "UNKNOWN"}
-    try:
-        from agents.regime_classifier import RegimeClassifier
-        result = RegimeClassifier().classify()
-        regime = result.get("regime", "TRANSITION")
-        _us_regime_adj_cache = {
-            "RISK_ON":     {"momentum_mult": 1.25, "value_mult": 0.85, "quality_mult": 1.00},
-            "TRANSITION":  {"momentum_mult": 1.00, "value_mult": 1.00, "quality_mult": 1.00},
-            "RISK_OFF":    {"momentum_mult": 0.75, "value_mult": 1.25, "quality_mult": 1.25},
-            "CRISIS":      {"momentum_mult": 0.50, "value_mult": 1.40, "quality_mult": 1.40},
-        }.get(regime, defaults)
-        _us_regime_adj_cache["regime"] = regime
-        log(
-            f"US 레짐 적응형 가중치: {regime} "
-            f"(mom×{_us_regime_adj_cache['momentum_mult']} val×{_us_regime_adj_cache['value_mult']})"
-        )
-    except Exception as e:
-        log(f"US 레짐 조회 실패 (기본값): {e}", "WARN")
-        _us_regime_adj_cache = defaults
-    return _us_regime_adj_cache
-
-
 # ─────────────────────────────────────────────
 # 유틸리티
 # ─────────────────────────────────────────────
@@ -221,10 +205,17 @@ def send_telegram(msg: str):
 
 
 def is_us_market_open() -> bool:
-    """미국장 대략 개장 여부 (한국 시간 기준 23:30~06:00, 서머타임 무시)."""
-    now = datetime.now()
-    h = now.hour
-    return h >= 23 or h < 6
+    """미국장 개장 여부 (미국 동부 시간 ET 기준 09:30~16:00, 서머타임 자동 반영).
+    # v6.2 B2: KST 기준 하드코딩 → ET(America/New_York) ZoneInfo 기준으로 교체
+    """
+    _ET = ZoneInfo("America/New_York")
+    now_et = datetime.now(_ET)
+    # 주말 제외
+    if now_et.weekday() >= 5:
+        return False
+    market_open = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
+    market_close = now_et.replace(hour=16, minute=0, second=0, microsecond=0)
+    return market_open <= now_et < market_close
 
 
 # ─────────────────────────────────────────────
@@ -254,13 +245,18 @@ def calc_relative_strength(symbol: str, days: int = 20) -> float:
 # ─────────────────────────────────────────────
 # 시장/지표 데이터
 # ─────────────────────────────────────────────
-_yf_cache: Dict[str, dict] = {}
+_yf_cache: Dict[str, tuple] = {}  # v6.2 B5: {symbol: (data, timestamp)}
+_YF_CACHE_TTL = 300  # v6.2 B5: 5분 TTL
 
 
 def get_us_indicators(symbol: str) -> Optional[dict]:
     """yfinance에서 일봉 기반 RSI/BB/거래량 지표 계산."""
+    # v6.2 B5: yf_cache TTL
+    now = time.time()
     if symbol in _yf_cache:
-        return _yf_cache[symbol]
+        cached_data, cached_ts = _yf_cache[symbol]
+        if now - cached_ts < _YF_CACHE_TTL:
+            return cached_data
 
     try:
         ticker = yf.Ticker(symbol)
@@ -297,7 +293,7 @@ def get_us_indicators(symbol: str) -> Optional[dict]:
             "near_high": round(near_high, 1),
             "high_60d": high_60d,
         }
-        _yf_cache[symbol] = result
+        _yf_cache[symbol] = (result, now)  # v6.2 B5: yf_cache TTL
         return result
     except Exception as e:
         log(f"{symbol}: 지표 조회 실패: {e}", "WARN")
@@ -468,46 +464,59 @@ def should_buy(symbol: str, score: float, indicators: dict) -> dict:
     cs = 0
     reasons = []
 
-    # 레짐 적응형 팩터 가중치 (Phase 3-B)
-    _regime_adj = _get_us_regime_adj()
+    # 레짐 적응형 팩터 가중치 (TTL 30분 캐시)
+    from agents.regime_classifier import get_regime_cached
+    _regime_adj = get_regime_cached(1800)
     _mom_mult = _regime_adj.get("momentum_mult", 1.0)
     _val_mult = _regime_adj.get("value_mult", 1.0)
 
     # 1) 모멘텀 등급 (35점 × 레짐 배수)
     if score >= 75:
-        cs += round(35 * _mom_mult); reasons.append(f"모멘텀A({score:.0f})")
+        cs += round(35 * _mom_mult)
+        reasons.append(f"모멘텀A({score:.0f})")
     elif score >= 65:
-        cs += round(25 * _mom_mult); reasons.append(f"모멘텀B({score:.0f})")
+        cs += round(25 * _mom_mult)
+        reasons.append(f"모멘텀B({score:.0f})")
     elif score >= 55:
-        cs += round(18 * _mom_mult); reasons.append(f"모멘텀C({score:.0f})")
+        cs += round(18 * _mom_mult)
+        reasons.append(f"모멘텀C({score:.0f})")
     elif score >= 50:
-        cs += round(12 * _mom_mult); reasons.append(f"모멘텀D({score:.0f})")
+        cs += round(12 * _mom_mult)
+        reasons.append(f"모멘텀D({score:.0f})")
 
     # 2) RSI 구간 (15점)
     if rsi <= 35:
-        cs += 15; reasons.append(f"RSI과매도({rsi:.0f})")
+        cs += 15
+        reasons.append(f"RSI과매도({rsi:.0f})")
     elif rsi <= 45:
-        cs += 12; reasons.append(f"RSI저점({rsi:.0f})")
+        cs += 12
+        reasons.append(f"RSI저점({rsi:.0f})")
     elif rsi <= 55:
-        cs += 8; reasons.append(f"RSI중립({rsi:.0f})")
+        cs += 8
+        reasons.append(f"RSI중립({rsi:.0f})")
     elif rsi <= 65:
-        cs += 5; reasons.append(f"RSI적정({rsi:.0f})")
+        cs += 5
+        reasons.append(f"RSI적정({rsi:.0f})")
     elif rsi <= 75:
         cs += 2
 
     # 3) 볼린저밴드 (10점)
     if bb_pos <= 30:
-        cs += 10; reasons.append(f"BB하단({bb_pos:.0f}%)")
+        cs += 10
+        reasons.append(f"BB하단({bb_pos:.0f}%)")
     elif bb_pos <= 50:
-        cs += 7; reasons.append(f"BB중간({bb_pos:.0f}%)")
+        cs += 7
+        reasons.append(f"BB중간({bb_pos:.0f}%)")
     elif bb_pos <= 70:
         cs += 3
 
     # 4) 거래량 (10점)
     if vol_ratio >= 2.0:
-        cs += 10; reasons.append(f"거래량폭증({vol_ratio:.1f}x)")
+        cs += 10
+        reasons.append(f"거래량폭증({vol_ratio:.1f}x)")
     elif vol_ratio >= 1.2:
-        cs += 7; reasons.append(f"거래량증가({vol_ratio:.1f}x)")
+        cs += 7
+        reasons.append(f"거래량증가({vol_ratio:.1f}x)")
     elif vol_ratio >= 0.8:
         cs += 4
     elif vol_ratio >= 0.5:
@@ -515,7 +524,8 @@ def should_buy(symbol: str, score: float, indicators: dict) -> dict:
 
     # 5) 신고가 근접도 (8점)
     if near_high >= 95:
-        cs += 8; reasons.append("신고가근접")
+        cs += 8
+        reasons.append("신고가근접")
     elif near_high >= 90:
         cs += 5
     elif near_high >= 80:
@@ -525,9 +535,11 @@ def should_buy(symbol: str, score: float, indicators: dict) -> dict:
     if RISK.get("relative_strength"):
         rs = calc_relative_strength(symbol)
         if rs >= 1.5:
-            cs += 5; reasons.append(f"RS강({rs:.1f}x)")
+            cs += 5
+            reasons.append(f"RS강({rs:.1f}x)")
         elif rs >= 1.2:
-            cs += 3; reasons.append(f"RS양호({rs:.1f}x)")
+            cs += 3
+            reasons.append(f"RS양호({rs:.1f}x)")
         elif rs < 0.8:
             cs -= 3
 
@@ -546,13 +558,16 @@ def should_buy(symbol: str, score: float, indicators: dict) -> dict:
             mf_grade = mf.get("grade", "N/A")
             mf_score = mf.get("score", 0)
             if mf_grade == "A":
-                cs += round(15 * _val_mult); reasons.append(f"팩터A({mf_score})")
+                cs += round(15 * _val_mult)
+                reasons.append(f"팩터A({mf_score})")
             elif mf_grade == "B":
-                cs += round(10 * _val_mult); reasons.append(f"팩터B({mf_score})")
+                cs += round(10 * _val_mult)
+                reasons.append(f"팩터B({mf_score})")
             elif mf_grade == "C":
                 cs += round(4 * _val_mult)
             elif mf_grade == "D":
-                cs -= 5; reasons.append(f"팩터D({mf_score})")
+                cs -= 5
+                reasons.append(f"팩터D({mf_score})")
         except Exception:
             pass
 
@@ -718,13 +733,25 @@ def check_exit(symbol: str, position: dict, indicators: dict) -> Optional[str]:
 
 def execute_buy(symbol: str, score: float, indicators: dict, signal: Optional[dict] = None) -> dict:
     """매수 실행."""
-    global _us_buy_blocked
+    global _cmr_instance
     price = indicators.get("price", 0)
     if not price:
         return {"result": "NO_PRICE"}
 
     if _us_buy_blocked:
         return {"result": "BLOCKED_DRAWDOWN"}
+
+    # audit fix: CrossMarket 리스크 체크
+    try:
+        from quant.risk.cross_market_manager import CrossMarketRiskManager
+        if _cmr_instance is None:
+            _cmr_instance = CrossMarketRiskManager()
+        cm_result = _cmr_instance.evaluate()
+        if cm_result.buy_blocked:
+            log(f"{symbol}: CrossMarket 리스크 차단: {cm_result.block_reasons}")
+            return {"result": "CROSS_MARKET_BLOCKED", "reasons": cm_result.block_reasons}
+    except Exception as _e:
+        log(f"{symbol}: CrossMarket 체크 실패 (무시): {_e}")
 
     positions = get_open_positions()
     open_symbols = list(set(p.get("symbol") for p in positions))
@@ -824,10 +851,15 @@ def execute_buy(symbol: str, score: float, indicators: dict, signal: Optional[di
         atr_pct=atr_pct,
         conviction=max(0.0, min(1.0, score / 100.0)),
     )
-    kelly_invest = RISK["virtual_capital"] * float(sizing.get("capped_fraction", 0.0))
+    # v6.2 C1: Half Kelly 포지션 사이징 — min(Kelly, config_ratio) 패턴 적용
+    kelly_fraction_val = float(sizing.get("capped_fraction", 0.0))
+    kelly_invest = RISK["virtual_capital"] * kelly_fraction_val
+    config_invest_ratio = ratio  # 위에서 score 기반으로 결정된 invest_ratio_A/B/C
+    config_invest = RISK["virtual_capital"] * config_invest_ratio
     if kelly_invest > 0:
-        invest_usd = kelly_invest
-    log(f"  {symbol}: Kelly sizing: {sizing.get('capped_fraction', 0)*100:.1f}% → ${invest_usd:.0f}")
+        # Half Kelly가 config 상한 초과하지 않도록 min() 적용
+        invest_usd = min(kelly_invest, config_invest)
+    log(f"  {symbol}: [C1] Half Kelly: kelly={kelly_fraction_val:.3f} cfg={config_invest_ratio:.3f} eff={invest_usd/max(RISK['virtual_capital'],1):.3f} → ${invest_usd:.0f}")
 
     # v6: VaR 체크 — 포트폴리오 VaR 3% 초과 시 거부
     new_var = sizer.estimate_position_var(
@@ -915,6 +947,33 @@ def execute_buy(symbol: str, score: float, indicators: dict, signal: Optional[di
     drift_status = str(signal.get("drift_status", ""))
     drift_penalty = float(signal.get("drift_penalty", 0.0) or 0.0)
 
+    # ── Alpaca 실전/페이퍼 주문 실행 ──────────────────────────────
+    import os as _os
+    _us_trading_env = _os.environ.get("US_TRADING_ENV", "sim").lower()  # sim / paper / live
+    _alpaca_result: dict = {}
+    _alpaca_mode_label = "⚠️ 모의투자"
+    if _AlpacaBroker is not None and _us_trading_env in ("paper", "live"):
+        try:
+            _broker = _AlpacaBroker(live=(_us_trading_env == "live"))
+            _alpaca_result = _broker.route_and_execute(
+                symbol=symbol, side="buy", qty=qty, price_hint=price,
+                simulate=False,
+            )
+            _alpaca_fills = _alpaca_result.get("execution", {}).get("fills") or []
+            _alpaca_status = _alpaca_fills[0].get("response", {}).get("status", "UNKNOWN") if _alpaca_fills else "UNKNOWN"
+            _is_live = (_us_trading_env == "live")
+            _alpaca_mode_label = f"{'💰 실전' if _is_live else '📄 페이퍼'} ({_alpaca_status})"
+            if not _alpaca_result.get("ok"):
+                log(f"  {symbol} Alpaca 매수 실패: {_alpaca_result}", "ERROR")
+                # P1-9: Alpaca 주문 실패 시 DB 저장 건너뜀
+                send_telegram(f"🚨 {symbol} Alpaca 매수 실패 — DB 저장 건너뜀")
+                return {"result": "ALPACA_BUY_FAILED", "symbol": symbol}
+            else:
+                log(f"  {symbol} Alpaca 매수 주문: {_alpaca_mode_label}", "TRADE")
+        except Exception as _ae:
+            log(f"  {symbol} Alpaca 매수 예외: {_ae}", "ERROR")
+    # ────────────────────────────────────────────────────────────
+
     save_trade(
         "BUY",
         symbol,
@@ -958,13 +1017,21 @@ def execute_buy(symbol: str, score: float, indicators: dict, signal: Optional[di
         f"💰 ${price:.2f} × {qty}주\n"
         f"💵 투입: ${invest_usd:.0f}\n"
         f"📊 모멘텀: {score:.0f}\n"
-        f"⚠️ 모의투자"
+        f"{_alpaca_mode_label}"
     )
     if _sheets_append:
         try:
             _sheets_append("us", "매수", symbol, price, qty, None, f"모멘텀 {score:.0f}")
         except Exception:
             pass
+
+    # audit fix: Prometheus 메트릭 연동
+    try:
+        from common.prometheus_metrics import record_trade, set_signal_score
+        record_trade("US", "buy")
+        set_signal_score("US", "composite", float(composite_conf))
+    except Exception:
+        pass
 
     return {"result": "BUY", "symbol": symbol, "qty": qty, "price": price}
 
@@ -981,6 +1048,30 @@ def execute_sell(symbol: str, position: dict, reason: str, indicators: dict) -> 
     pnl_usd = (price - entry_price) * qty
 
     log(f"🔴 {symbol} 매도: ${price:.2f} × {qty}주 | {pnl_pct:+.2f}% (${pnl_usd:+.1f}) | {reason}", "TRADE")
+
+    # ── Alpaca 실전/페이퍼 매도 주문 실행 ────────────────────────
+    import os as _os
+    _us_trading_env = _os.environ.get("US_TRADING_ENV", "sim").lower()  # sim / paper / live
+    _sell_mode_label = "⚠️ 모의투자"
+    if _AlpacaBroker is not None and _us_trading_env in ("paper", "live"):
+        try:
+            _broker = _AlpacaBroker(live=(_us_trading_env == "live"))
+            _sell_result = _broker.route_and_execute(
+                symbol=symbol, side="sell", qty=qty, price_hint=price,
+                simulate=False,
+            )
+            _sell_fills = _sell_result.get("execution", {}).get("fills") or []
+            _sell_status = _sell_fills[0].get("response", {}).get("status", "UNKNOWN") if _sell_fills else "UNKNOWN"
+            _is_live = (_us_trading_env == "live")
+            _sell_mode_label = f"{'💰 실전' if _is_live else '📄 페이퍼'} ({_sell_status})"
+            if not _sell_result.get("ok"):
+                log(f"  {symbol} Alpaca 매도 실패: {_sell_result}", "ERROR")
+            else:
+                log(f"  {symbol} Alpaca 매도 주문: {_sell_mode_label}", "TRADE")
+        except Exception as _ae:
+            log(f"  {symbol} Alpaca 매도 예외: {_ae}", "ERROR")
+    # ────────────────────────────────────────────────────────────
+
     close_position(symbol, price, reason, pnl_pct=pnl_pct)
 
     send_telegram(
@@ -988,7 +1079,7 @@ def execute_sell(symbol: str, position: dict, reason: str, indicators: dict) -> 
         f"💰 ${price:.2f} × {qty}주\n"
         f"📊 수익: {pnl_pct:+.2f}% (${pnl_usd:+.1f})\n"
         f"📝 {reason}\n"
-        f"⚠️ 모의투자"
+        f"{_sell_mode_label}"
     )
     if _sheets_append:
         try:
@@ -996,6 +1087,26 @@ def execute_sell(symbol: str, position: dict, reason: str, indicators: dict) -> 
             _sheets_append("us", action, symbol, price, qty, pnl_pct, reason)
         except Exception:
             pass
+
+    # audit fix: Prometheus 메트릭 연동
+    try:
+        from common.prometheus_metrics import record_trade, set_pnl
+        record_trade("US", "sell")
+        set_pnl("US", float(pnl_pct))
+    except Exception:
+        pass
+
+    # P1-10: ConceptDriftDetector US 연동 — 매도 후 예측 결과 업데이트
+    try:
+        if _us_drift_detector is not None:
+            _actual = 1 if pnl_pct > 0 else 0
+            _ml_score_raw = float(position.get("ml_score", None) or position.get("ml_confidence", None) or 0.5)
+            _predicted = _ml_score_raw if _ml_score_raw != 0.0 else 0.5
+            _is_drift = _us_drift_detector.update(_predicted, _actual)
+            if _is_drift:
+                log(f"{symbol} ML 드리프트 감지!", "WARN")
+    except Exception:
+        pass
 
     return {"result": "SELL", "pnl_pct": pnl_pct, "reason": reason}
 
@@ -1078,19 +1189,57 @@ def check_stop_loss_take_profit():
             log(f"  {symbol}: ${current_price:.2f} ({pnl:+.2f}%) — HOLD")
 
 
+# audit fix: US 일일 손실 한도 체크 추가 (BTC/KR과 동일한 패턴)
+def check_daily_loss_us() -> bool:
+    """당일 US 손실 체크. 한도 초과 시 True 반환."""
+    # P0-6: ET 날짜 대신 UTC 기준 (Supabase created_at은 UTC 저장)
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    try:
+        # P0-5: us_trade_executions 테이블, trade_type="SELL" 컬럼 사용
+        sells = supabase.table("us_trade_executions").select("pnl_pct").eq("trade_type", "SELL").gte("created_at", today_str).execute()
+        if not sells.data:
+            return False
+        total_loss = sum(
+            float(s.get("pnl_pct", 0))
+            for s in sells.data
+            if float(s.get("pnl_pct", 0)) < 0
+        )
+        limit = RISK.get("max_daily_loss", -0.08)
+        if total_loss / 100 < limit:
+            log(f"[WARN] US 일일 손실 한도 초과: {total_loss:.2f}% < {limit * 100:.1f}%")
+            from common.telegram import send_telegram
+            send_telegram(f"🚨 US 일일 손실 한도 초과\n손실: {total_loss:.2f}%\n한도: {limit * 100:.1f}%\n→ 오늘 US 매매 중단")
+            return True
+    except Exception as e:
+        log(f"[ERROR] US 일일 손실 체크 실패: {e}")
+    return False
+
+
 # ─────────────────────────────────────────────
 # 메인 사이클
 # ─────────────────────────────────────────────
 def run_trading_cycle():
-    global _us_regime_adj_cache, _us_buy_blocked, _us_drift_cache
+    global _us_buy_blocked, _us_drift_cache
     _us_buy_blocked = False
-    _us_regime_adj_cache = {}          # 사이클 시작 시 레짐 캐시 초기화 → _get_us_regime_adj() 재호출
     _us_drift_cache = {}
-    _get_us_regime_adj()               # 사이클 초기에 레짐 로드
+
+    # P1-8: 장 외 시간 체크
+    if not is_us_market_open():
+        log("US 장 외 시간 — 사이클 건너뜀", "INFO")
+        return
+
+    # audit fix: 일일 손실 한도 초과 시 사이클 스킵
+    if check_daily_loss_us():
+        log("[SKIP] US 일일 손실 한도 초과 — 사이클 종료")
+        return
+
+    # 레짐별 팩터 가중치 (TTL 30분 캐시)
+    from agents.regime_classifier import get_regime_cached
+    _regime_adj = get_regime_cached(1800)
 
     # v6: 레짐별 리스크 파라미터 런타임 오버라이드
     from common.config import REGIME_RISK_OVERRIDES
-    _current_regime = _us_regime_adj_cache.get("regime", "TRANSITION")
+    _current_regime = _regime_adj.get("regime", "TRANSITION")
     _regime_override = REGIME_RISK_OVERRIDES.get(_current_regime, {})
     if _regime_override:
         if "max_positions" in _regime_override:
@@ -1131,13 +1280,14 @@ def run_trading_cycle():
 
     equity_curve = load_equity_curve('us')
     if equity_curve:
-        guard = DrawdownGuard()
+        _dd_store = DrawdownStateStore()
+        guard = DrawdownGuard(store=_dd_store)
         returns = guard.returns_from_equity_curve(equity_curve)
         decision = guard.evaluate(
             daily_return=returns.get('daily_return', 0.0),
             weekly_return=returns.get('weekly_return', 0.0),
             monthly_return=returns.get('monthly_return', 0.0),
-            state=DrawdownGuardState(**load_drawdown_state('us')),
+            market='us',
         )
         save_drawdown_state('us', decision['state'].__dict__)
         _us_buy_blocked = not decision.get('allow_new_buys', True)
@@ -1203,7 +1353,7 @@ def run_trading_cycle():
         if symbol in open_symbols:
             continue
 
-        log(f"")
+        log("")
         log(f"  📊 {symbol} 분석 (스코어: {score:.1f})...")
 
         indicators = get_us_indicators(symbol)
@@ -1243,6 +1393,13 @@ def run_trading_cycle():
 
     log("🇺🇸 US 매매 사이클 완료")
     log("=" * 50)
+
+    # audit fix: Prometheus 메트릭 연동
+    try:
+        from common.prometheus_metrics import record_agent_cycle
+        record_agent_cycle("US", "success")
+    except Exception:
+        pass
 
 
 # ─────────────────────────────────────────────

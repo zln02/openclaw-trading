@@ -5,18 +5,19 @@ import time
 import functools
 from typing import Any, Callable, Optional, Tuple, Type
 
+import requests
+
+from common.logger import get_logger
+
+log = get_logger(__name__)
+
 # Default retryable exceptions
 RETRYABLE = (
     ConnectionError,
     TimeoutError,
     OSError,
+    requests.exceptions.RequestException,
 )
-
-try:
-    import requests
-    RETRYABLE = (*RETRYABLE, requests.exceptions.RequestException)
-except ImportError:
-    pass
 
 
 def retry(
@@ -56,6 +57,28 @@ def retry(
             raise last_exc  # type: ignore[misc]
         return wrapper
     return decorator
+
+
+def requests_with_retry(
+    url: str,
+    method: str = "GET",
+    retries: int = 2,
+    backoff: float = 1.0,
+    **kwargs: Any,
+):
+    """v6.2 D1: 외부 API 재시도 래퍼"""
+    for attempt in range(retries + 1):
+        try:
+            resp = requests.request(method, url, timeout=kwargs.pop("timeout", 10), **kwargs)
+            resp.raise_for_status()
+            return resp
+        except requests.RequestException as e:
+            if attempt < retries:
+                log.warning(f"API 재시도 {attempt+1}/{retries}: {url} - {e}")
+                time.sleep(backoff * (attempt + 1))
+            else:
+                log.error(f"API 최종 실패: {url} - {e}")
+                raise
 
 
 def retry_call(

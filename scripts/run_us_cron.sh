@@ -24,6 +24,7 @@ if [ "$MODE" = "premarket" ]; then
 fi
 
 cd "$WORKSPACE"
+export PYTHONPATH="$WORKSPACE"  # audit fix: 모듈 경로 명시
 
 echo "[CRON][US] $(date -Iseconds) MODE=$MODE ARGS=$*"
 exec "$PYTHON_BIN" "$TARGET" "$@"

@@ -16,10 +16,8 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 from datetime import datetime, timezone
 from itertools import product
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from common.config import BRAIN_PATH, ALPHA_PARAM_SPACE
@@ -35,11 +33,11 @@ ALPHA_DIR = BRAIN_PATH / "alpha"
 BEST_PARAMS_PATH = ALPHA_DIR / "best_params.json"
 
 # ── 기본 파라미터 공간 (config.ALPHA_PARAM_SPACE로 override 가능) ──────────────
+# v6.2 B7: atr_multiplier 제거 (_calc_composite_signal에서 미사용)
 _DEFAULT_PARAM_SPACE: Dict[str, List[Any]] = {
     "rsi_window":         [7, 14, 21],
     "momentum_lookback":  [5, 10, 20],
     "bb_window":          [15, 20, 30],
-    "atr_multiplier":     [1.5, 2.0, 2.5],
 }
 
 # Walk-forward 슬라이딩 설정
@@ -89,7 +87,8 @@ def _compute_ir(ic_series: List[float]) -> float:
         return 0.0
     n = len(ic_series)
     mean = sum(ic_series) / n
-    std = (sum((x - mean) ** 2 for x in ic_series) / n) ** 0.5
+    # v6.2 B8: 불편분산 (n-1)
+    std = (sum((x - mean) ** 2 for x in ic_series) / (n - 1)) ** 0.5
     return round(mean / std, 4) if std != 0 else 0.0
 
 
@@ -394,7 +393,7 @@ class AlphaResearcher:
                 f"Winner IC={winner['ic']:+.4f} IR={winner['ir']:+.4f}",
                 f"Baseline IR={baseline_ir:+.4f} → 개선: {improvement_pct:+.1f}%",
                 "",
-                f"최적 파라미터:",
+                "최적 파라미터:",
             ]
             for k, v in winner["params"].items():
                 lines.append(f"  {k}: {v}")

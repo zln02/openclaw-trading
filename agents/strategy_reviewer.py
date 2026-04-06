@@ -15,7 +15,12 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from common.config import BRAIN_PATH, STRATEGY_JSON
+from common.config import (
+    BRAIN_PATH,
+    DAILY_DEFENSE_WIN_RATE_THRESHOLD,
+    DEFENSE_INVEST_RATIO_MULT,
+    STRATEGY_JSON,
+)
 from common.env_loader import load_env
 from common.logger import get_logger
 from common.market_data import get_market_regime
@@ -494,6 +499,95 @@ class StrategyReviewer:
             "market_context": market_ctx,
         }
 
+    def run_daily_defense_check(
+        self,
+        as_of: str | date | datetime | None = None,
+        notify: bool = True,
+        dry_run: bool = False,
+    ) -> dict:
+        """최근 7일 승률 기반 방어 모드 점검.
+
+        win_rate < DAILY_DEFENSE_WIN_RATE_THRESHOLD 이면:
+          - invest_ratio *= DEFENSE_INVEST_RATIO_MULT (전략 JSON 반영)
+          - 텔레그램 알림
+        """
+        day = _to_date(as_of)
+        weekly = self.collect_weekly_metrics(day)
+        total_closed = weekly.get("total_closed", 0)
+        total_wins = weekly.get("total_wins", 0)
+        win_rate = (total_wins / total_closed) if total_closed > 0 else 1.0
+
+        defense_activated = win_rate < DAILY_DEFENSE_WIN_RATE_THRESHOLD and total_closed >= 3
+        result: Dict[str, Any] = {
+            "ok": True,
+            "type": "daily_defense_check",
+            "date": day.isoformat(),
+            "win_rate_7d": round(win_rate, 4),
+            "total_closed_7d": total_closed,
+            "threshold": DAILY_DEFENSE_WIN_RATE_THRESHOLD,
+            "defense_activated": defense_activated,
+        }
+
+        if defense_activated:
+            current = self.load_current_strategy()
+            # 현재 전략의 invest_ratio 조정 (KR/US 공통)
+            old_factor_weights = current.get("factor_weights", {})
+            result["old_factor_weights"] = old_factor_weights
+
+            if not dry_run:
+                # 전략 JSON에 defense_mode 마크
+                current["defense_mode"] = True
+                current["defense_invest_mult"] = DEFENSE_INVEST_RATIO_MULT
+                current["defense_activated_at"] = day.isoformat()
+                self.save_strategy(current)
+                result["strategy_updated"] = True
+            else:
+                result["strategy_updated"] = False
+                result["dry_run"] = True
+
+            if notify:
+                msg = (
+                    f"🛡️ <b>방어 모드 발동</b>\n"
+                    f"날짜: {day.isoformat()}\n"
+                    f"최근 7일 승률: {win_rate:.1%} (기준: {DAILY_DEFENSE_WIN_RATE_THRESHOLD:.0%})\n"
+                    f"결산: {total_closed}건 중 {total_wins}건 수익\n"
+                    f"invest_ratio × {DEFENSE_INVEST_RATIO_MULT}"
+                )
+                try:
+                    send_telegram(msg, priority=Priority.URGENT)  # audit fix: Priority.HIGH 없음 → URGENT
+                except Exception as exc:
+                    log.warning("defense check telegram failed", error=exc)
+        else:
+            # 방어 모드 해제 (이전에 활성화된 경우)
+            current = self.load_current_strategy()
+            if current.get("defense_mode") and not dry_run:
+                current.pop("defense_mode", None)
+                current.pop("defense_invest_mult", None)
+                current.pop("defense_activated_at", None)
+                self.save_strategy(current)
+                result["defense_cleared"] = True
+
+                if notify:
+                    msg = (
+                        f"✅ <b>방어 모드 해제</b>\n"
+                        f"날짜: {day.isoformat()}\n"
+                        f"최근 7일 승률: {win_rate:.1%} (기준 상회)"
+                    )
+                    try:
+                        send_telegram(msg, priority=Priority.INFO)
+                    except Exception as exc:
+                        log.warning("defense clear telegram failed", error=exc)
+
+        # Save snapshot
+        try:
+            HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+            p = HISTORY_DIR / f"defense-{day.isoformat()}.json"
+            p.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception as exc:
+            log.warning("defense check save failed", error=exc)
+
+        return result
+
     def run(self, force: bool = False, as_of: str | date | datetime | None = None) -> dict:
         day = _to_date(as_of)
         if not force and not self.is_review_day(day):
@@ -545,15 +639,22 @@ class StrategyReviewer:
 
 
 def _cli() -> int:
-    p = argparse.ArgumentParser(description="Strategy reviewer (weekly + daily)")
+    p = argparse.ArgumentParser(description="Strategy reviewer (weekly + daily + defense)")
     p.add_argument("--force", action="store_true", help="run weekly review even if not Sunday")
     p.add_argument("--date", default=None, help="as-of date YYYY-MM-DD")
     p.add_argument("--daily", action="store_true", help="run lightweight daily check instead of weekly review")
-    p.add_argument("--no-notify", action="store_true", help="skip Telegram notification (daily mode)")
+    p.add_argument("--daily-check", action="store_true", dest="daily_defense",
+                    help="run daily defense check (7-day win rate)")
+    p.add_argument("--dry-run", action="store_true", help="defense check dry-run (no strategy changes)")
+    p.add_argument("--no-notify", action="store_true", help="skip Telegram notification")
     args = p.parse_args()
 
     reviewer = StrategyReviewer()
-    if args.daily:
+    if args.daily_defense:
+        out = reviewer.run_daily_defense_check(
+            as_of=args.date, notify=not args.no_notify, dry_run=args.dry_run
+        )
+    elif args.daily:
         out = reviewer.run_daily_check(as_of=args.date, notify=not args.no_notify)
     else:
         out = reviewer.run(force=args.force, as_of=args.date)

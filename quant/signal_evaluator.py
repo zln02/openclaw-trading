@@ -64,14 +64,18 @@ def _rank(values: List[float]) -> List[float]:
     return ranks
 
 
-def compute_ic(signals: List[float], returns: List[float]) -> float:
+def compute_ic(signals: List[float], returns: List[float]) -> Optional[float]:
     """Spearman rank IC between *signals* and *returns*.
 
-    Returns float in [-1, 1].  Returns 0.0 if fewer than 5 valid pairs.
+    Returns float in [-1, 1].
+    # v6.2 A2: NULL/0 필터링 + 최소샘플 — n_valid < 10 시 None 반환
+    Returns None if fewer than 10 valid non-zero pairs (was 5, stricter to avoid degenerate IC).
     """
-    pairs = [(s, r) for s, r in zip(signals, returns) if s is not None and r is not None]
-    if len(pairs) < 5:
-        return 0.0
+    pairs = [(s, r) for s, r in zip(signals, returns)
+             if s is not None and r is not None and s != 0 and r != 0]
+    n_valid = len(pairs)
+    if n_valid < 10:
+        return None
     sx, sy = zip(*pairs)
     rx = _rank(list(sx))
     ry = _rank(list(sy))
@@ -95,7 +99,8 @@ def compute_ir(ic_series: List[float]) -> float:
         return 0.0
     n = len(ic_series)
     mean = sum(ic_series) / n
-    std = (sum((x - mean) ** 2 for x in ic_series) / n) ** 0.5
+    # v6.2 B8: 불편분산 (n-1)
+    std = (sum((x - mean) ** 2 for x in ic_series) / (n - 1)) ** 0.5
     if std == 0:
         return 0.0
     return round(mean / std, 4)
@@ -147,16 +152,18 @@ class SignalEvaluator:
                 select_cols = f"{sig_col},{pnl_col},price,quantity,created_at"
                 time_col = "created_at"
 
+            # v6.2 A2: NULL/0 필터링 + 최소샘플 — 동일값 IC 원인 방지
             q = (
                 self.supabase.table(table)
                 .select(select_cols)
                 .gte(time_col, start_iso)
                 .not_.is_(sig_col, "null")
+                .neq(sig_col, 0)
             )
             # For btc_position, pnl might be stored in pnl_pct instead of pnl.
             # Do not hard-require pnl_col to be non-null at query time; filter in Python.
             if table != "btc_position":
-                q = q.not_.is_(pnl_col, "null")
+                q = q.not_.is_(pnl_col, "null").neq(pnl_col, 0)
 
             rows = (q.execute().data or [])
         except Exception as exc:
@@ -260,7 +267,8 @@ class SignalEvaluator:
         for start in range(0, len(signal_vals) - w + 1, max(1, w // 2)):
             end = start + w
             ic = compute_ic(signal_vals[start:end], pnl_vals[start:end])
-            series.append(ic)
+            if ic is not None:  # v6.2 A2: None(유효샘플 부족) 윈도우 skip
+                series.append(ic)
         return series
 
     # ── Evaluation ──────────────────────────────────────────────────────
@@ -275,12 +283,16 @@ class SignalEvaluator:
         """
         import random
 
-        observed_ic = abs(compute_ic(signals, returns))
+        _raw_ic = compute_ic(signals, returns)
+        if _raw_ic is None:
+            return 1.0
+        observed_ic = abs(_raw_ic)
         returns_copy = list(returns)
         count = 0
         for _ in range(n_perms):
             random.shuffle(returns_copy)
-            perm_ic = abs(compute_ic(signals, returns_copy))
+            perm_ic_val = compute_ic(signals, returns_copy)
+            perm_ic = abs(perm_ic_val) if perm_ic_val is not None else 0.0
             if perm_ic >= observed_ic:
                 count += 1
         return round(count / n_perms, 4)
@@ -302,7 +314,20 @@ class SignalEvaluator:
                 "active": False,
             }
 
-        ic = compute_ic(sigs, rets)
+        ic_raw = compute_ic(sigs, rets)
+        # v6.2 A2: compute_ic가 None이면 유효 샘플 부족 — INSUFFICIENT_DATA 처리
+        if ic_raw is None:
+            return {
+                "signal": signal_name,
+                "n": n,
+                "ic": 0.0,
+                "ir": 0.0,
+                "p_value": 1.0,
+                "significant": False,
+                "status": "INSUFFICIENT_DATA",
+                "active": False,
+            }
+        ic = ic_raw
         ic_series = self._rolling_ic_series(sigs, rets)
         ir = compute_ir(ic_series) if len(ic_series) >= 3 else 0.0
 
@@ -386,7 +411,7 @@ class SignalEvaluator:
         report: Dict[str, Any],
         *,
         cap_min: float = 0.02,
-        cap_max: float = 0.45,
+        cap_max: float = 0.30,  # v6.2 C4: 단일 신호 지배 방지 cap 하향
     ) -> Path:
         """Export IC/IR-derived signal weights to brain/signal-ic/weights.json.
 
@@ -493,7 +518,7 @@ class SignalEvaluator:
         """Format and send signal IC summary to Telegram."""
         summary = report.get("summary", {})
         lines = [
-            f"📡 <b>신호 IC 평가 리포트</b>",
+            "📡 <b>신호 IC 평가 리포트</b>",
             f"기간: {report.get('lookback_days', '?')}일 | 임계: IC≥{SIGNAL_IC_MIN} IR≥{SIGNAL_IC_IR_MIN}",
             f"활성: {summary.get('active', 0)}/{summary.get('total', 0)}개",
             "",

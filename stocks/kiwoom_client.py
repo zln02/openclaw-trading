@@ -475,13 +475,26 @@ class KiwoomAPIClient:
             "TRADE",
         )
 
-        result = self._call_api(
-            api_id=api_id,
-            endpoint="/api/dostk/ordr",
-            body=body,
-            extra_headers=extra_headers,
-            retries=1,  # 주문 실패 시 최소 1회 재시도
-        )
+        try:
+            result = self._call_api(
+                api_id=api_id,
+                endpoint="/api/dostk/ordr",
+                body=body,
+                extra_headers=extra_headers,
+                retries=0,  # audit fix: 이중주문 방지 — 재시도 금지
+            )
+        except Exception as e:
+            # v6.2 A5: RC5006 계좌 에러 감지
+            err_str = str(e)
+            if "RC5006" in err_str or "공매도" in err_str:
+                _kiwoom_log.error(f"RC5006 계좌 에러: {err_str}")
+                try:
+                    from common.telegram import send_telegram
+                    send_telegram("🚨 RC5006 계좌 에러: 모의투자 계좌 설정 확인 필요")
+                except Exception:
+                    pass
+                return None  # 재시도 skip
+            raise
 
         order_no = result.get("ord_no", result.get("odno", ""))
         success = bool(order_no)

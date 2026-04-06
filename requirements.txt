@@ -8,6 +8,7 @@ uvicorn>=0.24.0
 # Trading APIs
 pyupbit>=0.2.33,<1.0.0
 yfinance>=0.2.31
+alpaca-trade-api>=3.0.0  # US 주식 실전/페이퍼 주문 (optional)
 
 # Technical indicators
 ta>=0.11.0

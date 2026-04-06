@@ -10,6 +10,7 @@ require_openclaw_workspace
 
 cd "$WORKSPACE"
 source .venv/bin/activate
+export PYTHONPATH="$WORKSPACE"  # audit fix: 모듈 경로 명시
 
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] param_optimizer 시작"
 

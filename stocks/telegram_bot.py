@@ -26,6 +26,9 @@ except Exception:
 from supabase import create_client
 from common.config import WORKSPACE
 from common.env_loader import load_env
+from common.logger import get_logger
+
+log = get_logger(__name__)
 
 AUDIT_LOG = Path.home() / ".openclaw" / "logs" / "telegram_command_audit.log"
 
@@ -56,11 +59,11 @@ def _audit(event: str, chat_id: str, detail: str = "") -> None:
 
 def send_message(text: str, chat_id: str | None = None, reply_markup: dict | None = None):
     if not TG_TOKEN:
-        print("TELEGRAM_BOT_TOKEN 미설정")
+        log.warning("TELEGRAM_BOT_TOKEN 미설정")
         return
     cid = chat_id or TG_CHAT
     if not cid:
-        print("TELEGRAM_CHAT_ID 미설정")
+        log.warning("TELEGRAM_CHAT_ID 미설정")
         return
     payload: dict = {"chat_id": cid, "text": text, "parse_mode": "HTML"}
     if reply_markup:
@@ -72,7 +75,7 @@ def send_message(text: str, chat_id: str | None = None, reply_markup: dict | Non
             timeout=5,
         )
     except Exception as e:
-        print(f"send_message 실패: {e}")
+        log.error(f"send_message 실패: {e}")
 
 
 def get_status_text() -> str:
@@ -82,7 +85,7 @@ def get_status_text() -> str:
         summary = client.get_asset_summary()
         s = summary
         lines = []
-        lines.append(f"📊 <b>현재 계좌 상태</b>")
+        lines.append("📊 <b>현재 계좌 상태</b>")
         lines.append(f"환경: {s['environment']}")
         lines.append(f"예수금: {s['deposit']:,}원")
         lines.append(f"추정자산: {s['estimated_asset']:,}원")
@@ -135,7 +138,7 @@ def get_open_positions() -> list:
             or []
         )
     except Exception as e:
-        print(f"get_open_positions 실패: {e}")
+        log.error(f"get_open_positions 실패: {e}")
         return []
 
 
@@ -473,7 +476,7 @@ def handle_command(cmd: str, chat_id: str):
 def _is_authorized(chat_id: str) -> bool:
     """발신자 검증: TG_CHAT 미설정 시 모든 명령 차단."""
     if not TG_CHAT:
-        print(f"[보안] TELEGRAM_CHAT_ID 미설정 — 발신자({chat_id}) 차단")
+        log.warning(f"[보안] TELEGRAM_CHAT_ID 미설정 — 발신자({chat_id}) 차단")
         _audit("blocked_missing_chat_id", chat_id)
         return False
     allowed = str(chat_id) == str(TG_CHAT)
@@ -484,14 +487,14 @@ def _is_authorized(chat_id: str) -> bool:
 
 def poll_updates():
     if not TG_TOKEN:
-        print("TELEGRAM_BOT_TOKEN 미설정. 종료.")
+        log.error("TELEGRAM_BOT_TOKEN 미설정. 종료.")
         return
     if not TG_CHAT:
-        print("TELEGRAM_CHAT_ID 미설정. 보안상 봇을 시작하지 않습니다.")
+        log.error("TELEGRAM_CHAT_ID 미설정. 보안상 봇을 시작하지 않습니다.")
         return
 
     last_update_id = None
-    print("텔레그램 봇 폴링 시작...")
+    log.info("텔레그램 봇 폴링 시작...")
     while True:
         try:
             params = {"timeout": 30}
@@ -528,7 +531,7 @@ def poll_updates():
                 _audit("text_command", cid, text)
                 handle_command(text, cid)
         except Exception as e:
-            print(f"poll_updates 오류: {e}")
+            log.error(f"poll_updates 오류: {e}")
             time.sleep(5)
 
 

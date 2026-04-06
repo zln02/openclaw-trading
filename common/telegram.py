@@ -13,6 +13,11 @@ from typing import Optional
 
 import requests
 
+# v6.2 B6: 텔레그램 실패 로깅
+from common.logger import get_logger
+
+log = get_logger(__name__)
+
 _last_send_ts = 0.0
 _MIN_INTERVAL = 1.0  # rate-limit: 1 msg/sec
 
@@ -122,7 +127,8 @@ def send_telegram(
                 time.sleep(retry_after)
                 continue
             return resp.ok
-        except Exception:
+        except Exception as e:
+            log.error(f"텔레그램 발송 실패: {e}")
             if attempt < retries:
                 time.sleep(1 * (attempt + 1))
     return False

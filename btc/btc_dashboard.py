@@ -30,17 +30,21 @@ load_env()
 
 app = FastAPI(title="OpenClaw Trading Dashboard")
 
+# audit fix: /metrics 인증 추가 — expose()/mount() 대신 직접 라우트 등록
+# Instrumentator는 instrument()만 호출(계측), expose()는 생략 (직접 라우트에서 응답)
 try:
     from prometheus_fastapi_instrumentator import Instrumentator
-    Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
+    Instrumentator().instrument(app)  # expose 하지 않음 — 아래 /metrics 라우트에서 처리
+    _PROM_INSTRUMENTATOR = True
 except ImportError:
-    # Fallback: expose /metrics via prometheus_client directly
-    try:
-        from prometheus_client import make_asgi_app as _make_prom_app
-        _prom_app = _make_prom_app()
-        app.mount("/metrics", _prom_app)
-    except ImportError:
-        pass  # no prometheus support
+    _PROM_INSTRUMENTATOR = False
+
+_PROM_CLIENT_AVAILABLE = False
+try:
+    from prometheus_client import generate_latest as _prom_generate_latest, CONTENT_TYPE_LATEST as _PROM_CONTENT_TYPE
+    _PROM_CLIENT_AVAILABLE = True
+except ImportError:
+    pass
 
 # Register custom trading metrics (counters/gauges populated by agents)
 try:
@@ -141,6 +145,16 @@ app.include_router(public_signal_router)
 app.include_router(public_ws_router)
 app.include_router(public_webhook_router)
 app.include_router(public_push_router)
+
+
+# audit fix: /metrics 인증 추가 — 거래 데이터 노출 방지
+@app.get("/metrics", include_in_schema=False, dependencies=[Depends(_require_auth)])
+async def metrics_endpoint():
+    """Prometheus 메트릭 — Basic Auth 필수."""
+    if not _PROM_CLIENT_AVAILABLE:
+        return Response(status_code=503, content="prometheus_client not installed")
+    data = _prom_generate_latest()
+    return Response(content=data, media_type=_PROM_CONTENT_TYPE)
 
 
 @app.get("/favicon.ico")
