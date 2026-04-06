@@ -14,6 +14,11 @@ from typing import List, Optional, Sequence
 from common.env_loader import load_env
 from common.logger import get_logger
 
+try:
+    from common.openclaw_notify import notify_openclaw
+except ImportError:
+    notify_openclaw = None
+
 load_env()
 log = get_logger("risk_dd_guard")
 
@@ -52,11 +57,21 @@ class DrawdownGuardConfig:
 class DrawdownGuardState:
     cooldown_until: Optional[str] = None
     last_action: str = "NONE"
+    triggered_rules: Optional[List[str]] = None
+
+    def __post_init__(self):
+        if self.triggered_rules is None:
+            self.triggered_rules = []
 
 
 class DrawdownGuard:
-    def __init__(self, config: Optional[DrawdownGuardConfig] = None):
+    def __init__(
+        self,
+        config: Optional[DrawdownGuardConfig] = None,
+        store=None,
+    ):
         self.config = config or DrawdownGuardConfig()
+        self.store = store  # DrawdownStateStore | None
 
     def evaluate(
         self,
@@ -65,8 +80,18 @@ class DrawdownGuard:
         monthly_return: float,
         as_of: str | date | datetime | None = None,
         state: Optional[DrawdownGuardState] = None,
+        market: Optional[str] = None,
     ) -> dict:
         now = _to_date(as_of)
+
+        # Supabase에서 상태 로드 (store가 있고 market이 지정된 경우)
+        if state is None and self.store and market:
+            try:
+                persisted = self.store.load(market)
+                state = DrawdownGuardState(**persisted)
+            except Exception as exc:
+                log.warning("drawdown store load failed", market=market, error=str(exc)[:100])
+                state = DrawdownGuardState()
         state = state or DrawdownGuardState()
 
         decision = {
@@ -116,7 +141,23 @@ class DrawdownGuard:
             decision["allow_new_buys"] = False
             decision["triggered_rules"].append("DAILY_BUY_BLOCK")
 
-        decision["state"] = self.next_state(state, decision)
+        next_st = self.next_state(state, decision)
+        decision["state"] = next_st
+
+        # Supabase에 상태 영속화
+        if self.store and market:
+            try:
+                self.store.save(market, next_st, decision.get("triggered_rules", []))
+            except Exception as exc:
+                log.warning("drawdown store save failed", market=market, error=str(exc)[:100])
+
+        triggered_rules = decision.get("triggered_rules", [])
+        if notify_openclaw and triggered_rules:
+            try:
+                notify_openclaw("drawdown_guard", f"가드 활성화: {', '.join(triggered_rules)}", urgent=True)
+            except Exception:
+                pass
+
         return decision
 
     def next_state(self, prev: DrawdownGuardState, decision: dict) -> DrawdownGuardState:
@@ -125,25 +166,30 @@ class DrawdownGuard:
             return DrawdownGuardState(
                 cooldown_until=decision.get("cooldown_until"),
                 last_action="MONTHLY_STOP",
+                triggered_rules=triggers,
             )
         if "WEEKLY_DELEVERAGE" in triggers:
             return DrawdownGuardState(
                 cooldown_until=prev.cooldown_until,
                 last_action="WEEKLY_DELEVERAGE",
+                triggered_rules=triggers,
             )
         if "DAILY_BUY_BLOCK" in triggers:
             return DrawdownGuardState(
                 cooldown_until=prev.cooldown_until,
                 last_action="DAILY_BUY_BLOCK",
+                triggered_rules=triggers,
             )
         if "COOLDOWN_ACTIVE" in triggers:
             return DrawdownGuardState(
                 cooldown_until=prev.cooldown_until,
                 last_action="COOLDOWN_ACTIVE",
+                triggered_rules=triggers,
             )
         return DrawdownGuardState(
             cooldown_until=prev.cooldown_until,
             last_action="NONE",
+            triggered_rules=[],
         )
 
     def returns_from_equity_curve(
@@ -214,5 +260,6 @@ if __name__ == "__main__":
         weekly_return=-0.033,
         monthly_return=-0.108,
         state=state,
+        market=None,
     )
     log.info("drawdown_guard", triggered=decision.get("triggered_rules"), cooldown=decision.get("cooldown_until"))

@@ -384,13 +384,18 @@ def _compute_composite_sync():
         pr = supabase.table("btc_position").select("*").eq("status", "OPEN").order("entry_time", desc=True).limit(1).execute()
         pos = pr.data[0] if pr.data else None
 
+    # v6.2 B3: PnL 환율 단위 통일
+    # cur_price: yfinance BTC-USD (USD 단위)
+    # entry_price: DB btc_position.entry_price (KRW 단위, Upbit KRW-BTC 기준으로 저장됨)
+    # → cur_price * fx_rate = KRW 환산 현재가, entry_p(KRW)와 동일 단위로 비교
     cur_price = float(close.iloc[-1])
-    fx_rate = _get_fx_rate()  # Real-time FX rate instead of hardcoded 1450
+    fx_rate = _get_fx_rate()  # USD → KRW 실시간 환율
     pos_pnl = None
     if pos:
-        entry_p = float(pos.get("entry_price", 0))
+        entry_p = float(pos.get("entry_price", 0))  # KRW
         if entry_p > 0:
-            pos_pnl = {"pnl_pct": round((cur_price * fx_rate - entry_p) / entry_p * 100, 2),
+            cur_price_krw = cur_price * fx_rate  # USD → KRW 변환
+            pos_pnl = {"pnl_pct": round((cur_price_krw - entry_p) / entry_p * 100, 2),
                        "entry_price": entry_p, "quantity": pos.get("quantity", 0),
                        "entry_krw": pos.get("entry_krw", 0),
                        "current_fx_rate": fx_rate}

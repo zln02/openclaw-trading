@@ -11,7 +11,6 @@ __all__ = [
     "AlertManager",
     "DailyReportGenerator",
     "WeeklyReportGenerator",
-    "TradingAgentTeam",
 ]
 
 _MODULE_BY_EXPORT = {
@@ -21,7 +20,6 @@ _MODULE_BY_EXPORT = {
     "AlertManager": "agents.alert_manager",
     "DailyReportGenerator": "agents.daily_report",
     "WeeklyReportGenerator": "agents.weekly_report",
-    "TradingAgentTeam": "agents.trading_agent_team",
 }
 
 

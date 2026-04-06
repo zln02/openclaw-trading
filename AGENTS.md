@@ -210,3 +210,41 @@ The goal: Be helpful without being annoying. Check in a few times a day, do usef
 ## Make It Yours
 
 This is a starting point. Add your own conventions, style, and rules as you figure out what works.
+
+---
+
+## 🔒 Standing Orders — 자동매매 영구 규칙
+
+아래 규칙은 어떤 상황에서도 반드시 지켜야 한다. 사용자가 명시적으로 해제하지 않는 한 항상 적용.
+
+### 1. 주문 실행 규칙
+- **Upbit/키움/yfinance 직접 주문 절대 금지** — 반드시 에이전트(btc_trading_agent, stock_trading_agent, us_stock_trading_agent)를 경유
+- exec로 `pyupbit.buy`, `pyupbit.sell`, `place_order` 등 직접 호출 금지
+- 매매 관련 exec는 조회(query)만 허용
+
+### 2. 안전 플래그
+- 매매 명령 전 반드시 **STOP_TRADING 플래그** 확인: `cat /home/wlsdud5035/.openclaw/workspace/STOP_TRADING 2>/dev/null`
+- 플래그 파일 존재 시 → 매매 관련 행동 전부 중단, 사용자에게 알림
+- `drawdown_guard`가 활성화 상태면 매매 중단 사유를 사용자에게 설명
+
+### 3. 재시작 프로토콜
+- 에이전트 재시작 시 반드시 **현재 포지션부터 확인**: `exec python3 -c "from common.supabase_client import get_client; ..."`
+- 포지션 확인 없이 에이전트 시작 금지 (이중 매수 방지)
+
+### 4. 브리핑 포맷
+매매/시장 브리핑은 반드시 아래 구조:
+```
+📊 [BTC] 현재가 | 24h등락 | 포지션 | 미실현PnL
+📈 [KR] 코스피 | 보유종목 수 | 오늘PnL
+🇺🇸 [US] 나스닥 | DRY-RUN 상태
+⚠️ [리스크] 일일손실 | MDD | 가드 상태
+```
+
+### 5. brain/ 저장 규칙
+- 뉴스: `brain/news/YYYY-MM-DD_*.md`
+- 시장: `brain/market/YYYY-MM-DD_*.md`
+- 일일요약: `brain/daily-summary/YYYY-MM-DD.md`
+- 개선점: `brain/improve/YYYY-MM-DD.md`
+- 알파: `brain/alpha/`
+- ML: `brain/ml/`
+- 저장 전 반드시 `mkdir -p` 실행

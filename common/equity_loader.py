@@ -69,7 +69,18 @@ def append_equity_snapshot(market: str, equity: float, metadata: Optional[dict] 
     if eq <= 0:
         return
     path = _snapshot_file(market)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    # 깨진 심볼릭 링크 처리: 부모 디렉토리가 실제로 존재하는지 확인 후 생성
+    parent = path.parent
+    if not parent.exists() and not parent.is_symlink():
+        parent.mkdir(parents=True, exist_ok=True)
+    elif parent.is_symlink() and not parent.exists():
+        # 깨진 심볼릭 링크 경우 — 제거하고 실제 디렉토리 생성
+        try:
+            parent.unlink()
+            parent.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            # mkdir 실패 시 무시 — 파일 쓰기는 시도
+            pass
     row = {
         "timestamp": _utc_now().isoformat(),
         "date": _utc_now().date().isoformat(),
@@ -107,7 +118,16 @@ def _load_equity_snapshots(market: str, lookback_days: int = 90) -> list[dict]:
 
 def save_drawdown_state(market: str, state: dict) -> None:
     path = _state_file()
-    path.parent.mkdir(parents=True, exist_ok=True)
+    # 깨진 심볼릭 링크 처리
+    parent = path.parent
+    if not parent.exists() and not parent.is_symlink():
+        parent.mkdir(parents=True, exist_ok=True)
+    elif parent.is_symlink() and not parent.exists():
+        try:
+            parent.unlink()
+            parent.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
     payload = {}
     if path.exists():
         try:

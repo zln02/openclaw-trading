@@ -867,8 +867,18 @@ async def get_kr_portfolio():
                 "reason": r.get("reason", ""),
             })
 
+        # Kiwoom에서 실제 예수금 조회
+        krw_balance = 0
+        try:
+            kw = _get_kiwoom()
+            if kw:
+                acct = kw.get_account_evaluation()
+                krw_balance = int(acct.get("summary", {}).get("deposit", 0))
+        except Exception as e:
+            log.warning(f"Kiwoom deposit fetch: {e}")
+
         summary = {
-            "krw_balance": None,
+            "krw_balance": krw_balance,
             "open_count": len(open_positions),
             "closed_count": len(closed_positions),
             "total_invested": round(total_invested, 0),

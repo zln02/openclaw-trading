@@ -435,6 +435,52 @@ class RegimeClassifier:
         return REGIME_PRESETS.get(str(regime or "").upper(), {})
 
 
+def get_regime_cached(ttl_seconds: int = 1800) -> dict:
+    """레짐 분류 결과를 TTL 캐시로 반환.
+
+    Returns:
+        dict with keys: regime, momentum_mult, value_mult, quality_mult, confidence, source
+    """
+    cache_key = "regime:cached_adj"
+    cached = get_cached(cache_key)
+    if cached is not None:
+        return cached
+
+    defaults = {
+        "regime": "UNKNOWN",
+        "momentum_mult": 1.0,
+        "value_mult": 1.0,
+        "quality_mult": 1.0,
+        "confidence": 0.0,
+        "source": "DEFAULT",
+    }
+
+    try:
+        result = RegimeClassifier().classify()
+        regime = result.get("regime", "TRANSITION")
+        adj_table = {
+            "RISK_ON":    {"momentum_mult": 1.30, "value_mult": 0.80, "quality_mult": 1.00},
+            "TRANSITION": {"momentum_mult": 1.00, "value_mult": 1.00, "quality_mult": 1.00},
+            "RISK_OFF":   {"momentum_mult": 0.70, "value_mult": 1.30, "quality_mult": 1.30},
+            "CRISIS":     {"momentum_mult": 0.40, "value_mult": 1.50, "quality_mult": 1.50},
+        }
+        adj = adj_table.get(regime, adj_table["TRANSITION"])
+        out = {
+            "regime": regime,
+            "momentum_mult": adj["momentum_mult"],
+            "value_mult": adj["value_mult"],
+            "quality_mult": adj["quality_mult"],
+            "confidence": result.get("confidence", 0.0),
+            "source": result.get("source", "RULE"),
+        }
+        set_cached(cache_key, out, ttl=ttl_seconds)
+        log.info("regime cached", regime=regime, ttl=ttl_seconds)
+        return out
+    except Exception as exc:
+        log.warning("get_regime_cached failed", error=str(exc)[:100])
+        return defaults
+
+
 def _cli() -> int:
     p = argparse.ArgumentParser(description="Market regime classifier")
     p.add_argument("--train", action="store_true", help="train xgboost model from rule labels")
