@@ -1,0 +1,33 @@
+name: Update README Stats
+
+on:
+  schedule:
+    - cron: '0 1 * * *'  # 매일 KST 10:00 (UTC 01:00)
+  workflow_dispatch:       # 수동 실행 지원
+
+jobs:
+  update-stats:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install supabase python-dotenv
+
+      - name: Update README with live stats
+        run: python scripts/update_readme_stats.py
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+
+      - name: Commit if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git diff --quiet README.md || (git add README.md && git commit -m "chore: update live trading stats [skip ci]" && git push)

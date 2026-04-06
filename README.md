@@ -1,146 +1,264 @@
-# quant-agent
+<p align="center">
+  <h1 align="center">Quant Agent</h1>
+  <p align="center">
+    AI-Powered Multi-Market Automated Trading System
+    <br />
+    <strong>BTC · KR Stocks · US Stocks</strong> — 3개 시장 동시 자동매매
+  </p>
+</p>
 
-[![CI](https://github.com/zln02/openclaw-trading/actions/workflows/ci.yml/badge.svg)](https://github.com/zln02/openclaw-trading/actions)
-![Python 3.11](https://img.shields.io/badge/python-3.11-blue)
-![License: MIT](https://img.shields.io/badge/license-MIT-green)
-![Version](https://img.shields.io/badge/version-v6.1-orange)
+<p align="center">
+  <a href="https://github.com/zln02/quant-agent/actions/workflows/ci.yml"><img src="https://github.com/zln02/quant-agent/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <img src="https://img.shields.io/badge/python-3.11-3776AB?logo=python&logoColor=white" alt="Python 3.11">
+  <img src="https://img.shields.io/badge/version-v6.2-orange" alt="Version">
+  <img src="https://img.shields.io/badge/markets-3_(BTC%2BKR%2BUS)-blueviolet" alt="Markets">
+  <img src="https://img.shields.io/badge/ML-XGBoost%2BLightGBM%2BCatBoost-green" alt="ML">
+  <img src="https://img.shields.io/badge/license-MIT-brightgreen" alt="License">
+</p>
 
-> BTC · KR Stocks · US Stocks 자동매매 플랫폼 — AI 에이전트 + 퀀트 리서치 루프
+> **Warning**: 이 프로젝트는 교육 및 연구 목적입니다. 실제 자금 투자 시 손실이 발생할 수 있으며, 투자 결정에 대한 책임은 본인에게 있습니다.
 
-## 주요 기능
+---
 
-- **3-Market Trading**: BTC (Upbit 실거래), KR (Kiwoom 모의), US (yfinance 시뮬)
-- **AI Agent Team**: Claude 5-에이전트 (Orchestrator + Analyst×2 + Risk + Reporter)
-- **ML Pipeline**: XGBoost + LightGBM + CatBoost Stacking Ensemble
-- **Quant Research Loop**: 주간 자동 IC/IR 평가 → 파라미터 최적화
-- **Smart Execution**: SmartRouter (MARKET/TWAP/VWAP), Slippage Tracker
-- **Real-time Dashboard**: React + FastAPI SPA, Prometheus + Grafana
-- **Telegram Bot**: 13개 명령어 (/status, /drawdown, /daily_loss, /sell_all 등)
-- **Risk Management**: DrawdownGuard, PositionSizer(Kelly), CorrelationMonitor, CircuitBreaker
+## Live Trading Performance
 
-## 아키텍처
+<!-- LIVE-STATS:START -->
+> Last updated: `2026-04-06 07:00 UTC` via GitHub Actions
+
+| Market | Trades | Win Rate | Avg PnL |
+|--------|--------|----------|---------|
+| BTC | 25 | 32.0% | +0.19% |
+| KR | 14 | 35.7% | -0.70% |
+| US | 0 | — | — |
+<!-- LIVE-STATS:END -->
+
+<sub>Stats auto-updated daily from Supabase via <a href=".github/workflows/update-readme.yml">GitHub Actions</a></sub>
+
+---
+
+## What Makes This Different
+
+개인 자동매매 시스템 중 **상급(Advanced)** 수준 — 소규모 헤지펀드 구조에 가까운 아키텍처
+
+| | Quant Agent | Freqtrade | QuantConnect | 3Commas | 젠포트 |
+|---|:---:|:---:|:---:|:---:|:---:|
+| **Multi-Market (BTC+KR+US)** | ✅ | ❌ | partial | ❌ | ❌ |
+| **ML Ensemble (3-model stacking)** | ✅ | partial | ❌ | ❌ | ❌ |
+| **Cross-Market Risk Manager** | ✅ | ❌ | ❌ | ❌ | ❌ |
+| **AI Agent Team (Claude 5-agent)** | ✅ | ❌ | ❌ | ❌ | ❌ |
+| **Concept Drift Detection** | ✅ | partial | ❌ | ❌ | ❌ |
+| **Auto Alpha Research Loop** | ✅ | Hyperopt | ❌ | ❌ | ❌ |
+| **Regime Classification (4-state)** | ✅ | ❌ | ❌ | ❌ | ❌ |
+| **Half Kelly Position Sizing** | ✅ | ❌ | ❌ | ❌ | ❌ |
+
+### Key Differentiators
+
+- **3-Market Unified Risk**: BTC(Upbit) + KR(Kiwoom) + US(Alpaca)를 `CrossMarketRiskManager`로 합산 리스크 관리
+- **Self-Improving Loop**: `Alpha Researcher` → `Signal Evaluator`(IC/IR) → `Param Optimizer` → 자율 파라미터 반영
+- **Extreme Fear Override**: Fear & Greed ≤ 15에서 행동재무학 기반 역발상 매수
+- **Dual Drift Detection**: AUC 기반 실시간 + PSI 기반 피처 분포 이중 감시
+
+---
+
+## Architecture
 
 ```mermaid
 graph TB
-    subgraph Trading Agents
-        BTC[BTC Agent<br/>10min cycle]
-        KR[KR Agent<br/>10min cycle]
-        US[US Agent<br/>15min cycle]
+    subgraph Markets
+        BTC[🟠 BTC Agent<br/>Upbit · 10min]
+        KR[🔵 KR Agent<br/>Kiwoom · 10min]
+        US[🟢 US Agent<br/>Alpaca · 15min]
     end
+
     subgraph AI Layer
-        RC[Regime Classifier]
-        NA[News Analyst]
-        AT[Agent Team<br/>5-agent Claude]
+        RC[Regime Classifier<br/>4-state]
+        AT[Claude 5-Agent Team<br/>Orchestrator + 4 Specialists]
     end
+
+    subgraph ML Pipeline
+        ML[Stacking Ensemble<br/>XGB + LGBM + CatBoost<br/>50 features]
+        DD[Drift Detector<br/>AUC + PSI]
+    end
+
     subgraph Quant Loop
-        AR[Alpha Researcher<br/>Sat 22:00]
-        SE[Signal Evaluator<br/>Sun 23:00]
-        PO[Param Optimizer<br/>Sun 23:30]
+        AR[Alpha Researcher<br/>IC/IR Grid Search]
+        SE[Signal Evaluator<br/>Walk-Forward]
+        PO[Param Optimizer<br/>Attribution-based]
     end
-    subgraph Infrastructure
+
+    subgraph Risk
+        DG[DrawdownGuard<br/>Daily -2% / Weekly -5%<br/>Monthly -10%]
+        CMR[CrossMarket<br/>Risk Manager]
+        KF[Half Kelly<br/>Position Sizer]
+    end
+
+    subgraph Infra
         DB[(Supabase)]
-        TG[Telegram Bot]
-        DASH[Dashboard<br/>:8080]
-        PROM[Prometheus<br/>:9090]
-        GRAF[Grafana<br/>:3000]
+        TG[Telegram Bot<br/>13 commands]
+        DASH[Dashboard<br/>React + FastAPI]
+        PROM[Prometheus + Grafana]
     end
-    BTC & KR & US --> DB
-    RC --> BTC & KR & US
-    NA --> BTC & KR & US
-    AR --> SE --> PO --> BTC & KR & US
+
+    RC & AT --> BTC & KR & US
+    ML --> BTC & KR & US
+    DD --> ML
+    AR --> SE --> PO
+    PO -.->|weekly auto-tune| BTC & KR & US
+    DG & CMR & KF --> BTC & KR & US
+    BTC & KR & US --> DB --> DASH
     BTC & KR & US --> TG
-    DASH --> DB
-    PROM --> DASH
-    GRAF --> PROM
+    DASH --> PROM
 ```
+
+---
+
+## Tech Stack
+
+| Category | Technologies |
+|----------|-------------|
+| **Trading** | Upbit API, Kiwoom REST, Alpaca Trade API |
+| **ML** | XGBoost, LightGBM, CatBoost, scikit-learn (50 features, Walk-Forward CV) |
+| **AI** | Claude API (Opus/Sonnet/Haiku), OpenAI GPT-4o-mini |
+| **Backend** | Python 3.11, FastAPI, Supabase (PostgreSQL) |
+| **Frontend** | React 18, Vite, Lightweight Charts |
+| **Monitoring** | Prometheus, Grafana, Telegram Bot |
+| **DevOps** | Docker Compose (7 services), GitHub Actions CI/CD, pytest (65+ tests) |
+| **Execution** | SmartRouter (MARKET/TWAP/VWAP), Idempotency Keys |
+
+---
 
 ## Quick Start
 
 ```bash
-# 1. Clone
-git clone https://github.com/zln02/openclaw-trading.git
-cd openclaw-trading
+# Clone
+git clone https://github.com/zln02/quant-agent.git && cd quant-agent
 
-# 2. Environment
-cp .env.example .env
-# .env에 API 키 설정 (Upbit, Supabase, Telegram, OpenAI/Anthropic)
+# Environment
+cp .env.example .env   # API 키 설정: Upbit, Supabase, Telegram, Claude/OpenAI
 
-# 3. Docker (권장)
-docker compose up -d
+# Docker (권장)
+docker compose up -d    # 7개 서비스 (dashboard, 3 agents, telegram, prometheus, grafana)
 
-# 4. Local Dev
+# Local Dev
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-python btc/btc_dashboard.py  # Dashboard at :8080
+python btc/btc_dashboard.py   # Dashboard at :8080
 ```
 
-## 프로젝트 구조
+---
 
-```text
-├── btc/              # BTC 에이전트 + FastAPI 라우트
-├── stocks/           # KR/US 에이전트 + Kiwoom + ML + Telegram
-├── agents/           # AI 전략 계층 (레짐, 뉴스, 5-에이전트 팀)
-├── quant/            # 퀀트 엔진 (백테스트, 팩터, 포트폴리오, 리스크)
-├── execution/        # 주문 실행 (SmartRouter, TWAP, VWAP)
-├── common/           # 공통 인프라 (config, logger, Supabase, retry)
-├── dashboard/        # React + Vite 프론트엔드
-├── company/          # AI 소프트웨어 회사 (CEO→전문가 위임)
-├── secretary/        # 자율 리서치 + Notion 통합
-├── tests/            # pytest 테스트 스위트
-├── scripts/          # 크론 래퍼 + 유틸
-├── docs/             # 문서
-└── brain/            # AI 분석 결과 저장소 (런타임)
+## Project Structure
+
+```
+quant-agent/
+├── btc/                 # BTC 에이전트 + FastAPI 대시보드 + API 라우트
+├── stocks/              # KR/US 에이전트, Kiwoom 클라이언트, ML 모델
+├── agents/              # AI 전략 (Regime Classifier, News Analyst, 5-Agent Team)
+├── quant/               # 퀀트 엔진
+│   ├── alpha_researcher.py    # 파라미터 그리드서치 (IC/IR)
+│   ├── signal_evaluator.py    # 신호 품질 측정
+│   ├── param_optimizer.py     # 자율 파라미터 반영
+│   ├── drift_detector.py      # AUC + PSI 드리프트 감지
+│   └── risk/                  # DrawdownGuard, PositionSizer, CorrelationMonitor
+├── execution/           # SmartRouter (TWAP/VWAP), SlippageTracker
+├── common/              # Config, Logger, Supabase, Telegram, Retry
+├── api/                 # Public API, WebSocket, Webhook
+├── dashboard/           # React + Vite SPA
+├── scripts/             # Cron wrappers, utilities
+├── tests/               # pytest 테스트 (65+ cases)
+└── brain/               # Runtime: ML models, alpha params, logs (gitignored)
 ```
 
-## Docker Services (7개)
+---
 
-| Service | Port | 역할 |
-|---------|------|------|
-| dashboard | 8080 | FastAPI + React SPA |
-| btc-agent | - | BTC 매매 루프 (600s) |
-| kr-agent | - | KR 매매 루프 (600s) |
-| us-agent | - | US 매매 루프 (900s) |
-| telegram-bot | - | 텔레그램 명령어 |
-| prometheus | 9090 | 메트릭 수집 |
-| grafana | 3000 | 대시보드 시각화 |
+## Risk Management
 
-## Telegram 명령어
+3-tier 독립 방어 체계:
 
-| 명령어 | 설명 |
-|--------|------|
-| /status | 계좌 + 보유 현황 |
-| /market | 시장 요약 |
-| /risk | 리스크 메트릭 |
-| /drawdown | 드로우다운 가드 상태 |
-| /daily_loss | 오늘 시장별 손익 |
-| /stop / /resume | 매매 일시정지/재개 |
-| /sell_all | 전량 매도 (확인 필요) |
-| /review | 주간 성과 리뷰 |
-| /agents | 에이전트 결정 로그 |
-| /ask | AI 질의 |
-| /help | 도움말 |
+| Layer | Component | Threshold |
+|-------|-----------|-----------|
+| **Position** | Half Kelly Sizing | `min(kelly, config_ratio)` |
+| **Daily** | DrawdownGuard Daily | -2% → 매수 차단 |
+| **Weekly** | DrawdownGuard Weekly | -5% → 포지션 50% 축소 |
+| **Monthly** | DrawdownGuard Monthly | -10% → 전량 청산 |
+| **Cross-Market** | CrossMarketRiskManager | 총 노출 80%, 단일 시장 50% 제한 |
+| **Circuit Breaker** | 연속 손실 카운터 | N회 연속 → 자동 정지 |
 
-## 개발
+---
+
+## Automated Quant Loop
+
+```
+┌─ Sat 22:00 ─────────────────────────────────────────────────┐
+│  Alpha Researcher: 파라미터 그리드서치 (IC/IR 기반)          │
+│  → brain/alpha/best_params.json                             │
+└─────────────────────────────────────────────────────────────┘
+         ↓
+┌─ Sun 23:00 ─────────────────────────────────────────────────┐
+│  Signal Evaluator: 신호별 IC/IR 측정 + 가중치 조정           │
+│  → brain/signal/weights.json                                │
+└─────────────────────────────────────────────────────────────┘
+         ↓
+┌─ Sun 23:30 ─────────────────────────────────────────────────┐
+│  Param Optimizer: Attribution 기반 자율 파라미터 반영         │
+│  → 에이전트 config 자동 업데이트 + 텔레그램 리포트           │
+└─────────────────────────────────────────────────────────────┘
+         ↓
+┌─ Daily 08:30 ───────────────────────────────────────────────┐
+│  ML Retrain: 50+ 체결 시 Walk-Forward 재학습                 │
+│  → brain/ml/horizon_{1d,3d,10d}/                            │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Development
 
 ```bash
-# 테스트
-pytest -v
+# Tests
+pytest -v                                    # 65+ tests
 
-# 린트
-flake8 --max-line-length=120 --ignore=E501,W503,E402 common/ btc/ stocks/ agents/ quant/
+# Lint
+flake8 --max-line-length=120 --ignore=E501,W503,E402,E702
 
-# 프론트엔드
-cd dashboard && npm run dev
+# ML Retrain
+PYTHONPATH=. python stocks/ml_model.py train_all
+
+# Frontend
+cd dashboard && npm install && npm run dev
 ```
 
-## 문서
+---
 
-- `CLAUDE.md` — AI 에이전트 개발 가이드
-- `CHANGELOG.md` — 버전 이력
-- `docs/API.md` — API 엔드포인트
-- `docs/cron_timing_matrix.md` — 크론 스케줄
-- `agents/README.md` — 에이전트 모듈 설명
+## Docker Services
+
+| Service | Port | Description |
+|---------|------|-------------|
+| `dashboard` | 8080 | FastAPI + React SPA |
+| `btc-agent` | — | BTC trading loop (10min) |
+| `kr-agent` | — | KR stock trading loop (10min) |
+| `us-agent` | — | US stock trading loop (15min) |
+| `telegram-bot` | — | 13 commands (/status, /risk, /sell_all...) |
+| `prometheus` | 9090* | Metrics collection |
+| `grafana` | 3000* | Dashboard visualization |
+
+<sub>* localhost only (127.0.0.1)</sub>
+
+---
+
+## Security
+
+- All secrets via environment variables (zero hardcoding)
+- Dashboard: Basic Auth + Rate Limiting (5 attempts / 5min)
+- Docker: non-root user (`openclaw`, uid=1000)
+- Prometheus/Grafana: localhost-only binding
+- CORS: `credentials=False`, GET/OPTIONS only
+- Telegram: chat_id authorization + 2-step confirmation for `/sell_all`
+- Dependencies: version-pinned with upper bounds
+- CI: flake8 lint + pytest + secret detection (pre-commit)
+
+---
 
 ## License
 
-MIT License — see `LICENSE`
+MIT License — see [LICENSE](LICENSE)
