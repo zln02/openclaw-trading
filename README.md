@@ -124,6 +124,7 @@ graph TB
 | **Monitoring** | Prometheus, Grafana, Telegram Bot |
 | **DevOps** | Docker Compose (7 services), GitHub Actions CI/CD, pytest (65+ tests) |
 | **Execution** | SmartRouter (MARKET/TWAP/VWAP), Idempotency Keys |
+| **Platform** | OpenClaw Gateway + Claw3D Studio (3D Agent Workspace) |
 
 ---
 
@@ -230,19 +231,43 @@ cd dashboard && npm install && npm run dev
 
 ---
 
-## Docker Services
+## Infrastructure
 
-| Service | Port | Description |
-|---------|------|-------------|
-| `dashboard` | 8080 | FastAPI + React SPA |
-| `btc-agent` | — | BTC trading loop (10min) |
-| `kr-agent` | — | KR stock trading loop (10min) |
-| `us-agent` | — | US stock trading loop (15min) |
-| `telegram-bot` | — | 13 commands (/status, /risk, /sell_all...) |
-| `prometheus` | 9090* | Metrics collection |
-| `grafana` | 3000* | Dashboard visualization |
+### GCP e2-small (2 vCPU, 8GB RAM)
 
-<sub>* localhost only (127.0.0.1)</sub>
+| Service | Port | Bind | Description |
+|---------|------|------|-------------|
+| `OpenClaw Gateway` | 18789 | localhost | WebSocket AI Gateway (LLM 라우팅) |
+| `Claw3D Studio` | 3002 | 0.0.0.0 | 3D Agent Workspace (Next.js + Three.js) |
+| `dashboard` | 8080 | 0.0.0.0 | FastAPI + React SPA (자동매매 대시보드) |
+| `btc-agent` | — | — | BTC trading loop (10min) |
+| `kr-agent` | — | — | KR stock trading loop (10min) |
+| `us-agent` | — | — | US stock trading loop (15min) |
+| `telegram-bot` | — | — | 13 commands (/status, /risk, /sell_all...) |
+| `prometheus` | 9090 | 0.0.0.0 | Metrics collection |
+| `grafana` | 3000 | 0.0.0.0 | Dashboard visualization |
+
+### OpenClaw + Claw3D 연동 구조
+
+```
+Browser → Claw3D (:3002) → OpenClaw Gateway (:18789) → LLM Provider (OAuth)
+```
+
+- **Gateway 인증**: Token 기반 (`oc-secure-*`)
+- **LLM 모델**: `openai-codex/gpt-5.1` (OAuth, API 키 불필요)
+- **Studio 접근**: `STUDIO_ACCESS_TOKEN` 쿠키 인증
+- **에이전트**: main (46개 스킬), agent-2 (보조)
+
+### 주요 스킬 (OpenClaw)
+
+| 스킬 | 설명 |
+|------|------|
+| `kiwoom-api` | 키움증권 REST API (주가 조회, 계좌 자산) |
+| `opendart-api` | 금감원 DART 공시/재무제표 |
+| `coding-agent` | Codex/Claude Code 위임 코딩 |
+| `github` / `gh-issues` | GitHub PR/이슈 관리 |
+| `gog` | Google Workspace (Gmail, Calendar, Drive) |
+| `weather` | 날씨 조회 (wttr.in) |
 
 ---
 
@@ -251,9 +276,11 @@ cd dashboard && npm install && npm run dev
 - All secrets via environment variables (zero hardcoding)
 - Dashboard: Basic Auth + Rate Limiting (5 attempts / 5min)
 - Docker: non-root user (`openclaw`, uid=1000)
-- Prometheus/Grafana: localhost-only binding
+- OpenClaw Gateway: loopback-only binding (localhost:18789)
+- Claw3D Studio: `STUDIO_ACCESS_TOKEN` 쿠키 인증 (HTTP 주의)
 - CORS: `credentials=False`, GET/OPTIONS only
 - Telegram: chat_id authorization + 2-step confirmation for `/sell_all`
+- LLM Auth: OAuth 토큰 기반 (API 키 환경변수 비활성화)
 - Dependencies: version-pinned with upper bounds
 - CI: flake8 lint + pytest + secret detection (pre-commit)
 
