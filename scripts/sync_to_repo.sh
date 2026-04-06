@@ -37,6 +37,8 @@ EXCLUDES=(
 if command -v rsync >/dev/null 2>&1; then
   rsync -av ${MODE} \
     --exclude='.env' \
+    --exclude='secretary/.env' \
+    --exclude='skills/**/.env' \
     --exclude='openclaw.json' \
     --exclude='.venv/' \
     --exclude='secretary/.venv/' \
@@ -49,6 +51,8 @@ if command -v rsync >/dev/null 2>&1; then
     --exclude='catboost_info/' \
     --exclude='__pycache__/' \
     --exclude='*.pyc' \
+    --exclude='*.db' \
+    --exclude='*.sqlite3' \
     "$SOURCE_DIR" "$TARGET_DIR"
   exit 0
 fi
@@ -60,6 +64,7 @@ if [[ -n "$MODE" ]]; then
     cd "$SOURCE_DIR"
     find . \
       -path './.env' -prune -o \
+      -path './secretary/.env' -prune -o \
       -path './openclaw.json' -prune -o \
       -path './.venv' -prune -o \
       -path './secretary/.venv' -prune -o \
@@ -72,6 +77,8 @@ if [[ -n "$MODE" ]]; then
       -path './catboost_info' -prune -o \
       -path '*/__pycache__' -prune -o \
       -name '*.pyc' -prune -o \
+      -name '*.db' -prune -o \
+      -name '*.sqlite3' -prune -o \
       -type f -print
   )
   exit 0
@@ -81,6 +88,8 @@ fi
   cd "$SOURCE_DIR"
   tar -cf - \
     --exclude='.env' \
+    --exclude='secretary/.env' \
+    --exclude='skills/**/.env' \
     --exclude='openclaw.json' \
     --exclude='.venv' \
     --exclude='secretary/.venv' \
@@ -93,6 +102,8 @@ fi
     --exclude='catboost_info' \
     --exclude='__pycache__' \
     --exclude='*.pyc' \
+    --exclude='*.db' \
+    --exclude='*.sqlite3' \
     .
 ) | (
   cd "$TARGET_DIR"

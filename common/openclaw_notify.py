@@ -15,8 +15,8 @@ from common.logger import get_logger
 log = get_logger("openclaw_notify")
 
 GATEWAY_URL = "http://127.0.0.1:18789"
-# audit fix: 하드코딩 제거 — 환경변수 우선, 기본값 fallback
-GATEWAY_TOKEN = os.environ.get("OPENCLAW_GATEWAY_TOKEN", "oc-secure-92a18f72c4e53b")
+# P2: 하드코딩 기본값 제거 — OPENCLAW_GATEWAY_TOKEN 미설정 시 발송 건너뜀
+GATEWAY_TOKEN = os.environ.get("OPENCLAW_GATEWAY_TOKEN", "")
 NOTIFY_TIMEOUT = 5  # seconds
 
 
@@ -38,6 +38,11 @@ def notify_openclaw(
     Returns:
         성공 여부
     """
+    # P2: 토큰 미설정 시 발송 건너뜀
+    if not GATEWAY_TOKEN:
+        log.warning("OPENCLAW_GATEWAY_TOKEN이 설정되지 않았습니다. 알림을 건너뜁니다.")
+        return False
+
     try:
         payload = {
             "event": event,

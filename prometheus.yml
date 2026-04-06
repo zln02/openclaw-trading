@@ -7,3 +7,15 @@ scrape_configs:
     static_configs:
       - targets: ['dashboard:8080']
     metrics_path: /metrics
+    # Prometheus → dashboard 스크랩 인증
+    # Docker 내부 네트워크에서만 접근하므로 IP 기반 면제도 가능하나,
+    # /metrics 엔드포인트에 인증을 달 경우 아래 방식 사용:
+    #   username: admin
+    #   password_file: /etc/prometheus/dashboard_password
+    # 사용 방법:
+    #   1. .env에 DASHBOARD_METRICS_PASSWORD=<strong_password> 설정
+    #   2. docker-compose.yml prometheus 서비스에 아래 추가:
+    #        volumes:
+    #          - ./secrets/dashboard_password:/etc/prometheus/dashboard_password:ro
+    #   3. echo -n "<strong_password>" > secrets/dashboard_password && chmod 600 secrets/dashboard_password
+    # 현재: Docker 내부 네트워크(dashboard:8080)만 접근 가능 — 외부 노출 없음

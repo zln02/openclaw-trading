@@ -11,17 +11,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# 비root 사용자 생성
+RUN useradd -m -u 1000 openclaw && chown -R openclaw:openclaw /app
+USER openclaw
+
 # 소스 코드 복사
-COPY common/ common/
-COPY api/ api/
-COPY btc/ btc/
-COPY dashboard/ dashboard/
-COPY stocks/ stocks/
-COPY agents/ agents/
-COPY quant/ quant/
-COPY execution/ execution/
-COPY memory/ memory/
-COPY scripts/ scripts/
+COPY --chown=openclaw:openclaw common/ common/
+COPY --chown=openclaw:openclaw api/ api/
+COPY --chown=openclaw:openclaw btc/ btc/
+COPY --chown=openclaw:openclaw dashboard/ dashboard/
+COPY --chown=openclaw:openclaw stocks/ stocks/
+COPY --chown=openclaw:openclaw agents/ agents/
+COPY --chown=openclaw:openclaw quant/ quant/
+COPY --chown=openclaw:openclaw execution/ execution/
+COPY --chown=openclaw:openclaw memory/ memory/
+COPY --chown=openclaw:openclaw scripts/ scripts/
 
 # 환경변수
 ENV PYTHONPATH=/app

@@ -96,7 +96,12 @@ def _snapshot_events() -> list[dict]:
 
 @router.websocket("/ws/signals")
 async def ws_signals(websocket: WebSocket):
-    api_key = str(websocket.query_params.get("api_key") or "").strip()
+    # P1: 헤더 우선 (URL 노출 방지), 쿼리 파라미터 fallback (하위 호환)
+    api_key = (
+        websocket.headers.get("x-api-key")
+        or websocket.headers.get("authorization", "").replace("Bearer ", "")
+        or str(websocket.query_params.get("api_key") or "")
+    ).strip()
     try:
         require_public_api_key(websocket, x_api_key=api_key)
     except Exception:

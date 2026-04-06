@@ -80,7 +80,8 @@ def _persist_supabase(row: dict) -> None:
                 "id": row.get("id"),
                 "url": row.get("url"),
                 "events": row.get("events"),
-                "secret_hash": hashlib.sha256(_safe_text(row.get("secret")).encode("utf-8")).hexdigest(),
+                # P0: row에는 secret_hash만 존재 (secret 평문 없음)
+                "secret_hash": row.get("secret_hash", ""),
                 "created_at": row.get("created_at"),
                 "active": bool(row.get("active", True)),
             }
@@ -103,11 +104,12 @@ def register_webhook(url: str, events: list[str], secret: str) -> dict:
     rows = _load_registry()
     webhook_id = _public_id(clean_url, clean_secret)
     now = _now_iso()
+    # P0: secret 평문 저장 금지 — secret_hash만 저장
     row = {
         "id": webhook_id,
         "url": clean_url,
         "events": clean_events,
-        "secret": clean_secret,
+        "secret_hash": hashlib.sha256(clean_secret.encode("utf-8")).hexdigest(),
         "created_at": now,
         "active": True,
     }
@@ -141,6 +143,7 @@ def list_webhooks() -> list[dict]:
 
 
 def _signature(secret: str, body_bytes: bytes) -> str:
+    # hmac.new(key, msg, digestmod) — Python 표준 API
     return hmac.new(secret.encode("utf-8"), body_bytes, hashlib.sha256).hexdigest()
 
 
@@ -154,7 +157,9 @@ def deliver_webhook_event(event: str, data: dict) -> dict:
     for row in _load_registry():
         if clean_event not in (row.get("events") or []) or not bool(row.get("active", True)):
             continue
-        secret = _safe_text(row.get("secret"))
+        # P0: registry에는 secret_hash만 저장됨 — 원본 secret은 register 시에만 메모리에 존재.
+        # 서명 생성 불가 시 빈 시크릿으로 fallback (수신 측에서 검증 실패로 거부).
+        secret = _safe_text(row.get("secret", ""))
         sig = _signature(secret, body_bytes)
         log_row = {
             "timestamp": _now_iso(),

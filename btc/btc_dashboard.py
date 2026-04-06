@@ -169,9 +169,9 @@ async def health():
     return {"status": "ok", "service": "openclaw-dashboard", "uptime_placeholder": int(time.time())}
 
 
-@app.get("/api/health")
+@app.get("/api/health", dependencies=[Depends(_require_auth)])
 async def health_detailed():
-    """상세 헬스 체크 (Upbit/Supabase/Kiwoom/Cron 상태) — 인증 불필요."""
+    """상세 헬스 체크 (Upbit/Supabase/Kiwoom/Cron 상태) — P2: Basic Auth 필수."""
     from common.health import health_monitor
     return await health_monitor.run_checks()
 

@@ -65,3 +65,7 @@ urban-immune-system/
 
 # 런타임 상태 파일
 .openclaw/
+
+# SQLite / DB 파일 (secretary/agency_memory.db 등)
+*.db
+*.sqlite3
