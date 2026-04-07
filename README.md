@@ -23,12 +23,12 @@
 ## Live Trading Performance
 
 <!-- LIVE-STATS:START -->
-> Last updated: `2026-04-06 07:00 UTC` via GitHub Actions
+> Last updated: `2026-04-07 03:49 UTC` via GitHub Actions
 
 | Market | Trades | Win Rate | Avg PnL |
 |--------|--------|----------|---------|
-| BTC | 25 | 32.0% | +0.19% |
-| KR | 14 | 35.7% | -0.70% |
+| BTC | 0 | — | — |
+| KR | 0 | — | — |
 | US | 0 | — | — |
 <!-- LIVE-STATS:END -->
 
