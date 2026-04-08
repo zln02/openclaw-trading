@@ -58,6 +58,13 @@ except Exception:
         ts = datetime.now().strftime("%H:%M:%S")
         print(f"[kiwoom][{ts}] {level}: {msg}")
 
+# 자격증명 헬퍼는 logger와 독립적으로 import (실패 시 즉시 노출)
+import sys as _sys2
+_ws2 = str(Path(__file__).resolve().parents[1])
+if _ws2 not in _sys2.path:
+    _sys2.path.insert(0, _ws2)
+from common.kiwoom_env import get_kiwoom_credentials
+
 
 def _int(v) -> int:
     try:
@@ -127,40 +134,18 @@ class KiwoomAPIClient:
             except Exception:
                 pass
 
-        if use_mock is None:
-            trading_env = os.getenv("TRADING_ENV", "mock").lower()
-            use_mock = (trading_env == "mock")
-
-        self.api_key = (
-            os.getenv("KIWOOM_REST_API_KEY")
-            or os.getenv("KIWOOM_MOCK_REST_API_APP_KEY")
-        )
-        self.api_secret = (
-            os.getenv("KIWOOM_REST_API_SECRET")
-            or os.getenv("KIWOOM_MOCK_REST_API_SECRET_KEY")
-        )
-        self.account_no = (
-            os.getenv("KIWOOM_ACCOUNT_NO")
-            or os.getenv("KIWOOM_MOCK_ACCOUNT_NO")
-        )
-
-        if not self.api_key or not self.api_secret:
-            raise ValueError(
-                "API Key/Secret이 설정되지 않았습니다.\n"
-                "KIWOOM_REST_API_KEY, KIWOOM_REST_API_SECRET 환경변수를 설정하세요."
-            )
-
-        self.base_url = (
-            "https://mockapi.kiwoom.com" if use_mock
-            else "https://api.kiwoom.com"
-        )
-        self.use_mock = use_mock
+        creds = get_kiwoom_credentials(use_mock)
+        self.api_key = creds.api_key
+        self.api_secret = creds.api_secret
+        self.account_no = creds.account_no
+        self.use_mock = creds.use_mock
+        self.base_url = creds.base_url
 
         self.token = None
         self.token_expires = 0.0
         self._last_request_time = 0.0
 
-        _log(f"초기화 완료: {'모의투자' if use_mock else '실전투자'} ({self.base_url})")
+        _log(f"초기화 완료: {'모의투자' if creds.use_mock else '실전투자'} ({self.base_url})")
 
     def _get_token(self) -> str:
         """OAuth 토큰 발급 (캐시, 자동 갱신)"""

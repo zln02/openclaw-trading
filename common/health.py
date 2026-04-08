@@ -56,11 +56,15 @@ async def check_supabase() -> dict[str, Any]:
 
 async def check_kiwoom() -> dict[str, Any]:
     def _check() -> dict[str, Any]:
-        app_key = os.environ.get("KIWOOM_MOCK_REST_API_APP_KEY", "")
-        secret_key = os.environ.get("KIWOOM_MOCK_REST_API_SECRET_KEY", "")
-        if not app_key or not secret_key:
-            raise RuntimeError("키움 모의투자 API 키가 설정되지 않았습니다 (KIWOOM_MOCK_REST_API_APP_KEY / SECRET_KEY)")
-        return {"configured": True}
+        from common.kiwoom_env import get_kiwoom_credentials
+        try:
+            creds = get_kiwoom_credentials()
+        except ValueError as exc:
+            raise RuntimeError(str(exc)) from exc
+        return {
+            "configured": True,
+            "mode": "mock" if creds.use_mock else "prod",
+        }
 
     return await asyncio.to_thread(_check)
 
