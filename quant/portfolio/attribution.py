@@ -195,7 +195,10 @@ class WeeklyAttributionRunner:
     # ── Data loading ──────────────────────────────────────────────────────
 
     def _load_closed_trades(self, lookback_days: int = 7) -> List[Dict[str, Any]]:
-        """지난 N일간 체결된 trades + 미청산 OPEN 포지션 (factor_snapshot 있는 것만)."""
+        """지난 N일간 체결된 trades + 미청산 OPEN 포지션 (factor_snapshot 있는 것만).
+
+        v6.3: signal_source(alias `source`) 컬럼도 함께 수집하여 소스별 PnL 집계 가능.
+        """
         if not self.supabase:
             return []
         cutoff = (
@@ -213,18 +216,22 @@ class WeeklyAttributionRunner:
                     pass
                 return []
 
-        closed_rows = _try_load(
-            self.supabase.table("trade_executions")
-            .select("stock_code,factor_snapshot,price,quantity,entry_price,result")
-            .eq("result", "CLOSED")
-            .eq("trade_type", "SELL")
-            .gte("created_at", cutoff)
+        # v6.3: source 컬럼 포함 시도 → 실패 시 기존 컬럼만 재시도 (graceful)
+        _select_with_source = "stock_code,factor_snapshot,price,quantity,entry_price,result,source"
+        _select_legacy = "stock_code,factor_snapshot,price,quantity,entry_price,result"
+
+        def _load_rows(filter_fn) -> list:
+            q_full = filter_fn(self.supabase.table("trade_executions").select(_select_with_source))
+            rows = _try_load(q_full)
+            if rows:
+                return rows
+            q_legacy = filter_fn(self.supabase.table("trade_executions").select(_select_legacy))
+            return _try_load(q_legacy)
+
+        closed_rows = _load_rows(
+            lambda q: q.eq("result", "CLOSED").eq("trade_type", "SELL").gte("created_at", cutoff)
         )
-        open_rows = _try_load(
-            self.supabase.table("trade_executions")
-            .select("stock_code,factor_snapshot,price,quantity,entry_price,result")
-            .eq("result", "OPEN")
-        )
+        open_rows = _load_rows(lambda q: q.eq("result", "OPEN"))
         all_rows = closed_rows + open_rows
 
         result = []
@@ -244,7 +251,40 @@ class WeeklyAttributionRunner:
                 pnl = calc_trade_pnl(r, market="kr")
                 if pnl is None:
                     continue
-            result.append({"pnl_pct": pnl, "factors": snap})
+            result.append({
+                "pnl_pct": pnl,
+                "factors": snap,
+                "signal_source": r.get("source") or "UNKNOWN",
+            })
+        return result
+
+    # ── Signal source attribution (v6.3) ─────────────────────────────────
+
+    def _calc_source_attribution(
+        self, trades: List[Dict[str, Any]]
+    ) -> Dict[str, Dict[str, float]]:
+        """signal_source별 PnL 집계.
+
+        LLM 매매 신호 제거(v6.3) 이후 소스별 정량 측정 인프라 확보가 목적.
+        CLAUDE.md 사고 원칙 #1 (측정되지 않은 정교화는 거부) 준수.
+        """
+        source_stats: Dict[str, List[float]] = {}
+        for trade in trades:
+            src = trade.get("signal_source") or "UNKNOWN"
+            pnl = trade.get("pnl_pct", 0.0)
+            source_stats.setdefault(src, []).append(float(pnl))
+
+        result: Dict[str, Dict[str, float]] = {}
+        for src, pnls in source_stats.items():
+            n = len(pnls)
+            total = sum(pnls)
+            wins = [p for p in pnls if p > 0]
+            result[src] = {
+                "trades": n,
+                "total_pnl_pct": round(total, 4),
+                "avg_pnl_pct": round(total / n, 4) if n > 0 else 0.0,
+                "win_rate": round(len(wins) / n, 4) if n > 0 else 0.0,
+            }
         return result
 
     # ── Attribution calculation ───────────────────────────────────────────
@@ -350,6 +390,7 @@ class WeeklyAttributionRunner:
         n_trades: int,
         total_pnl_avg: float,
         weights_updated: bool,
+        source_attrs: Optional[Dict[str, Dict[str, float]]] = None,
     ) -> None:
         try:
             from common.telegram import Priority, send_telegram
@@ -372,6 +413,23 @@ class WeeklyAttributionRunner:
                 f"  {icon} {fname}: 합계={stats['total_contrib']:+.2f}% "
                 f"평균={stats['avg_contrib']:+.2f}% ({stats['n_trades']}건)"
             )
+
+        if source_attrs:
+            lines.append("")
+            lines.append("<b>시그널 소스별 성과 (v6.3):</b>")
+            sorted_sources = sorted(
+                source_attrs.items(),
+                key=lambda x: x[1].get("total_pnl_pct", 0),
+                reverse=True,
+            )
+            for src, stats in sorted_sources[:6]:
+                icon = "✅" if stats["avg_pnl_pct"] >= 0 else "⚠️"
+                lines.append(
+                    f"  {icon} {src}: 합계={stats['total_pnl_pct']:+.2f}% "
+                    f"평균={stats['avg_pnl_pct']:+.2f}% "
+                    f"승률={stats['win_rate']:.0%} "
+                    f"({stats['trades']}건)"
+                )
 
         if weights_updated:
             lines.append("\n🔄 저기여 팩터 다운웨이팅 완료 → weights.json 업데이트")
@@ -399,6 +457,7 @@ class WeeklyAttributionRunner:
             return {"status": "NO_DATA", "n_trades": 0}
 
         factor_attrs = self._calc_factor_attribution(trades)
+        source_attrs = self._calc_source_attribution(trades)
         n_trades = len(trades)
         total_pnl_avg = round(
             sum(t["pnl_pct"] for t in trades) / n_trades, 4
@@ -408,13 +467,17 @@ class WeeklyAttributionRunner:
         if not dry_run:
             weights_updated = self._downweight_low_contributors(factor_attrs)
 
-        self._send_report(factor_attrs, n_trades, total_pnl_avg, weights_updated)
+        self._send_report(
+            factor_attrs, n_trades, total_pnl_avg, weights_updated,
+            source_attrs=source_attrs,
+        )
 
         return {
             "status": "OK",
             "n_trades": n_trades,
             "total_pnl_avg": total_pnl_avg,
             "factor_attribution": factor_attrs,
+            "source_attribution": source_attrs,
             "weights_updated": weights_updated,
             "timestamp": _utc_now_iso(),
         }

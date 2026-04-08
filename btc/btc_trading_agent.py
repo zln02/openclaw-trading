@@ -46,7 +46,7 @@ load_env()
 log = get_logger("btc_agent", BTC_LOG)
 
 import pyupbit
-from openai import OpenAI
+from common.llm_client import call_haiku, is_quota_exceeded
 from btc_news_collector import get_news_summary, get_news_result as _get_news_result
 
 
@@ -147,7 +147,6 @@ def _apply_weighted_score(components: dict, *, weights: dict) -> int:
 # ── 환경변수 ──────────────────────────────────────
 UPBIT_ACCESS  = os.environ.get("UPBIT_ACCESS_KEY", "")
 UPBIT_SECRET  = os.environ.get("UPBIT_SECRET_KEY", "")
-OPENAI_KEY    = os.environ.get("OPENAI_API_KEY", "")
 DRY_RUN       = os.environ.get("DRY_RUN", "0") == "1"
 RUNTIME_ENV_READY = all([UPBIT_ACCESS, UPBIT_SECRET])
 
@@ -155,7 +154,6 @@ if not RUNTIME_ENV_READY:
     log.warning("필수 환경변수 부족: 에이전트 실행은 제한되지만 API helper import는 허용")
 upbit   = pyupbit.Upbit(UPBIT_ACCESS, UPBIT_SECRET) if UPBIT_ACCESS and UPBIT_SECRET else None
 supabase = get_supabase()
-client  = OpenAI(api_key=OPENAI_KEY) if OPENAI_KEY else None
 _btc_buy_blocked = False
 # audit fix: CrossMarket 리스크 — 모듈 레벨 싱글턴 (매 사이클 재사용)
 _cmr_instance = None
@@ -665,6 +663,7 @@ def open_position_with_context(
     composite_score=None,
     market_regime=None,
     atr_stop_price=None,
+    signal_source=None,
 ) -> bool:
     """Open position and persist signal context for later IC evaluation.
 
@@ -693,13 +692,21 @@ def open_position_with_context(
         "composite_score": composite_score,
         "market_regime": market_regime,
         "atr_stop_price": atr_stop_price,
+        # v6.3: 시그널 소스 추적 (attribution용)
+        "signal_source": signal_source,
     }
 
     try:
         supabase.table("btc_position").insert(ctx_row).execute()
         return True
     except Exception:
-        return open_position(entry_price, quantity, entry_krw)
+        # signal_source 컬럼 부재 시 graceful fallback: 해당 키 제거 후 재시도
+        try:
+            ctx_row.pop("signal_source", None)
+            supabase.table("btc_position").insert(ctx_row).execute()
+            return True
+        except Exception:
+            return open_position(entry_price, quantity, entry_krw)
 
 def close_all_positions(exit_price):
     try:
@@ -756,7 +763,170 @@ def check_daily_loss() -> bool:
         pass
     return False
 
+# ── 룰 기반 BTC 신호 (LLM 대체, 결정론적) ─────────
+def rule_based_btc_signal(
+    indicators,
+    fg,
+    htf,
+    volume,
+    *,
+    comp: dict | None = None,
+    rsi_d: float = 50.0,
+    momentum: dict | None = None,
+    funding: dict | None = None,
+    ls_ratio: dict | None = None,
+    regime: str = "TRANSITION",
+) -> dict:
+    """결정론적 BTC 매매 신호.
+
+    v6.3에서 LLM 기반 `analyze_with_ai()`를 대체한다. 이전 system_prompt의 규칙을
+    점수화(100점 만점)하여 BUY/SELL/HOLD를 산출한다. 동일 입력 → 동일 출력.
+
+    입력:
+      indicators: 5분봉 지표 (price, rsi, macd, macd_histogram, ...)
+      fg: Fear&Greed dict (value, label, msg)
+      htf: 1시간봉 추세 dict (trend, rsi_1h)
+      volume: 거래량 dict (ratio, label)
+      comp: 복합스코어 dict (total, ...)
+      rsi_d: 일봉 RSI
+      momentum: {bb_pct, ret_7d, ...}
+      funding: 펀딩비 dict (rate, signal)
+      ls_ratio: 롱숏비율 dict (ls_ratio, signal)
+      regime: 시장 레짐 문자열
+
+    반환: {"action": "BUY|SELL|HOLD", "confidence": int, "reason": str, "source": "RULE_BTC"}
+    """
+    mom = momentum or {}
+    fund = funding or {}
+    ls = ls_ratio or {}
+    comp_total = (comp or {}).get("total", 0)
+
+    fg_val = int((fg or {}).get("value", 50))
+    vol_ratio = float((volume or {}).get("ratio", 1.0))
+    trend = (htf or {}).get("trend", "UNKNOWN")
+    rsi_5m = float(indicators.get("rsi", 50))
+    macd_val = float(indicators.get("macd", 0))
+    macd_hist = float(indicators.get("macd_histogram", 0))
+    bb_pct = float(mom.get("bb_pct", 50))
+    ret_7d = float(mom.get("ret_7d", 0))
+    fund_rate = float(fund.get("rate", 0))
+    ls_val = float(ls.get("ls_ratio", 1))
+
+    # ── SELL 조건 우선 평가 (하나라도 만족) ──
+    if trend == "DOWNTREND" and rsi_5m >= 65:
+        return {
+            "action": "SELL",
+            "confidence": 75,
+            "reason": f"[룰] DOWNTREND + 5m RSI {rsi_5m:.0f}>=65",
+            "source": "RULE_BTC",
+        }
+    if fg_val >= 75:
+        return {
+            "action": "SELL",
+            "confidence": 75,
+            "reason": f"[룰] 극도탐욕 F&G={fg_val}>=75",
+            "source": "RULE_BTC",
+        }
+    if rsi_d >= 70 and bb_pct >= 80:
+        return {
+            "action": "SELL",
+            "confidence": 75,
+            "reason": f"[룰] 과매수 dRSI={rsi_d:.0f} + BB%={bb_pct:.0f}",
+            "source": "RULE_BTC",
+        }
+
+    # ── BUY 필수 조건 ──
+    is_extreme_fear = fg_val <= 20
+    # 필수 1: 추세
+    if trend == "DOWNTREND":
+        return {
+            "action": "HOLD",
+            "confidence": 0,
+            "reason": f"[룰] DOWNTREND — BUY 금지",
+            "source": "RULE_BTC",
+        }
+    # 필수 2: 공포 구간
+    if fg_val > 55:
+        return {
+            "action": "HOLD",
+            "confidence": 0,
+            "reason": f"[룰] F&G {fg_val}>55 — BUY 구간 아님",
+            "source": "RULE_BTC",
+        }
+    # 필수 3: 거래량 (극도공포 면제)
+    min_vol = 0.15 if is_extreme_fear else 0.3
+    if vol_ratio <= min_vol:
+        return {
+            "action": "HOLD",
+            "confidence": 0,
+            "reason": f"[룰] 거래량 {vol_ratio:.2f}x<={min_vol} — BUY 금지",
+            "source": "RULE_BTC",
+        }
+
+    # ── BUY 점수 합산 ──
+    score = 0
+    reasons: list[str] = []
+
+    if trend == "UPTREND":
+        score += 20
+        reasons.append("UPTREND+20")
+
+    if fg_val <= 25:
+        score += 25
+        reasons.append(f"극도공포F&G{fg_val}+25")
+    elif fg_val <= 40:
+        score += 15
+        reasons.append(f"공포F&G{fg_val}+15")
+
+    if vol_ratio >= 2.0:
+        score += 15
+        reasons.append(f"거래량{vol_ratio:.1f}x+15")
+
+    if macd_val > 0 and macd_hist > 0:
+        score += 10
+        reasons.append("MACD양전+10")
+
+    if rsi_5m < 35:
+        score += 10
+        reasons.append(f"5mRSI{rsi_5m:.0f}과매도+10")
+
+    if rsi_d < 50 and ret_7d > -5:
+        score += 10
+        reasons.append(f"dRSI{rsi_d:.0f}양호+10")
+
+    if comp_total >= 60:
+        score += 10
+        reasons.append(f"복합{comp_total}+10")
+
+    if fund_rate < 0:
+        score += 5
+        reasons.append(f"음수펀딩{fund_rate:+.4f}+5")
+
+    if ls_val < 0.8:
+        score += 5
+        reasons.append(f"숏과다LS{ls_val:.2f}+5")
+
+    # BUY 최소 신뢰도 65
+    if score >= 65:
+        return {
+            "action": "BUY",
+            "confidence": min(score, 95),
+            "reason": f"[룰] {' '.join(reasons[:5])}",
+            "source": "RULE_BTC",
+        }
+
+    return {
+        "action": "HOLD",
+        "confidence": score,
+        "reason": f"[룰] BUY 점수 {score}<65 ({' '.join(reasons[:3]) if reasons else 'no signal'})",
+        "source": "RULE_BTC",
+    }
+
+
 # ── AI 분석 ───────────────────────────────────────
+# DEPRECATED: 룰 기반 rule_based_btc_signal()로 대체됨 (v6.3).
+# 매매 결정에서 LLM 의존 제거. Phase 4 페이퍼 검증 완료 후 완전 삭제 예정.
+# 측정용 보존 중 — 호출 금지.
 def analyze_with_ai(
     indicators, news_summary, fg, htf, volume,
     *,
@@ -790,10 +960,30 @@ def analyze_with_ai(
     ls   = ls_ratio or {}
     comp_total = (comp or {}).get("total", 0)
 
-    prompt = f"""당신은 비트코인 퀀트 트레이더입니다.
+    system_prompt = """당신은 비트코인 퀀트 트레이더입니다.
 아래 데이터로 매매 신호를 JSON으로만 출력하세요.
 
-[복합 스코어] {comp_total}/100 (시장 레짐: {regime})
+[매매 규칙]
+- BUY 조건:
+  1. 1시간봉 DOWNTREND가 아닐 것
+  2. Fear&Greed <= 55 (공포 구간 우선 매수)
+  3. 거래량 0.3배 이하면 BUY 금지 (단, F&G<=20이면 면제)
+  4. 거래량 2배 이상이면 신뢰도 +10
+  5. F&G <= 25 구간은 적극 매수 (역발상)
+  6. 복합스코어 < 40이면 BUY 신뢰도 낮게 (< 70)
+
+- SELL 조건 (하나라도):
+  1. 1시간봉 DOWNTREND + RSI 65 이상
+  2. Fear&Greed >= 75
+  3. 일봉 RSI >= 70 AND BB% >= 80 (과매수 + 상단)
+
+- HOLD: 위 미충족 또는 불확실
+- 신뢰도 65% 미만 → HOLD
+
+[출력 형식 - JSON만]
+{"action":"BUY또는SELL또는HOLD","confidence":0~100,"reason":"한줄근거"}"""
+
+    user_prompt = f"""[복합 스코어] {comp_total}/100 (시장 레짐: {regime})
 
 [5분봉 지표]
 {json.dumps(indicators, ensure_ascii=False)}
@@ -813,45 +1003,32 @@ RSI: {rsi_d:.1f} | BB%: {mom.get('bb_pct', 50):.1f}% | 7일수익: {mom.get('ret
 [시장 심리]
 {fg['msg']}
 
-[매매 규칙]
-- BUY 조건:
-  1. 1시간봉 DOWNTREND가 아닐 것
-  2. Fear&Greed <= 55 (공포 구간 우선 매수)
-  3. 거래량 0.3배 이하면 BUY 금지 (단, F&G<=20이면 면제)
-  4. 거래량 2배 이상이면 신뢰도 +10
-  5. F&G <= 25 구간은 적극 매수 (역발상)
-  6. 복합스코어 < 40이면 BUY 신뢰도 낮게 (< 70)
-
-- SELL 조건 (하나라도):
-  1. 1시간봉 DOWNTREND + RSI 65 이상
-  2. Fear&Greed >= 75
-  3. 일봉 RSI >= 70 AND BB% >= 80 (과매수 + 상단)
-
-- HOLD: 위 미충족 또는 불확실
-- 신뢰도 65% 미만 → HOLD
-
 [최근 거래 기억 — 반드시 참고하여 같은 실수 반복 금지]
 {memory_context if memory_context else "기억 없음"}
 
 [최근 뉴스]
-{news_summary}
+{news_summary}"""
 
-[출력 형식 - JSON만]
-{{"action":"BUY또는SELL또는HOLD","confidence":0~100,"reason":"한줄근거"}}"""
+    anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not anthropic_key or is_quota_exceeded():
+        return {"action": "HOLD", "confidence": 0, "reason": "Anthropic API 미설정 또는 quota 초과"}
 
-    if client is None:
-        return {"action": "HOLD", "confidence": 0, "reason": "OpenAI 미설정"}
+    # RSI/FG 버킷팅 캐시 — 변화 미미하면 이전 결과 재사용 (10분 TTL)
+    from common.cache import get_cached, set_cached
+    rsi_val = indicators.get("rsi", 50)
+    fg_val = fg.get("value", 50) if fg else 50
+    cache_key = f"btc_ai:{int(rsi_val) // 5}:{int(fg_val) // 10}"
+    cached = get_cached(cache_key)
+    if cached is not None:
+        log.debug(f"BTC AI 캐시 히트: {cache_key}")
+        return cached
 
     try:
-        res = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.1,
-            max_tokens=200,
-        )
-        raw  = res.choices[0].message.content.strip()
-        raw  = raw.replace("```json", "").replace("```", "").strip()
-        return json.loads(raw)
+        raw = call_haiku(user_prompt, system=system_prompt, max_tokens=200, temperature=0.1)
+        raw = raw.replace("```json", "").replace("```", "").strip()
+        result = json.loads(raw)
+        set_cached(cache_key, result, ttl=600)  # 10분
+        return result
     except Exception as e:
         log.warning(f"AI 분석 실패: {e}")
         return {"action": "HOLD", "confidence": 0, "reason": "AI 오류"}
@@ -1267,6 +1444,7 @@ def execute_trade(
                     composite_score=(comp or {}).get("total") if isinstance(comp, dict) else None,
                     market_regime=market_regime,
                     atr_stop_price=atr_stop,
+                    signal_source=signal.get("source", "UNKNOWN"),
                 )
                 if ok:
                     break
@@ -1409,6 +1587,8 @@ def save_log(indicators, signal, result, *, fg=None, volume=None, comp=None, fun
             "kimchi":             kimchi,
             "market_regime":      market_regime,
             "composite_score":    (comp or {}).get("total") if isinstance(comp, dict) else None,
+            # v6.3: 시그널 소스 추적 (attribution용)
+            "signal_source":      signal.get("source", "UNKNOWN"),
         }
 
         try:
@@ -1737,7 +1917,8 @@ def run_trading_cycle():
         conf = min(60 + comp["total"] - buy_min, 90)
         signal = {
             "action": "BUY", "confidence": int(conf),
-            "reason": f"복합스코어 {comp['total']}/{buy_min} (F&G={fg_value}, dRSI={rsi_d}) [룰기반]"
+            "reason": f"복합스코어 {comp['total']}/{buy_min} (F&G={fg_value}, dRSI={rsi_d}) [룰기반]",
+            "source": "RULE_COMPOSITE",
         }
         log.trade(f"복합스코어 매수 발동: {comp['total']}점 >= {buy_min}")
 
@@ -1746,14 +1927,16 @@ def run_trading_cycle():
         if htf["trend"] != "DOWNTREND":
             signal = {
                 "action": "BUY", "confidence": 78,
-                "reason": f"극도공포 오버라이드 F&G={fg_value}, dRSI={rsi_d} [룰기반]"
+                "reason": f"극도공포 오버라이드 F&G={fg_value}, dRSI={rsi_d} [룰기반]",
+                "source": "RULE_EXTREME_FEAR",
             }
             log.trade(f"극도공포 오버라이드: F&G={fg_value}, dRSI={rsi_d}")
         elif fg_value <= 12:
             # F&G 12 이하 극단 공포 — DOWNTREND에도 역발상 소량 매수 허용 (confidence 낮게)
             signal = {
                 "action": "BUY", "confidence": 66,
-                "reason": f"극단공포 역발상(DOWNTREND) F&G={fg_value}, dRSI={rsi_d} [룰기반]"
+                "reason": f"극단공포 역발상(DOWNTREND) F&G={fg_value}, dRSI={rsi_d} [룰기반]",
+                "source": "RULE_EXTREME_FEAR",
             }
             log.trade(f"극단공포 역발상 오버라이드(DOWNTREND): F&G={fg_value}, dRSI={rsi_d}")
 
@@ -1761,7 +1944,8 @@ def run_trading_cycle():
     elif rsi_d >= 75 and htf["trend"] == "DOWNTREND" and pos:
         signal = {
             "action": "SELL", "confidence": 78,
-            "reason": f"과매수+하락추세 dRSI={rsi_d:.0f} [룰기반]"
+            "reason": f"과매수+하락추세 dRSI={rsi_d:.0f} [룰기반]",
+            "source": "RULE_OVERBOUGHT",
         }
 
     # 4) 타임컷: 보유 기간 초과 + 수익 미미
@@ -1780,7 +1964,8 @@ def run_trading_cycle():
             if pnl_pct < 0.02:
                 signal = {
                     "action": "SELL", "confidence": 70,
-                    "reason": f"타임컷 {held_days}일 보유, 수익 {pnl_pct*100:+.1f}% [룰기반]"
+                    "reason": f"타임컷 {held_days}일 보유, 수익 {pnl_pct*100:+.1f}% [룰기반]",
+                    "source": "RULE_TIMECUT",
                 }
                 log.trade(f"타임컷 발동: {held_days}일, 수익 {pnl_pct*100:+.1f}%")
 
@@ -1791,7 +1976,8 @@ def run_trading_cycle():
         if pnl_pct > 0:
             signal = {
                 "action": "SELL", "confidence": 72,
-                "reason": f"극도탐욕 F&G={fg_value} + 수익 {pnl_pct*100:+.1f}% 보존 [룰기반]"
+                "reason": f"극도탐욕 F&G={fg_value} + 수익 {pnl_pct*100:+.1f}% 보존 [룰기반]",
+                "source": "RULE_EXTREME_GREED",
             }
             log.trade(f"극도탐욕 매도: F&G={fg_value}, 수익={pnl_pct*100:+.1f}%")
 
@@ -1799,7 +1985,8 @@ def run_trading_cycle():
     if pos and not signal and momentum["bb_pct"] >= 85 and rsi_d >= 65:
         signal = {
             "action": "SELL", "confidence": 70,
-            "reason": f"BB상단({momentum['bb_pct']:.0f}%) + 일봉과매수 RSI={rsi_d:.0f} [룰기반]"
+            "reason": f"BB상단({momentum['bb_pct']:.0f}%) + 일봉과매수 RSI={rsi_d:.0f} [룰기반]",
+            "source": "RULE_BB_TOP",
         }
         log.trade(f"BB상단 매도: bb_pct={momentum['bb_pct']:.0f}%, rsi_d={rsi_d:.0f}")
 
@@ -1810,25 +1997,17 @@ def run_trading_cycle():
         if pnl_pct >= 0.02:
             signal = {
                 "action": "SELL", "confidence": 68,
-                "reason": f"추세 하락전환(DOWNTREND) + 수익 {pnl_pct*100:+.1f}% 보존 [룰기반]"
+                "reason": f"추세 하락전환(DOWNTREND) + 수익 {pnl_pct*100:+.1f}% 보존 [룰기반]",
+                "source": "RULE_TREND_REVERSAL",
             }
             log.trade(f"추세전환 매도: DOWNTREND, 수익={pnl_pct*100:+.1f}%")
 
-    # 8) 룰기반 미발동 → AI 분석
+    # 8) 룰기반 복합스코어 미발동 → 룰 기반 결정론적 신호 (v6.3: LLM 의존 제거)
     if not signal:
-        # 최근 거래 기억 주입 (같은 실수 반복 방지)
-        _mem_ctx = ""
-        try:
-            from memory.trade_memory import TradeMemory
-            _mem_ctx = TradeMemory(supabase).get_recent_context("btc", limit=10)
-        except Exception as _me:
-            log.debug("trade_memory 로드 실패 (무시): %s", _me)
-
-        signal = analyze_with_ai(
-            indicators, news.get("summary", ""), fg, htf, volume,
+        signal = rule_based_btc_signal(
+            indicators, fg, htf, volume,
             comp=comp, rsi_d=rsi_d, momentum=momentum,
             funding=funding, ls_ratio=ls_ratio, regime=market_regime,
-            memory_context=_mem_ctx,
         )
 
     # ── 보조 보정 ──

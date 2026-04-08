@@ -28,6 +28,7 @@ from common.logger import get_logger
 from common.retry import retry, retry_call
 from common.config import STOCK_TRADING_LOG
 from common.utils import generate_order_id, check_order_idempotency
+from common.llm_client import call_haiku, is_quota_exceeded
 from common.equity_loader import (
     append_equity_snapshot,
     get_effective_market_weight,
@@ -60,8 +61,6 @@ from kiwoom_client import KiwoomClient
 # ─────────────────────────────────────────────
 # 설정
 # ─────────────────────────────────────────────
-OPENAI_KEY = os.environ.get('OPENAI_API_KEY', '')
-
 supabase = get_supabase()
 kiwoom = KiwoomClient()
 _kr_drift_cache: dict = {}
@@ -983,6 +982,9 @@ def rule_based_signal(
     return {'action': 'HOLD', 'confidence': 0, 'reason': f'[룰] 복합{cs}점 미달'}
 
 
+# DEPRECATED: v6.3부터 매매 결정에서 LLM 의존 제거.
+# get_trading_signal()은 더 이상 호출하지 않는다 (룰 기반 단일 경로).
+# Phase 4 페이퍼 검증 완료 후 완전 삭제 예정. 측정용 보존 중 — 호출 금지.
 def analyze_with_ai(
     stock: dict,
     indicators: dict,
@@ -993,31 +995,18 @@ def analyze_with_ai(
     has_position: bool = False,
     supply: dict = None,
 ) -> dict:
-    """AI 분석 (실패 시 룰 기반 fallback)"""
-    if not OPENAI_KEY:
-        log('OpenAI 키 없음 → 룰 기반 판단', 'WARN')
+    """AI 분석 (DEPRECATED v6.3 — 호출 금지)."""
+    if is_quota_exceeded():
+        log('Claude quota 초과 → 룰 기반 판단', 'WARN')
         momentum = calc_momentum_score(stock['code'])
         dart = _get_dart_score(stock['code'])
-        return rule_based_signal(indicators, kospi, weekly, has_position, supply, momentum, dart)
-
-    # quota 초과 캐시 체크 (2시간 억제)
-    try:
-        from common.cache import get_cached
-        if get_cached('openai:quota_exceeded'):
-            momentum = calc_momentum_score(stock['code'])
-            dart = _get_dart_score(stock['code'])
-            result = rule_based_signal(indicators, kospi, weekly, has_position, supply, momentum, dart)
-            result['source'] = 'RULE_QUOTA_EXCEEDED'
-            return result
-    except Exception:
-        pass
+        result = rule_based_signal(indicators, kospi, weekly, has_position, supply, momentum, dart)
+        result['source'] = 'RULE_QUOTA_EXCEEDED'
+        return result
 
     momentum = None  # 기본값 — except 경로에서 NameError 방지
     dart = None
     try:
-        from openai import OpenAI
-        client = OpenAI(api_key=OPENAI_KEY)
-
         picks = strategy.get('top_picks', [])
         pick = next((p for p in picks if p.get('code') == stock['code']), None)
         pick_info = f"AI 장 전 전략: {pick['action']} — {pick['reason']}" if pick else "장 전 전략 없음"
@@ -1043,10 +1032,22 @@ def analyze_with_ai(
         m_ret20 = momentum.get('ret_20d', 0)
         m_vol = momentum.get('vol_ratio', 1)
 
-        prompt = f"""당신은 연평균 수익률 50% 이상의 한국 주식 상위 1% 퀀트 트레이더입니다.
+        system_prompt = """당신은 연평균 수익률 50% 이상의 한국 주식 상위 1% 퀀트 트레이더입니다.
 현재 모의투자 환경이므로 공격적으로 수익을 추구합니다.
 
-[종목] {stock['name']} ({stock['code']})
+[매매 원칙 — 공격적 모의투자]
+- 모의투자이므로 적극적으로 BUY 판단. 확률 55% 이상이면 매수.
+- RSI 45 이하 + 아무 양수 시그널 하나 → BUY (MACD 양수, 거래량 증가, BB 하단, 뉴스 긍정 중 1개)
+- RSI 35 이하면 거의 무조건 BUY (공포 매수)
+- 거래량 2배 이상 급등 + RSI 50 이하 → BUY (모멘텀)
+- SELL: RSI 65 이상 + MACD 음수 전환 시에만
+- 주봉 DOWNTREND여도 RSI 30 이하면 역발상 BUY 허용
+- 단, 거래량 0.3배 이하는 어떤 경우에도 BUY 금지
+
+반드시 아래 JSON만 출력:
+{"action":"BUY|SELL|HOLD","confidence":0~100,"reason":"한줄이유"}"""
+
+        user_prompt = f"""[종목] {stock['name']} ({stock['code']})
 [현재가] {indicators.get('price', 0):,.0f}원
 [RSI] {indicators.get('rsi', 50)} — 45 이하면 매수 적극 고려
 [MACD] {indicators.get('macd', 0)} (히스토그램: {indicators.get('macd_histogram', 0)})
@@ -1060,27 +1061,12 @@ def analyze_with_ai(
 수급 시그널: {supply_signal}
 [모멘텀] 등급: {m_grade}({m_score}) | 5일수익: {m_ret5:+.1f}% | 20일수익: {m_ret20:+.1f}% | 거래량추세: {m_vol:.1f}배
 [뉴스] {news if news else '없음'}
-[데이터 소스] {indicators.get('data_source', '?')} ({indicators.get('data_points', '?')}봉)
+[데이터 소스] {indicators.get('data_source', '?')} ({indicators.get('data_points', '?')}봉)"""
 
-[매매 원칙 — 공격적 모의투자]
-- 모의투자이므로 적극적으로 BUY 판단. 확률 55% 이상이면 매수.
-- RSI 45 이하 + 아무 양수 시그널 하나 → BUY (MACD 양수, 거래량 증가, BB 하단, 뉴스 긍정 중 1개)
-- RSI 35 이하면 거의 무조건 BUY (공포 매수)
-- 거래량 2배 이상 급등 + RSI 50 이하 → BUY (모멘텀)
-- SELL: RSI 65 이상 + MACD 음수 전환 시에만
-- 주봉 DOWNTREND여도 RSI 30 이하면 역발상 BUY 허용
-- 단, 거래량 0.3배 이하는 어떤 경우에도 BUY 금지
+        raw = call_haiku(user_prompt, system=system_prompt, max_tokens=150, temperature=0.1)
+        if raw is None:
+            raise ValueError('call_haiku returned None')
 
-반드시 아래 JSON만 출력:
-{{"action":"BUY|SELL|HOLD","confidence":0~100,"reason":"한줄이유"}}"""
-
-        res = client.chat.completions.create(
-            model='gpt-4o-mini',
-            messages=[{'role': 'user', 'content': prompt}],
-            temperature=0.1,
-            max_tokens=150,
-        )
-        raw = res.choices[0].message.content.strip()
         # JSON 파싱 정리
         raw = raw.replace('```json', '').replace('```', '').strip()
         if raw.startswith('{'):
@@ -1106,12 +1092,8 @@ def analyze_with_ai(
         return out
 
     except Exception as e:
-        err_str = str(e)
         log(f'AI 분석 실패 → 룰 기반 fallback: {e}', 'WARN')
-        # OpenAI quota/billing 오류 — 2시간 동안 재시도 억제
-        if 'insufficient_quota' in err_str or '429' in err_str:
-            from common.cache import set_cached
-            set_cached('openai:quota_exceeded', True, ttl=7200)
+        # v6.3 DEPRECATED — momentum/dart None 가드만 유지 (OpenAI quota 분기 제거)
         if momentum is None:
             momentum = calc_momentum_score(stock['code'])
         if dart is None:
@@ -1134,7 +1116,7 @@ def get_trading_signal(
     """
     매매 신호 결정 (우선순위):
     1. ML 모델 (XGBoost) — 고확률 직접 BUY
-    2. AI (GPT) or 룰 기반 → ML 블렌딩 (0.5/0.5)
+    2. AI (Claude Haiku) or 룰 기반 → ML 블렌딩
     3. 룰 기반 — AI도 실패 시
     반환 dict에 'ml_score', 'ml_confidence' 항상 포함
     """
@@ -1206,22 +1188,20 @@ def get_trading_signal(
     except Exception as e:
         log(f'  ML 모델 오류: {e}', 'WARN')
 
-    # 2차: AI (GPT)
-    base_signal: Optional[dict] = None
-    try:
-        ai_result = analyze_with_ai(
-            stock, indicators, strategy, news, weekly, kospi, has_position, supply
-        )
-        if ai_result and ai_result.get('action') in ('BUY', 'SELL', 'HOLD'):
-            base_signal = ai_result
-    except Exception as e:
-        log(f'AI 분석 실패: {e}', 'WARN')
+    # 2차: 룰 기반 사전 평가 → 고확신이면 AI 스킵 (비용 절감)
+    momentum = calc_momentum_score(stock['code'])
+    dart = _get_dart_score(stock['code'])
+    rule_signal = rule_based_signal(indicators, kospi, weekly, has_position, supply, momentum, dart)
+    rule_conf = float(rule_signal.get('confidence', 0))
 
-    # 3차: 룰 기반 fallback
-    if base_signal is None:
-        momentum = calc_momentum_score(stock['code'])
-        dart = _get_dart_score(stock['code'])
-        base_signal = rule_based_signal(indicators, kospi, weekly, has_position, supply, momentum, dart)
+    # v6.3: LLM 매매 신호 의존 제거 — 룰 기반 단일 경로
+    # (회색 지대 AI 호출은 측정 불가능한 장애 원인 → attribution.py로 사후 측정)
+    base_signal = rule_signal
+    if rule_conf >= 85:
+        base_signal['source'] = 'RULE_PRIMARY'
+        log(f"  룰 기반 고확신 ({rule_conf}%)", 'INFO')
+    else:
+        base_signal['source'] = 'RULE_DEFAULT'
 
     # audit fix: ML IC -0.411 역신호 — 임시 비활성화. IC 양수 전환 후 복원
     # ML 예측은 드리프트 감지용으로 계속 실행, 최종 confidence에는 반영 안 함
@@ -1575,14 +1555,14 @@ def execute_buy(
         'stock_name': name,
         'quantity': quantity,
         'price': price,
-        'strategy': signal.get('source', 'AI') + '+RSI+MACD',
+        'strategy': signal.get('source', 'RULE_DEFAULT') + '+RSI+MACD',
         'reason': signal.get('reason', ''),
         'result': 'OPEN',
         'split_stage': split_stage,
         'ml_score': signal.get('ml_score', 0.0),
         'ml_confidence': signal.get('ml_confidence', 0.0),
         'composite_score': signal.get('confidence', 0.0),
-        'source': signal.get('source', 'AI'),
+        'source': signal.get('source', 'RULE_DEFAULT'),
         'drift_status': signal.get('drift_status', ''),
         'drift_penalty': signal.get('drift_penalty', 0.0),
         'rsi': indicators.get('rsi', 0.0),
