@@ -25,7 +25,9 @@ OpenClaw Trading System 변경 이력. [Keep a Changelog](https://keepachangelog
 - `stocks/stock_trading_agent.py analyze_with_ai()` — 동일
 
 ### Added
-- `tests/test_btc_rule_signal.py` — 12 단위 테스트 (결정론, BUY/SELL/HOLD 경계, 극도공포 거래량 면제, 신뢰도 cap 95)
+- `tests/test_btc_rule_signal.py` — 26 단위 테스트 (12 초기 + 14 경계조건: P0 SELL 선순위/SIDEWAYS BUY/None optional dict, P1 F&G 55·20·volume 0.3·fear 구간·MACD AND, P2 funding 음수·ls_ratio<0.8·source 분기)
+- `tests/test_attribution_source.py` — 7 단위 테스트 (empty/single/multi source, signal_source missing/None → "UNKNOWN" 폴백, win_rate 계산, round(x,4) 반올림)
+- `tests/test_v63_regression.py` — 4 단위 테스트 (AST 기반 `analyze_with_ai()` 호출 0건 + DEPRECATED 주석 보존 정적 가드)
 - `common/llm_client.py` — 기존 prior 세션에서 untracked 상태로 방치되던 파일을 리포에 정식 포함
 - `tests/test_llm_client.py` — 동반 테스트
 
@@ -45,7 +47,7 @@ OpenClaw Trading System 변경 이력. [Keep a Changelog](https://keepachangelog
 
 ### Verification
 - `python -m py_compile` 4 파일 OK
-- `pytest tests/` **88 passed** (76 기존 + 12 신규, 회귀 0)
+- `pytest tests/` **113 passed** (기존 88 + Phase 4 테스트 25건, 회귀 0)
 
 ### Post-Deploy Actions (운영 필수)
 1. Supabase Dashboard > SQL Editor에서 `supabase/level12_signal_source.sql` 실행
