@@ -3,16 +3,19 @@ version: '3.8'
 services:
   dashboard:
     build: .
-    expose:
-      - "8080"
+    ports:
+      - "8080:8080"
     env_file: .env
     environment:
       - PYTHONPATH=/app
+      - OPENCLAW_CONFIG_DIR=/app
+      - OPENCLAW_WORKSPACE_DIR=/app
+      - OPENCLAW_LOG_DIR=/app/logs
     volumes:
       - ./brain:/app/brain
       - ./logs:/app/logs
       - /home/wlsdud5035/openclaw/logs:/app/external_logs:ro
-      - /home/wlsdud5035/openclaw/.docker-secrets:/run/secrets/openclaw:ro
+      - /home/wlsdud5035/.openclaw/.docker-secrets:/run/secrets/openclaw:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
@@ -26,10 +29,13 @@ services:
     env_file: .env
     environment:
       - PYTHONPATH=/app
+      - OPENCLAW_CONFIG_DIR=/app
+      - OPENCLAW_WORKSPACE_DIR=/app
+      - OPENCLAW_LOG_DIR=/app/logs
     volumes:
       - ./brain:/app/brain
       - ./logs:/app/logs
-      - /home/wlsdud5035/openclaw/.docker-secrets:/run/secrets/openclaw:ro
+      - /home/wlsdud5035/.openclaw/.docker-secrets:/run/secrets/openclaw:ro
     restart: unless-stopped
     depends_on:
       - dashboard
@@ -40,10 +46,13 @@ services:
     env_file: .env
     environment:
       - PYTHONPATH=/app
+      - OPENCLAW_CONFIG_DIR=/app
+      - OPENCLAW_WORKSPACE_DIR=/app
+      - OPENCLAW_LOG_DIR=/app/logs
     volumes:
       - ./brain:/app/brain
       - ./logs:/app/logs
-      - /home/wlsdud5035/openclaw/.docker-secrets:/run/secrets/openclaw:ro
+      - /home/wlsdud5035/.openclaw/.docker-secrets:/run/secrets/openclaw:ro
     restart: unless-stopped
 
   us-agent:
@@ -52,10 +61,13 @@ services:
     env_file: .env
     environment:
       - PYTHONPATH=/app
+      - OPENCLAW_CONFIG_DIR=/app
+      - OPENCLAW_WORKSPACE_DIR=/app
+      - OPENCLAW_LOG_DIR=/app/logs
     volumes:
       - ./brain:/app/brain
       - ./logs:/app/logs
-      - /home/wlsdud5035/openclaw/.docker-secrets:/run/secrets/openclaw:ro
+      - /home/wlsdud5035/.openclaw/.docker-secrets:/run/secrets/openclaw:ro
     restart: unless-stopped
 
   us-agent-check:
@@ -64,10 +76,13 @@ services:
     env_file: .env
     environment:
       - PYTHONPATH=/app
+      - OPENCLAW_CONFIG_DIR=/app
+      - OPENCLAW_WORKSPACE_DIR=/app
+      - OPENCLAW_LOG_DIR=/app/logs
     volumes:
       - ./brain:/app/brain
       - ./logs:/app/logs
-      - /home/wlsdud5035/openclaw/.docker-secrets:/run/secrets/openclaw:ro
+      - /home/wlsdud5035/.openclaw/.docker-secrets:/run/secrets/openclaw:ro
     restart: unless-stopped
     depends_on:
       - dashboard
