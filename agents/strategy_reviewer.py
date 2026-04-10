@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 from copy import deepcopy
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -26,6 +25,7 @@ from common.logger import get_logger
 from common.market_data import get_market_regime
 from common.supabase_client import get_supabase
 from common.telegram import Priority, send_telegram
+from common.llm_client import call_haiku
 from common.utils import parse_json_from_text as _json_parse, safe_float as _safe_float
 
 load_env()
@@ -78,11 +78,9 @@ class StrategyReviewer:
     def __init__(
         self,
         supabase_client=None,
-        model: str = "gpt-4o-mini",
         strategy_path: Path = STRATEGY_JSON,
     ):
         self.supabase = supabase_client or get_supabase()
-        self.model = model
         self.strategy_path = Path(strategy_path)
 
     def is_review_day(self, as_of: str | date | datetime | None = None) -> bool:
@@ -279,20 +277,8 @@ class StrategyReviewer:
         return next_strategy
 
     def _llm_review(self, prompt: str) -> Optional[dict]:
-        api_key = os.environ.get("OPENAI_API_KEY", "")
-        if not api_key:
-            return None
         try:
-            from openai import OpenAI
-
-            client = OpenAI(api_key=api_key)
-            res = client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.2,
-                max_tokens=800,
-            )
-            raw = (res.choices[0].message.content or "").strip()
+            raw = call_haiku(prompt, max_tokens=800, temperature=0.2)
             return _json_parse(raw)
         except Exception as exc:
             log.warning("strategy review llm failed", error=exc)

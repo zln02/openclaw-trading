@@ -19,7 +19,8 @@ WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-$OPENCLAW_ROOT/workspace}"
 # 임계치 (분)
 STALE_MINUTES=30
 SNAPSHOT_STALE_MINUTES="${HEALTH_SNAPSHOT_STALE_MINUTES:-180}"
-ALLOCATION_STALE_MINUTES="${HEALTH_ALLOCATION_STALE_MINUTES:-10080}"
+DRIFT_STALE_MINUTES="${HEALTH_DRIFT_STALE_MINUTES:-10080}"
+ALLOCATION_STALE_MINUTES="${HEALTH_ALLOCATION_STALE_MINUTES:-43200}"
 
 # openclaw.json에서 텔레그램 자격증명 추출
 BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-$(python3 -c "
@@ -144,7 +145,7 @@ check_file_freshness() {
 }
 
 check_supabase_health() {
-    python3 - <<'PY'
+    PYTHONPATH="${WORKSPACE:-$HOME/.openclaw/workspace}:${PYTHONPATH:-}" python3 - <<'PY'
 from common.supabase_client import get_supabase
 
 try:
@@ -246,8 +247,8 @@ ALLOCATION_PATH="$WORKSPACE_DIR/brain/portfolio/market_allocation.json"
 TARGET_WEIGHTS_PATH="$WORKSPACE_DIR/brain/portfolio/target_weights.json"
 
 RISK_SNAPSHOT_RESULT=$(check_file_freshness "$RISK_SNAPSHOT_PATH" "$SNAPSHOT_STALE_MINUTES")
-KR_DRIFT_RESULT=$(check_file_freshness "$KR_DRIFT_PATH" "$SNAPSHOT_STALE_MINUTES")
-US_DRIFT_RESULT=$(check_file_freshness "$US_DRIFT_PATH" "$SNAPSHOT_STALE_MINUTES")
+KR_DRIFT_RESULT=$(check_file_freshness "$KR_DRIFT_PATH" "$DRIFT_STALE_MINUTES")
+US_DRIFT_RESULT=$(check_file_freshness "$US_DRIFT_PATH" "$DRIFT_STALE_MINUTES")
 ALLOCATION_RESULT=$(check_file_freshness "$ALLOCATION_PATH" "$ALLOCATION_STALE_MINUTES")
 TARGET_WEIGHTS_RESULT=$(check_file_freshness "$TARGET_WEIGHTS_PATH" "$ALLOCATION_STALE_MINUTES")
 

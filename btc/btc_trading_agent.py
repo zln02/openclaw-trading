@@ -18,7 +18,12 @@ from common.telegram import send_telegram as _tg_send, Priority as _TgPriority
 from common.supabase_client import get_supabase
 from common.logger import get_logger
 from common.retry import retry, retry_call
-from common.config import BTC_LOG
+from common.config import (
+    BTC_LOG,
+    BTC_MARKET_INTERVAL, BTC_MARKET_COUNT,
+    BTC_FG_API_TIMEOUT, BTC_DAILY_CACHE_TTL, BTC_AI_CACHE_TTL,
+    BTC_EXECUTION_SLIPPAGE, BTC_DB_RETRY_SLEEP, BTC_DB_RETRY_COUNT,
+)
 from common.utils import generate_order_id, check_order_idempotency
 from common.equity_loader import (
     append_equity_snapshot,
@@ -229,9 +234,52 @@ except Exception as _e:
 def send_telegram(msg: str, priority: "_TgPriority" = _TgPriority.URGENT) -> None:
     _tg_send(msg, priority=priority)
 
+
+# ── 주문 실행 헬퍼 ────────────────────────────────────
+def _execute_sell(qty: float, label: str, *, pnl_pct: float | None = None,
+                  close: bool = True, price: float = 0.0) -> bool:
+    """Upbit 시장가 매도 + 메트릭 기록 + 선택적 포지션 종료."""
+    if DRY_RUN:
+        return True
+    try:
+        result = upbit.sell_market_order("KRW-BTC", qty)
+        if result is None or (isinstance(result, dict) and result.get("error")):
+            log.error(f"Upbit {label} 매도 실패: {result}")
+            return False
+    except Exception as e:
+        log.error(f"Upbit {label} 매도 API 에러: {e}")
+        send_telegram(f"🚨 BTC {label} 매도 API 에러: {e}")
+        return False
+    try:
+        from common.prometheus_metrics import record_trade, set_pnl
+        record_trade("BTC", "sell")
+        if pnl_pct is not None:
+            set_pnl("BTC", float(pnl_pct))
+    except Exception:
+        log.debug("Prometheus 매도 메트릭 기록 실패")
+    if close and price > 0:
+        close_all_positions(price)
+    return True
+
+
+def _execute_buy(invest_krw: float) -> dict | None:
+    """Upbit 시장가 매수. 성공 시 API 응답 dict, 실패 시 None."""
+    try:
+        result = upbit.buy_market_order("KRW-BTC", invest_krw)
+        if result is None or (isinstance(result, dict) and result.get("error")):
+            log.error(f"Upbit 매수 실패: {result}")
+            send_telegram(f"🚨 BTC 매수 API 에러: {result}")
+            return None
+        return result
+    except Exception as e:
+        log.error(f"Upbit 매수 API 에러: {e}")
+        send_telegram(f"🚨 BTC 매수 API 에러: {e}")
+        return None
+
+
 # ── 시장 데이터 ───────────────────────────────────
-def get_market_data():
-    return pyupbit.get_ohlcv("KRW-BTC", interval="minute5", count=200)
+def get_market_data() -> "pd.DataFrame | None":
+    return pyupbit.get_ohlcv("KRW-BTC", interval=BTC_MARKET_INTERVAL, count=BTC_MARKET_COUNT)
 
 
 def _market_data_ready(df) -> bool:
@@ -243,7 +291,8 @@ def _latest_market_price() -> float:
     if _market_data_ready(df):
         try:
             return float(df["close"].iloc[-1])
-        except Exception:
+        except Exception as e:
+            log.debug(f"최신 시장가 파싱 실패: {e}")
             return 0.0
     return 0.0
 
@@ -294,8 +343,8 @@ def get_volume_analysis(df) -> dict:
                     h_avg = h_df["volume"].rolling(20).mean().iloc[-1]
                     if h_avg > 0:
                         ratio = round(h_cur / h_avg, 2)
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug(f"1시간봉 거래량 fallback 실패: {e}")
 
         if ratio >= 2.0:
             label = "🔥 거래량 급등 (강한 신호)"
@@ -315,7 +364,7 @@ def get_volume_analysis(df) -> dict:
 def get_fear_greed() -> dict:
     try:
         res = retry_call(requests.get, args=("https://api.alternative.me/fng/?limit=1",),
-                         kwargs={"timeout": 5}, max_attempts=2, default=None)
+                         kwargs={"timeout": BTC_FG_API_TIMEOUT}, max_attempts=2, default=None)
         if res is None:
             return {"value": 50, "label": "Unknown", "msg": "⚪ 중립(50)"}
         data  = res.json()["data"][0]
@@ -392,7 +441,7 @@ _daily_momentum_cache: dict = {"data": None, "ts": 0.0}
 def get_daily_momentum() -> dict:
     """yfinance BTC-USD 일봉으로 RSI/BB/거래량/수익률 분석. TTL 1시간 캐시."""
     import time as _time
-    _ttl = 3600  # 일봉 데이터는 1시간에 한 번만 갱신
+    _ttl = BTC_DAILY_CACHE_TTL
     now_ts = _time.time()
     if _daily_momentum_cache["data"] is not None and now_ts - _daily_momentum_cache["ts"] < _ttl:
         return _daily_momentum_cache["data"]
@@ -636,8 +685,8 @@ def open_position(entry_price, quantity, entry_krw) -> bool:
     try:
         supabase.table("btc_position").insert({**row, "highest_price": entry_price}).execute()
         return True
-    except Exception:
-        pass
+    except Exception as e:
+        log.debug(f"highest_price 포함 포지션 오픈 실패, fallback 시도: {e}")
     try:
         supabase.table("btc_position").insert(row).execute()
         return True
@@ -759,8 +808,8 @@ def check_daily_loss() -> bool:
                 f"봇 자동 정지 — 내일 재시작"
             )
             return True
-    except Exception:
-        pass
+    except Exception as e:
+        log.debug(f"일일 손실 한도 체크 실패: {e}")
     return False
 
 # ── 룰 기반 BTC 신호 (LLM 대체, 결정론적) ─────────
@@ -1027,7 +1076,7 @@ RSI: {rsi_d:.1f} | BB%: {mom.get('bb_pct', 50):.1f}% | 7일수익: {mom.get('ret
         raw = call_haiku(user_prompt, system=system_prompt, max_tokens=200, temperature=0.1)
         raw = raw.replace("```json", "").replace("```", "").strip()
         result = json.loads(raw)
-        set_cached(cache_key, result, ttl=600)  # 10분
+        set_cached(cache_key, result, ttl=BTC_AI_CACHE_TTL)
         return result
     except Exception as e:
         log.warning(f"AI 분석 실패: {e}")
@@ -1124,8 +1173,8 @@ def execute_trade(
                     supabase.table("btc_position").update(
                         {"highest_price": highest}
                     ).eq("id", pos["id"]).execute()
-                except Exception:
-                    pass
+                except Exception as e:
+                    log.debug(f"highest_price DB 업데이트 실패: {e}")
 
         # 적응형 트레일링 스탑: 수익 구간별 트레일링 % 조절
         if net_change > RISK["trailing_activate"] and highest > 0:
@@ -1140,25 +1189,8 @@ def execute_trade(
             else:
                 trail_pct = RISK["trailing_stop"]
             if drop >= trail_pct:
-                if not DRY_RUN:
-                    sell_ok = False
-                    try:
-                        result = upbit.sell_market_order("KRW-BTC", btc_balance * 0.9995)
-                        if result is None or "error" in str(result).lower():
-                            log.error(f"Upbit 트레일링 매도 실패: {result}")
-                        else:
-                            sell_ok = True
-                    except Exception as e:
-                        log.error(f"Upbit 트레일링 매도 API 에러: {e}")
-                        send_telegram(f"🚨 BTC 트레일링 매도 API 에러: {e}")
-                    if sell_ok:
-                        try:
-                            from common.prometheus_metrics import record_trade, set_pnl
-                            record_trade("BTC", "sell")
-                            set_pnl("BTC", float(net_change * 100))
-                        except Exception:
-                            pass
-                        close_all_positions(price)
+                sell_qty = btc_balance * (1 - BTC_EXECUTION_SLIPPAGE)
+                _execute_sell(sell_qty, "트레일링", pnl_pct=net_change * 100, price=price)
                 send_telegram(
                     f"📉 <b>트레일링 스탑</b>\n"
                     f"고점: {highest:,.0f}원 → 현재가: {price:,.0f}원\n"
@@ -1169,25 +1201,8 @@ def execute_trade(
         # ATR 동적 손절 (진입 시 계산된 ATR 기반 손절가)
         atr_stop_price = float(pos.get("atr_stop_price") or 0)
         if atr_stop_price and price < atr_stop_price:
-            if not DRY_RUN:
-                sell_ok = False
-                try:
-                    result = upbit.sell_market_order("KRW-BTC", btc_balance * 0.9995)
-                    if result is None or "error" in str(result).lower():
-                        log.error(f"Upbit ATR 손절 매도 실패: {result}")
-                    else:
-                        sell_ok = True
-                except Exception as e:
-                    log.error(f"Upbit ATR 손절 매도 API 에러: {e}")
-                    send_telegram(f"🚨 BTC ATR 손절 매도 API 에러: {e}")
-                if sell_ok:
-                    try:
-                        from common.prometheus_metrics import record_trade, set_pnl
-                        record_trade("BTC", "sell")
-                        set_pnl("BTC", float(net_change * 100))
-                    except Exception:
-                        pass
-                    close_all_positions(price)
+            sell_qty = btc_balance * (1 - BTC_EXECUTION_SLIPPAGE)
+            _execute_sell(sell_qty, "ATR손절", pnl_pct=net_change * 100, price=price)
             send_telegram(
                 f"🛑 <b>ATR 동적 손절</b>\n"
                 f"진입가: {entry_price:,}원\n"
@@ -1198,30 +1213,13 @@ def execute_trade(
                 try:
                     notify_openclaw("btc_stop_loss", "BTC 손절 실행", urgent=True)
                 except Exception:
-                    pass
+                    log.debug("notify_openclaw ATR손절 알림 실패")
             return {"result": "ATR_STOP_LOSS"}
 
         # 고정 % 손절 (fallback)
         if net_change <= RISK["stop_loss"]:
-            if not DRY_RUN:
-                sell_ok = False
-                try:
-                    result = upbit.sell_market_order("KRW-BTC", btc_balance * 0.9995)
-                    if result is None or "error" in str(result).lower():
-                        log.error(f"Upbit 고정손절 매도 실패: {result}")
-                    else:
-                        sell_ok = True
-                except Exception as e:
-                    log.error(f"Upbit 고정손절 매도 API 에러: {e}")
-                    send_telegram(f"🚨 BTC 고정손절 매도 API 에러: {e}")
-                if sell_ok:
-                    try:
-                        from common.prometheus_metrics import record_trade, set_pnl
-                        record_trade("BTC", "sell")
-                        set_pnl("BTC", float(net_change * 100))
-                    except Exception:
-                        pass
-                    close_all_positions(price)
+            sell_qty = btc_balance * (1 - BTC_EXECUTION_SLIPPAGE)
+            _execute_sell(sell_qty, "고정손절", pnl_pct=net_change * 100, price=price)
             send_telegram(
                 f"🛑 <b>손절 실행</b>\n"
                 f"진입가: {entry_price:,}원\n"
@@ -1232,7 +1230,7 @@ def execute_trade(
                 try:
                     notify_openclaw("btc_stop_loss", "BTC 손절 실행", urgent=True)
                 except Exception:
-                    pass
+                    log.debug("notify_openclaw 고정손절 알림 실패")
             return {"result": "STOP_LOSS"}
 
         # ── 다단계 분할 익절 ──
@@ -1242,31 +1240,14 @@ def execute_trade(
         # 1단계: 8% → 보유량의 50% 매도
         if net_change >= RISK.get("partial_tp_pct", 0.08) and not partial_1_done and btc_balance > 0.0001:
             ratio = RISK.get("partial_tp_ratio", 0.50)
-            sell_qty = btc_balance * ratio * 0.9995
-            if not DRY_RUN:
-                sell_ok = False
+            sell_qty = btc_balance * ratio * (1 - BTC_EXECUTION_SLIPPAGE)
+            if _execute_sell(sell_qty, "분할익절1", pnl_pct=net_change * 100, close=False):
                 try:
-                    result = upbit.sell_market_order("KRW-BTC", sell_qty)
-                    if result is None or "error" in str(result).lower():
-                        log.error(f"Upbit 분할익절1 매도 실패: {result}")
-                    else:
-                        sell_ok = True
-                except Exception as e:
-                    log.error(f"Upbit 분할익절1 매도 API 에러: {e}")
-                    send_telegram(f"🚨 BTC 분할익절1 매도 API 에러: {e}")
-                if sell_ok:
-                    try:
-                        from common.prometheus_metrics import record_trade, set_pnl
-                        record_trade("BTC", "sell")
-                        set_pnl("BTC", float(net_change * 100))
-                    except Exception:
-                        pass
-                    try:
-                        supabase.table("btc_position").update(
-                            {"partial_1_sold": True, "partial_sold": True}
-                        ).eq("id", pos["id"]).execute()
-                    except Exception:
-                        pass
+                    supabase.table("btc_position").update(
+                        {"partial_1_sold": True, "partial_sold": True}
+                    ).eq("id", pos["id"]).execute()
+                except Exception:
+                    log.debug("분할익절1 DB 플래그 업데이트 실패")
             send_telegram(
                 f"🟡 <b>분할 익절 1단계 ({int(ratio*100)}%)</b>\n"
                 f"진입가: {entry_price:,}원 | 현재가: {price:,}원\n"
@@ -1279,31 +1260,14 @@ def execute_trade(
         if (net_change >= RISK.get("partial_tp_2_pct", 0.12)
                 and partial_1_done and not partial_2_done and btc_balance > 0.0001):
             ratio2 = RISK.get("partial_tp_2_ratio", 0.50)
-            sell_qty = btc_balance * ratio2 * 0.9995
-            if not DRY_RUN:
-                sell_ok = False
+            sell_qty = btc_balance * ratio2 * (1 - BTC_EXECUTION_SLIPPAGE)
+            if _execute_sell(sell_qty, "분할익절2", pnl_pct=net_change * 100, close=False):
                 try:
-                    result = upbit.sell_market_order("KRW-BTC", sell_qty)
-                    if result is None or "error" in str(result).lower():
-                        log.error(f"Upbit 분할익절2 매도 실패: {result}")
-                    else:
-                        sell_ok = True
-                except Exception as e:
-                    log.error(f"Upbit 분할익절2 매도 API 에러: {e}")
-                    send_telegram(f"🚨 BTC 분할익절2 매도 API 에러: {e}")
-                if sell_ok:
-                    try:
-                        from common.prometheus_metrics import record_trade, set_pnl
-                        record_trade("BTC", "sell")
-                        set_pnl("BTC", float(net_change * 100))
-                    except Exception:
-                        pass
-                    try:
-                        supabase.table("btc_position").update(
-                            {"partial_2_sold": True}
-                        ).eq("id", pos["id"]).execute()
-                    except Exception:
-                        pass
+                    supabase.table("btc_position").update(
+                        {"partial_2_sold": True}
+                    ).eq("id", pos["id"]).execute()
+                except Exception:
+                    log.debug("분할익절2 DB 플래그 업데이트 실패")
             send_telegram(
                 f"🟢 <b>분할 익절 2단계 ({int(ratio2*100)}%)</b>\n"
                 f"진입가: {entry_price:,}원 | 현재가: {price:,}원\n"
@@ -1314,25 +1278,8 @@ def execute_trade(
 
         # 최대 익절 전량 (설정값%)
         if net_change >= RISK["take_profit"]:
-            if not DRY_RUN:
-                sell_ok = False
-                try:
-                    result = upbit.sell_market_order("KRW-BTC", btc_balance * 0.9995)
-                    if result is None or "error" in str(result).lower():
-                        log.error(f"Upbit 전량익절 매도 실패: {result}")
-                    else:
-                        sell_ok = True
-                except Exception as e:
-                    log.error(f"Upbit 전량익절 매도 API 에러: {e}")
-                    send_telegram(f"🚨 BTC 전량익절 매도 API 에러: {e}")
-                if sell_ok:
-                    try:
-                        from common.prometheus_metrics import record_trade, set_pnl
-                        record_trade("BTC", "sell")
-                        set_pnl("BTC", float(net_change * 100))
-                    except Exception:
-                        pass
-                    close_all_positions(price)
+            sell_qty = btc_balance * (1 - BTC_EXECUTION_SLIPPAGE)
+            _execute_sell(sell_qty, "전량익절", pnl_pct=net_change * 100, price=price)
             send_telegram(
                 f"✅ <b>전량 익절</b>\n"
                 f"진입가: {entry_price:,}원 | 현재가: {price:,}원\n"
@@ -1406,28 +1353,20 @@ def execute_trade(
             )
             log.info(f"SmartRouter: {getattr(_route_dec, 'route', 'MARKET')} "
                      f"(spread={getattr(_route_dec, 'spread_bps', 0):.1f}bps)")
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug(f"SmartRouter 라우팅 결정 실패: {e}")
 
         if not DRY_RUN:
-            # audit fix: Upbit API 예외 처리
-            try:
-                result = upbit.buy_market_order("KRW-BTC", invest_krw)
-                if result is None or "error" in str(result).lower():
-                    log.error(f"Upbit 매수 실패: {result}")
-                    send_telegram(f"🚨 BTC 매수 API 에러: {result}")
-                    return {"result": "ORDER_FAILED", "reason": str(result)}
-            except Exception as e:
-                log.error(f"Upbit 매수 API 에러: {e}")
-                send_telegram(f"🚨 BTC 매수 API 에러: {e}")
-                return {"result": "ORDER_FAILED", "reason": str(e)}
+            result = _execute_buy(invest_krw)
+            if result is None:
+                return {"result": "ORDER_FAILED", "reason": "Upbit API 실패"}
             qty    = float(result.get("executed_volume", 0)) or (invest_krw / price)
             # ATR 기반 손절가 계산 (진입 시점 ATR * 배수만큼 하락 시 손절)
             atr_val = indicators.get("atr", 0)
             atr_stop = round(price - atr_val * RISK["atr_multiplier"]) if atr_val else None
             # DB 저장 3회 재시도 (레이스 컨디션 방지)
             ok = False
-            for _attempt in range(3):
+            for _attempt in range(BTC_DB_RETRY_COUNT):
                 ok = open_position_with_context(
                     price,
                     qty,
@@ -1448,10 +1387,10 @@ def execute_trade(
                 )
                 if ok:
                     break
-                log.warning(f"포지션 DB 저장 재시도 {_attempt + 1}/3")
-                import time as _time; _time.sleep(2)
+                log.warning(f"포지션 DB 저장 재시도 {_attempt + 1}/{BTC_DB_RETRY_COUNT}")
+                import time as _time; _time.sleep(BTC_DB_RETRY_SLEEP)
             if not ok:
-                log.error(f"포지션 DB 저장 3회 실패. qty={qty:.8f} BTC — 수동 확인 필요")
+                log.error(f"포지션 DB 저장 {BTC_DB_RETRY_COUNT}회 실패. qty={qty:.8f} BTC — 수동 확인 필요")
                 send_telegram(
                     f"⚠️ BTC 매수 성공했으나 DB 저장 실패 (3회 재시도).\n"
                     f"수량: {qty:.8f} BTC\n수동 확인 후 처리하세요.",
@@ -1491,20 +1430,20 @@ def execute_trade(
         if notify_openclaw:
             try:
                 notify_openclaw("btc_buy", "BTC 매수 체결", metadata={"price": price})
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug(f"notify_openclaw 매수 알림 실패: {e}")
         if _sheets_append:
             try:
                 _sheets_append("btc", "매수", "BTC", price, qty, None, signal.get("reason", ""))
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug(f"Sheets 매수 기록 실패: {e}")
         # audit fix: Prometheus 메트릭 연동
         try:
             from common.prometheus_metrics import record_trade, set_signal_score
             record_trade("BTC", "buy")
             set_signal_score("BTC", "composite", float((comp or {}).get("total", 0) if isinstance(comp, dict) else 0))
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug(f"Prometheus 매수 메트릭 기록 실패: {e}")
         return {"result": f"BUY_{stage}차"}
 
     # ── AI SELL ──
@@ -1515,23 +1454,8 @@ def execute_trade(
             _sell_ep = float(pos.get("entry_price") or 0)
             if _sell_ep > 0:
                 pnl_pct = (price - _sell_ep) / _sell_ep * 100
-        _ai_sell_ok = False
-        if not DRY_RUN:
-            sell_ok = False
-            try:
-                result = upbit.sell_market_order("KRW-BTC", btc_balance * 0.9995)
-                if result is None or "error" in str(result).lower():
-                    log.error(f"Upbit AI 매도 실패: {result}")
-                else:
-                    sell_ok = True
-            except Exception as e:
-                log.error(f"Upbit AI 매도 API 에러: {e}")
-                send_telegram(f"🚨 BTC AI 매도 API 에러: {e}")
-            if sell_ok:
-                _ai_sell_ok = True
-                close_all_positions(price)
-        else:
-            _ai_sell_ok = True  # DRY_RUN 시 알림/메트릭은 실행
+        sell_qty = btc_balance * (1 - BTC_EXECUTION_SLIPPAGE)
+        _ai_sell_ok = _execute_sell(sell_qty, "AI매도", pnl_pct=pnl_pct, price=price)
         send_telegram(
             f"🔴 <b>BTC 매도</b>\n"
             f"💰 가격: {price:,}원\n"
@@ -1542,29 +1466,20 @@ def execute_trade(
         if notify_openclaw:
             try:
                 notify_openclaw("btc_sell", "BTC 매도 체결", metadata={"price": price})
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug(f"notify_openclaw 매도 알림 실패: {e}")
         if _sheets_append:
             try:
                 action = "손절" if pnl_pct is not None and pnl_pct < -2 else "익절" if pnl_pct is not None and pnl_pct > 2 else "매도"
                 _sheets_append("btc", action, "BTC", price, btc_balance, pnl_pct, signal.get("reason", ""))
-            except Exception:
-                pass
-        # audit fix: Prometheus 메트릭 연동 (sell 성공 시에만)
-        if _ai_sell_ok:
-            try:
-                from common.prometheus_metrics import record_trade, set_pnl
-                record_trade("BTC", "sell")
-                if pnl_pct is not None:
-                    set_pnl("BTC", float(pnl_pct))
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug(f"Sheets 매도 기록 실패: {e}")
         return {"result": "SELL"}
 
     return {"result": "HOLD"}
 
 # ── Supabase 로그 ─────────────────────────────────
-def save_log(indicators, signal, result, *, fg=None, volume=None, comp=None, funding=None, oi=None, ls_ratio=None, kimchi=None, market_regime=None):
+def save_log(indicators, signal, result, *, fg=None, volume=None, comp=None, funding=None, oi=None, ls_ratio=None, kimchi=None, market_regime=None) -> None:
     try:
         row = {
             "timestamp":          datetime.now(timezone.utc).isoformat(),
@@ -1605,7 +1520,7 @@ def save_log(indicators, signal, result, *, fg=None, volume=None, comp=None, fun
         log.error(f"Supabase 저장 실패: {e}")
 
 # ── 메인 사이클 ───────────────────────────────────
-def run_trading_cycle():
+def run_trading_cycle() -> dict:
     global _btc_buy_blocked
     # P1-1: DrawdownGuard가 설정한 _btc_buy_blocked 값을 사이클 간 유지해야 함
     # equity_curve가 있는 경우에만 DrawdownGuard가 값을 재설정함
@@ -1649,24 +1564,9 @@ def run_trading_cycle():
             if price <= 0:
                 log.warning("시장 데이터 없음 — WEEKLY_DELEVERAGE 가격 조회 실패, 즉시 매도 스킵")
                 return {"result": "MARKET_DATA_UNAVAILABLE"}
-            if pos and btc_balance > 0.00001 and not DRY_RUN:
-                sell_qty = btc_balance * 0.5 * 0.9995
-                sell_ok = False
-                try:
-                    result = upbit.sell_market_order("KRW-BTC", sell_qty)
-                    if result is None or "error" in str(result).lower():
-                        log.error(f"Upbit DELEVERAGE 매도 실패: {result}")
-                    else:
-                        sell_ok = True
-                except Exception as e:
-                    log.error(f"Upbit DELEVERAGE 매도 API 에러: {e}")
-                    send_telegram(f"🚨 BTC DELEVERAGE 매도 API 에러: {e}")
-                if sell_ok:
-                    try:
-                        from common.prometheus_metrics import record_trade
-                        record_trade("BTC", "sell")
-                    except Exception:
-                        pass
+            if pos and btc_balance > 0.00001:
+                sell_qty = btc_balance * 0.5 * (1 - BTC_EXECUTION_SLIPPAGE)
+                if _execute_sell(sell_qty, "DELEVERAGE", close=False):
                     try:
                         remaining_qty = max(float(pos.get("quantity", 0) or 0) - sell_qty, 0.0)
                         remaining_krw = max(float(pos.get("entry_krw", 0) or 0) * 0.5, 0.0)
@@ -1676,7 +1576,7 @@ def run_trading_cycle():
                             "highest_price": price,
                         }).eq("id", pos["id"]).execute()
                     except Exception:
-                        pass
+                        log.debug("DELEVERAGE 포지션 DB 업데이트 실패")
         if decision.get("force_liquidate"):
             # audit fix: 포지션 조회 실패 시 사이클 스킵
             try:
@@ -1689,24 +1589,9 @@ def run_trading_cycle():
             if price <= 0:
                 log.warning("시장 데이터 없음 — FULL_STOP 가격 조회 실패, 강제청산 스킵")
                 return {"result": "MARKET_DATA_UNAVAILABLE"}
-            if pos and btc_balance > 0.00001 and not DRY_RUN:
-                sell_ok = False
-                try:
-                    result = upbit.sell_market_order("KRW-BTC", btc_balance * 0.9995)
-                    if result is None or "error" in str(result).lower():
-                        log.error(f"Upbit FULL_STOP 매도 실패: {result}")
-                    else:
-                        sell_ok = True
-                except Exception as e:
-                    log.error(f"Upbit FULL_STOP 매도 API 에러: {e}")
-                    send_telegram(f"🚨 BTC FULL_STOP 매도 API 에러: {e}")
-                if sell_ok:
-                    try:
-                        from common.prometheus_metrics import record_trade
-                        record_trade("BTC", "sell")
-                    except Exception:
-                        pass
-                    close_all_positions(price)
+            if pos and btc_balance > 0.00001:
+                sell_qty = btc_balance * (1 - BTC_EXECUTION_SLIPPAGE)
+                _execute_sell(sell_qty, "FULL_STOP", price=price)
             return {"result": "FULL_STOP"}
 
     # 일일 손실 한도 체크
@@ -1801,8 +1686,8 @@ def run_trading_cycle():
                 inflow_avg_btc=_bl,
                 outflow_avg_btc=_bl,
             )
-    except Exception:
-        pass
+    except Exception as e:
+        log.debug(f"고래 시그널 분류 실패: {e}")
 
     # ── 시장 레짐 (v6.1: 동적 가중치 실제 연동) ──
     try:
@@ -1853,8 +1738,8 @@ def run_trading_cycle():
 
             if patch:
                 supabase.table("btc_position").update(patch).eq("id", pos["id"]).execute()
-    except Exception:
-        pass
+    except Exception as e:
+        log.debug(f"포지션 컨텍스트 백필 실패: {e}")
 
     # 일일 리포트용 상태 캐시 저장
     try:
@@ -1868,8 +1753,8 @@ def run_trading_cycle():
             "rsi": rsi_d,
             "updated": datetime.now(timezone.utc).isoformat(),
         }, ensure_ascii=False), encoding="utf-8")
-    except Exception:
-        pass
+    except Exception as e:
+        log.debug(f"BTC 상태 캐시 저장 실패: {e}")
 
     log.info(f"F&G: {fg['label']}({fg_value}) | 1h: {htf['trend']} | dRSI: {rsi_d} | 5mRSI: {rsi_5m}")
     log.info(f"BB: {momentum['bb_pct']:.0f}% | dVol: {momentum['vol_ratio_d']}x | 7d: {momentum['ret_7d']:+.1f}% | 30d: {momentum['ret_30d']:+.1f}%")
@@ -2076,8 +1961,8 @@ def run_trading_cycle():
         from common.prometheus_metrics import record_agent_cycle, set_signal_score
         record_agent_cycle("BTC", "success")
         set_signal_score("BTC", "composite", float((comp or {}).get("total", 0) if isinstance(comp, dict) else 0))
-    except Exception:
-        pass
+    except Exception as e:
+        log.debug(f"Prometheus 사이클 메트릭 기록 실패: {e}")
 
     return result
 

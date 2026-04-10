@@ -18,6 +18,10 @@ import pyupbit
 from ta.momentum import RSIIndicator
 from ta.volatility import BollingerBands
 
+from common.logger import get_logger
+
+log = get_logger("btc_swing_backtest")
+
 # ── 파라미터 ──
 INVEST_RATIO = 0.10          # 진입 시 자본의 10% (소액)
 FEE_BUY = 0.001
@@ -48,7 +52,7 @@ def fetch_fear_greed_history(days: int) -> dict:
             out[date_str] = int(item.get("value", 50))
         return out
     except Exception as e:
-        print(f"⚠️ F&G API 실패: {e} → RSI만 사용")
+        log.warning(f"F&G API 실패: {e} → RSI만 사용")
         return {}
 
 

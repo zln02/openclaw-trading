@@ -74,3 +74,9 @@ urban-immune-system/
 # SQLite / DB 파일 (secretary/agency_memory.db 등)
 *.db
 *.sqlite3
+
+# ML 학습 아티팩트
+catboost_info/
+
+# 감사 백업 (로컬 전용)
+brain.bak.*/

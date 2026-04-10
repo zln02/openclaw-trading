@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from common.env_loader import load_env
 from common.logger import get_logger
 from common.config import STOCK_PREMARKET_LOG
+from common.llm_client import call_haiku, is_quota_exceeded
 
 load_env()
 _log = get_logger("stock_premarket", STOCK_PREMARKET_LOG)
@@ -36,7 +37,6 @@ from supabase import create_client
 
 TG_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
 TG_CHAT = os.environ.get('TELEGRAM_CHAT_ID', '')
-OPENAI_KEY = os.environ.get('OPENAI_API_KEY', '')
 SUPABASE_URL = os.environ.get('SUPABASE_URL', '')
 SUPABASE_KEY = os.environ.get('SUPABASE_SECRET_KEY', '')
 
@@ -442,15 +442,12 @@ def analyze_with_ai(
     yesterday: str,
     fundamentals: dict,
 ) -> dict:
-    """GPT로 오늘 전략 수립"""
-    if not OPENAI_KEY:
-        log('OpenAI 키 없음 → 룰 기반 전략 생성', 'WARN')
+    """Claude Haiku로 오늘 전략 수립"""
+    if is_quota_exceeded():
+        log('Claude quota 초과 → 룰 기반 전략 생성', 'WARN')
         return generate_rule_based_strategy(indicators)
 
     try:
-        from openai import OpenAI
-        client = OpenAI(api_key=OPENAI_KEY)
-
         us_summary = '\n'.join(
             f"  {m['name']}: {(m.get('price') or 0):,.2f} ({(m.get('change_pct') or 0):+.2f}%)"
             for m in us_market
@@ -491,11 +488,32 @@ def analyze_with_ai(
             if lines:
                 fundamental_summary = '\n'.join(lines)
 
-        prompt = f"""당신은 연평균 수익률 50% 이상의 상위 1% 한국 주식 퀀트 트레이더입니다.
+        system_prompt = """당신은 연평균 수익률 50% 이상의 상위 1% 한국 주식 퀀트 트레이더입니다.
 현재 모의투자 환경이므로 최대한 공격적으로 수익을 추구합니다.
 50개 종목 중 오늘 수익 가능성이 가장 높은 종목을 선별합니다. 보수적 판단은 하지 마세요. 기회가 보이면 BUY로 추천합니다.
 
-[미국 증시 마감]
+[분석 원칙]
+1. 50개 전체 스캐닝 후 상위 10개만 추천 (나머지는 무시)
+2. RSI 45 이하 종목은 적극 BUY 추천
+3. 섹터 모멘텀이 살아있으면 해당 섹터 종목 우선
+4. 미국 증시 긍정 → 반도체/IT 공격 매수
+5. 미국 증시 부정 → 방어주(금융/통신) 또는 역발상 매수
+6. 최소 BUY 3개, WATCH 3개 이상 추천
+
+[출력 형식]
+반드시 아래 JSON만 출력 (다른 텍스트 금지):
+{
+  "date": "YYYY-MM-DD",
+  "market_outlook": "강세|중립|약세",
+  "risk_level": "낮음|보통|높음",
+  "sector_view": {"반도체": "긍정|중립|부정", ...},
+  "top_picks": [
+    {"code": "005930", "name": "삼성전자", "action": "BUY", "reason": "이유"}
+  ],
+  "summary": "한줄 요약"
+}"""
+
+        user_prompt = f"""[미국 증시 마감]
 {us_summary}
 
 [한국 경제 뉴스]
@@ -510,39 +528,13 @@ def analyze_with_ai(
 [전일 매매]
 {yesterday}
 
-[분석 원칙]
-1. 50개 전체 스캐닝 후 상위 10개만 추천 (나머지는 무시)
-2. RSI 45 이하 종목은 적극 BUY 추천
-3. 섹터 모멘텀이 살아있으면 해당 섹터 종목 우선
-4. 미국 증시 긍정 → 반도체/IT 공격 매수
-5. 미국 증시 부정 → 방어주(금융/통신) 또는 역발상 매수
-6. 최소 BUY 3개, WATCH 3개 이상 추천
+오늘 날짜: {datetime.now().date().isoformat()}
+위 데이터를 분석해 JSON 전략을 출력하세요."""
 
-[분석 요청]
-1. market_outlook: 오늘 시장 전망 (강세/중립/약세)
-2. risk_level: 리스크 수준 (낮음/보통/높음)
-3. sector_view: 섹터별 전망
-4. top_picks: 상위 10개만 — code, name, action(BUY/WATCH/SELL), reason(한줄)
+        raw = call_haiku(user_prompt, system=system_prompt, max_tokens=800, temperature=0.2)
+        if raw is None:
+            raise ValueError('call_haiku 반환값 없음')
 
-반드시 아래 JSON만 출력:
-{{
-  "date": "{datetime.now().date().isoformat()}",
-  "market_outlook": "강세|중립|약세",
-  "risk_level": "낮음|보통|높음",
-  "sector_view": {{"반도체": "긍정|중립|부정", ...}},
-  "top_picks": [
-    {{"code": "005930", "name": "삼성전자", "action": "BUY", "reason": "이유"}}
-  ],
-  "summary": "한줄 요약"
-}}"""
-
-        res = client.chat.completions.create(
-            model='gpt-4o-mini',
-            messages=[{'role': 'user', 'content': prompt}],
-            temperature=0.2,
-            max_tokens=800,
-        )
-        raw = res.choices[0].message.content.strip()
         raw = raw.replace('```json', '').replace('```', '').strip()
 
         # JSON 추출

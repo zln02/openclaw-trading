@@ -31,6 +31,17 @@ STOCK_COLLECTOR_LOG = LOG_DIR / "stock_collector.log"
 US_TRADING_LOG = LOG_DIR / "us_trading.log"
 DASHBOARD_LOG = LOG_DIR / "dashboard.log"
 
+# ── BTC 에이전트 파라미터 ──────────────────────────────
+BTC_MARKET_INTERVAL = "minute5"
+BTC_MARKET_COUNT = 200
+BTC_HOURLY_COUNT = 30
+BTC_FG_API_TIMEOUT = 5
+BTC_DAILY_CACHE_TTL = 3600
+BTC_AI_CACHE_TTL = 600
+BTC_EXECUTION_SLIPPAGE = 0.0005  # 0.05%
+BTC_DB_RETRY_SLEEP = 2
+BTC_DB_RETRY_COUNT = 3
+
 STRATEGY_JSON = WORKSPACE / "stocks" / "today_strategy.json"
 OPENCLAW_JSON = Path(
     os.environ.get("OPENCLAW_CONFIG_PATH", str(OPENCLAW_ROOT / "openclaw.json"))
