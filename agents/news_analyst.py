@@ -6,12 +6,12 @@ Features:
 - Maintain daily cost budget (default $2/day)
 - Generate aggregated news_sentiment_score every batch
 - Claude API support: claude-haiku-4-5 (batch), claude-sonnet-4-6 (deep analysis)
-- OpenAI GPT-4o-mini fallback 유지
+- OpenAI GPT-4o-mini fallback 유지 (--model gpt-4o-mini 명시 시)
 
 Model selection:
   model="claude-haiku"   → claude-haiku-4-5-20251001  (저비용 배치)
   model="claude-sonnet"  → claude-sonnet-4-6           (고품질 분석)
-  model="gpt-4o-mini"    → OpenAI GPT-4o-mini          (기존 기본값)
+  model="gpt-4o-mini"    → OpenAI GPT-4o-mini          (명시적 fallback)
 """
 from __future__ import annotations
 
@@ -197,7 +197,7 @@ def _resolve_claude_id(model: str) -> str:
 class NewsAnalyst:
     def __init__(
         self,
-        model: str = "gpt-4o-mini",
+        model: str = "claude-haiku",
         daily_budget_usd: float = 2.0,
         batch_minutes: int = 5,
     ):
@@ -255,8 +255,15 @@ class NewsAnalyst:
             usd = (in_tokens / 1000.0) * 0.0002 + (out_tokens / 1000.0) * 0.0008
         return float(usd), int(in_tokens + out_tokens)
 
+    _NEWS_SYSTEM_PROMPT = (
+        "당신은 금융 뉴스 감성 분석 전문가입니다. "
+        "뉴스 헤드라인/본문을 분석해 해당 종목에 대한 감성(POSITIVE/NEGATIVE/NEUTRAL)과 "
+        "영향도(0~100)를 JSON으로만 출력하세요. "
+        '형식: {"sentiment":"POSITIVE|NEGATIVE|NEUTRAL","impact":0~100,"reason":"한줄이유"}'
+    )
+
     def _call_claude(self, prompt: str, max_tokens: int = 180) -> Optional[str]:
-        """Anthropic Claude API 호출 (단일 메시지)."""
+        """Anthropic Claude API 호출 (system prompt 캐싱 적용)."""
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
         if not api_key:
             return None
@@ -266,6 +273,13 @@ class NewsAnalyst:
             msg = client.messages.create(
                 model=self.model,
                 max_tokens=max_tokens,
+                system=[
+                    {
+                        "type": "text",
+                        "text": self._NEWS_SYSTEM_PROMPT,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
                 messages=[{"role": "user", "content": prompt}],
             )
             return (msg.content[0].text or "").strip() if msg.content else None
@@ -658,7 +672,7 @@ def _cli() -> int:
     parser.add_argument("--budget", type=float, default=2.0)
     parser.add_argument(
         "--model",
-        default="gpt-4o-mini",
+        default="claude-haiku",
         help="모델 선택: gpt-4o-mini | claude-haiku | claude-sonnet (claude-haiku = claude-haiku-4-5-20251001)",
     )
     parser.add_argument("--stream-seconds", type=int, default=0, help="run realtime stream mode for N seconds")
