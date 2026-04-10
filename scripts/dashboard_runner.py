@@ -109,12 +109,14 @@ class IntegratedDashboard:
             return False
     
     def get_dashboard_links(self) -> dict:
-        """대시보드 링크 정보 반환"""
+        """대시보드 링크 정보 반환 — 환경변수 기반 URL 생성"""
+        from common.sheets_manager import MAIN_SHEET_ID, PORTFOLIO_SHEET_ID, STATISTICS_SHEET_ID, RISK_SHEET_ID
+        _BASE = "https://docs.google.com/spreadsheets/d"
         return {
-            "main_sheet": "https://docs.google.com/spreadsheets/d/1HXBiwg38i2LrgOgC3mjokH0sTk7qgq7Q8o4jdWOe58s/edit",
-            "portfolio": "https://docs.google.com/spreadsheets/d/12nutQo_rA6BVo9xjbIrFhS6PLaz4uC_m82pdIMUIuZA/edit",
-            "statistics": "https://docs.google.com/spreadsheets/d/16ai_PTJ6XfIpPaio-AnaNY7aQaDPrdqtrvpA91nUH14/edit",
-            "risk_management": "https://docs.google.com/spreadsheets/d/1MijDcgoFp6hY1bhl9fhHKTBFpK4yBXZL9lzNZ_MaK-w/edit"
+            "main_sheet": f"{_BASE}/{MAIN_SHEET_ID}/edit" if MAIN_SHEET_ID else "",
+            "portfolio": f"{_BASE}/{PORTFOLIO_SHEET_ID}/edit" if PORTFOLIO_SHEET_ID else "",
+            "statistics": f"{_BASE}/{STATISTICS_SHEET_ID}/edit" if STATISTICS_SHEET_ID else "",
+            "risk_management": f"{_BASE}/{RISK_SHEET_ID}/edit" if RISK_SHEET_ID else "",
         }
 
 
@@ -134,13 +136,14 @@ def main():
     if success:
         print("🎉 대시보드 업데이트 성공!")
         
-        # 링크 정보 출력
+        # 링크 정보 출력 (환경변수 설정된 항목만)
         links = dashboard.get_dashboard_links()
-        print("\n📊 대시보드 링크:")
-        print(f"• 메인 거래기록: {links['main_sheet']}")
-        print(f"• 포트폴리오 요약: {links['portfolio']}")
-        print(f"• 통계 분석: {links['statistics']}")
-        print(f"• 위험 관리: {links['risk_management']}")
+        active_links = {k: v for k, v in links.items() if v}
+        if active_links:
+            print("\n📊 대시보드 링크:")
+            labels = {"main_sheet": "메인 거래기록", "portfolio": "포트폴리오 요약", "statistics": "통계 분석", "risk_management": "위험 관리"}
+            for key, url in active_links.items():
+                print(f"• {labels.get(key, key)}: {url}")
         
         sys.exit(0)
     else:

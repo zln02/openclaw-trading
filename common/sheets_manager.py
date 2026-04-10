@@ -25,12 +25,11 @@ from common.telegram import send_telegram
 load_env()
 log = get_logger("sheets_manager")
 
-# 시트 ID 설정 — 환경변수 우선, fallback은 .env에 설정 권장
-# .env 예시: GOOGLE_PORTFOLIO_SHEET_ID=12nutQo_...
+# 시트 ID 설정 — .env에 GOOGLE_*_SHEET_ID 환경변수 필수
 MAIN_SHEET_ID       = os.getenv("GOOGLE_SHEET_ID", "")
-PORTFOLIO_SHEET_ID  = os.getenv("GOOGLE_PORTFOLIO_SHEET_ID",  "12nutQo_rA6BVo9xjbIrFhS6PLaz4uC_m82pdIMUIuZA")
-STATISTICS_SHEET_ID = os.getenv("GOOGLE_STATISTICS_SHEET_ID", "16ai_PTJ6XfIpPaio-AnaNY7aQaDPrdqtrvpA91nUH14")
-RISK_SHEET_ID       = os.getenv("GOOGLE_RISK_SHEET_ID",       "1MijDcgoFp6hY1bhl9fhHKTBFpK4yBXZL9lzNZ_MaK-w")
+PORTFOLIO_SHEET_ID  = os.getenv("GOOGLE_PORTFOLIO_SHEET_ID", "")
+STATISTICS_SHEET_ID = os.getenv("GOOGLE_STATISTICS_SHEET_ID", "")
+RISK_SHEET_ID       = os.getenv("GOOGLE_RISK_SHEET_ID", "")
 
 class AdvancedSheetsManager:
     """고급 Google Sheets 관리자"""

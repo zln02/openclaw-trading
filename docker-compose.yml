@@ -75,6 +75,7 @@ services:
   telegram-bot:
     build: .
     command: ["python", "stocks/telegram_bot.py"]
+    user: "1000:1000"
     env_file: .env
     environment:
       - PYTHONPATH=/app
@@ -105,7 +106,7 @@ services:
     volumes:
       - grafana_data:/var/lib/grafana
     environment:
-      - GF_SECURITY_ADMIN_PASSWORD=openclaw
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:?GRAFANA_PASSWORD must be set}
     restart: unless-stopped
     depends_on:
       - prometheus
