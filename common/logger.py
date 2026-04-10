@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -52,6 +53,15 @@ def _json_safe(value):
     return str(value)
 
 
+_SENSITIVE_RE = re.compile(
+    r"(sk-proj-|sk-ant-api|Bearer |eyJhbG)[A-Za-z0-9_/+=\-]{8,}",
+)
+
+def _redact(msg: str) -> str:
+    """민감 정보(API 키 등) 마스킹."""
+    return _SENSITIVE_RE.sub(lambda m: m.group()[:8] + "***REDACTED***", msg)
+
+
 class JsonFormatter(logging.Formatter):
     """로그 레코드를 JSON-line 으로 직렬화 (구조화 로그용)."""
 
@@ -61,7 +71,7 @@ class JsonFormatter(logging.Formatter):
             "ts":     self.formatTime(record, "%Y-%m-%dT%H:%M:%S"),
             "level":  record.levelname,
             "logger": record.name,
-            "event":  record.message,
+            "event":  _redact(record.message),
         }
         # log.trade("BTC 매수", market="btc", action="buy", price=142000000)
         # → extra 필드로 JSON에 포함
@@ -130,7 +140,12 @@ class AgentLogger:
                     jsonl_path.unlink()
                 except PermissionError:
                     pass  # 삭제도 안 되면 JSON 핸들러 없이 진행
-            jfh = logging.FileHandler(jsonl_path, encoding="utf-8")
+            jfh = RotatingFileHandler(
+                jsonl_path,
+                maxBytes=50 * 1024 * 1024,  # 50MB
+                backupCount=3,
+                encoding="utf-8",
+            )
             jfh.setLevel(logging.DEBUG)
             jfh.setFormatter(JsonFormatter())
             self._log.addHandler(jfh)
@@ -168,7 +183,7 @@ class AgentLogger:
         if kw:
             parts = [f"{k}={v}" for k, v in kw.items()]
             extra = " | " + ", ".join(parts)
-        return f"{prefix} {msg}{extra}"
+        return _redact(f"{prefix} {msg}{extra}")
 
 
 def get_logger(name: str, log_file: Optional[Path] = None) -> AgentLogger:

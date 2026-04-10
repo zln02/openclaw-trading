@@ -19,3 +19,4 @@ secretary/.venv/
 tests/
 .env.runtime
 .docker-secrets/
+memory/

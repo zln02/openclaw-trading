@@ -14,7 +14,7 @@ services:
     volumes:
       - ./brain:/app/brain
       - ./logs:/app/logs
-      - /home/wlsdud5035/openclaw/logs:/app/external_logs:ro
+      - /home/wlsdud5035/.openclaw/logs:/app/external_logs:ro
       - /home/wlsdud5035/.openclaw/.docker-secrets:/run/secrets/openclaw:ro
     restart: unless-stopped
     healthcheck:
@@ -86,6 +86,21 @@ services:
     restart: unless-stopped
     depends_on:
       - dashboard
+
+  telegram-bot:
+    build: .
+    command: ["bash", "-c", "while true; do python stocks/telegram_bot.py; sleep 5; done"]
+    env_file: .env
+    environment:
+      - PYTHONPATH=/app
+      - OPENCLAW_CONFIG_DIR=/app
+      - OPENCLAW_WORKSPACE_DIR=/app
+      - OPENCLAW_LOG_DIR=/app/logs
+    volumes:
+      - ./brain:/app/brain
+      - ./logs:/app/logs
+      - /home/wlsdud5035/.openclaw/.docker-secrets:/run/secrets/openclaw:ro
+    restart: unless-stopped
 
   prometheus:
     image: prom/prometheus:latest

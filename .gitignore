@@ -66,6 +66,11 @@ urban-immune-system/
 # 런타임 상태 파일
 .openclaw/
 
+# Docker secrets / 런타임 환경 파일
+.docker-secrets/
+.env.runtime
+.env.secure
+
 # SQLite / DB 파일 (secretary/agency_memory.db 등)
 *.db
 *.sqlite3
