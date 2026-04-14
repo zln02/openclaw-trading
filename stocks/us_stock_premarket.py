@@ -8,18 +8,16 @@
 - 텔레그램 브리핑
 """
 
-import os
 import sys
-import json
 from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from common.env_loader import load_env
-from common.telegram import send_telegram
-from common.supabase_client import get_supabase
-from common.logger import get_logger
 from common.config import US_TRADING_LOG
+from common.env_loader import load_env
+from common.logger import get_logger
+from common.supabase_client import get_supabase
+from common.telegram import send_telegram
 
 load_env()
 _log = get_logger("us_premarket", US_TRADING_LOG)

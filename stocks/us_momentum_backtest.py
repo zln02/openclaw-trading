@@ -13,11 +13,10 @@
 """
 
 import sys
-import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Dict, Tuple
+from typing import Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
@@ -26,7 +25,6 @@ import yfinance as yf
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from common.env_loader import load_env
 from common.supabase_client import get_supabase
-
 
 # ─────────────────────────────────────────────
 # 유니버스 정의 (파일/웹 연동 전까지 파일 내 상수로 관리)
@@ -292,8 +290,6 @@ def backtest_monthly_rotation(
         # 포트폴리오 평가
         if i > 0:
             reb_idx = dates.get_loc(reb_date)
-            prev_date = rebalance_dates[i - 1]
-            prev_idx = dates.get_loc(prev_date)
             price_row = closes.iloc[reb_idx]
             value = 0.0
             for sym, shares in current_positions.items():
@@ -401,4 +397,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

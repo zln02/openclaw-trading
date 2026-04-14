@@ -1,21 +1,35 @@
 """BTC-related API endpoints."""
-import os, time, json, requests, asyncio, re
+import asyncio
+import json
+import os
+import re
+import sys as _sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
-from fastapi import APIRouter, Query
-from fastapi.responses import HTMLResponse
-import psutil
 
-import sys as _sys
+import psutil
+import requests
+from fastapi import APIRouter, Query
+
 _sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from common.supabase_client import get_supabase
-from common.config import BTC_LOG, BRAIN_PATH, LOG_DIR, MEMORY_PATH
+from common.config import BRAIN_PATH, BTC_LOG, LOG_DIR, MEMORY_PATH
 from common.logger import get_logger
+from common.supabase_client import get_supabase
 
 log = get_logger("btc_api")
 
-supabase = get_supabase()
+_supabase = None
+
+
+def _get_sb():
+    global _supabase
+    if _supabase is None:
+        _supabase = get_supabase()
+    return _supabase
+
+
 router = APIRouter()
 
 # ── caches ──────────────────────────────────────────────
@@ -45,7 +59,6 @@ KST = ZoneInfo("Asia/Seoul")
 
 
 def _refresh_upbit_cache():
-    global _upbit_cache
     # Cache TTL: 60s. However, if we have a KRW value but the extended fields
     # are still missing (e.g. after a hot reload/deploy), refresh immediately.
     if time.time() - _upbit_cache["time"] <= 60:
@@ -98,7 +111,6 @@ def _refresh_upbit_cache():
 
 def _get_fx_rate():
     """Fetch real-time USD to KRW exchange rate."""
-    global _fx_cache
     if time.time() - _fx_cache["time"] < FX_CACHE_TTL:
         return _fx_cache["rate"]
     try:
@@ -111,7 +123,7 @@ def _get_fx_rate():
             return _fx_cache["rate"]
     except Exception:
         pass
-    
+
     try:
         # Fallback: Get rate from exchange API
         r = requests.get("https://api.exchangerate-api.com/v4/latest/USD", timeout=5)
@@ -122,7 +134,7 @@ def _get_fx_rate():
             return _fx_cache["rate"]
     except Exception:
         pass
-    
+
     return _fx_cache["rate"]  # Return cached or default (1300)
 
 
@@ -306,7 +318,6 @@ def _btc_live_log_lines(limit: int = 80) -> list[str]:
 
 
 def _get_hourly_trend():
-    global _trend_cache
     if time.time() - _trend_cache["time"] < 300:
         return _trend_cache["value"]
     try:
@@ -380,8 +391,8 @@ def _compute_composite_sync():
     comp = calc_btc_composite(fg_val, rsi_d, bb_pct, vol_ratio_d, trend, ret_7d)
 
     pos = None
-    if supabase:
-        pr = supabase.table("btc_position").select("*").eq("status", "OPEN").order("entry_time", desc=True).limit(1).execute()
+    if _get_sb():
+        pr = _get_sb().table("btc_position").select("*").eq("status", "OPEN").order("entry_time", desc=True).limit(1).execute()
         pos = pr.data[0] if pr.data else None
 
     # v6.2 B3: PnL 환율 단위 통일
@@ -414,25 +425,25 @@ def _compute_composite_sync():
 async def api_btc_composite():
     try:
         return await asyncio.to_thread(_compute_composite_sync)
-    except Exception as e:
+    except Exception:
         return {"error": "Internal server error"}
 
 
 @router.get("/api/btc/portfolio")
 async def api_btc_portfolio():
-    if not supabase:
+    if not _get_sb():
         return {"error": "DB 미연결", "open_positions": [], "closed_positions": [], "summary": {}}
     try:
         # NOTE: status values in DB are historically inconsistent in case (OPEN/open, CLOSED/closed)
         open_rows = await asyncio.to_thread(
-            lambda: supabase.table("btc_position")
+            lambda: _get_sb().table("btc_position")
             .select("*")
             .in_("status", ["OPEN", "open"])
             .execute()
             .data or []
         )
         closed_rows = await asyncio.to_thread(
-            lambda: supabase.table("btc_position")
+            lambda: _get_sb().table("btc_position")
             .select("*")
             .in_("status", ["CLOSED", "closed"])
             .order("exit_time", desc=True)
@@ -472,7 +483,7 @@ async def api_btc_portfolio():
             # Compute default stop_loss and take_profit if not set
             sl = p.get("stop_loss") or (entry_price * 0.97)  # 3% stop loss
             tp = p.get("take_profit") or (entry_price * 1.12)  # 12% take profit
-            
+
             open_positions.append({
                 "id": p.get("id"),
                 "entry_price": entry_price,
@@ -575,11 +586,11 @@ async def api_btc_portfolio():
 async def api_summary():
     result = {}
     try:
-        if supabase:
+        if _get_sb():
             def _sync_summary():
-                btc_pos = supabase.table("btc_position").select("entry_price,entry_krw,quantity").eq("status", "OPEN").execute().data or []
-                kr_open = supabase.table("trade_executions").select("trade_id").eq("result", "OPEN").execute().data or []
-                us_open = supabase.table("us_trade_executions").select("symbol,price,quantity").eq("result", "OPEN").execute().data or []
+                btc_pos = _get_sb().table("btc_position").select("entry_price,entry_krw,quantity").eq("status", "OPEN").execute().data or []
+                kr_open = _get_sb().table("trade_executions").select("trade_id").eq("result", "OPEN").execute().data or []
+                us_open = _get_sb().table("us_trade_executions").select("symbol,price,quantity").eq("result", "OPEN").execute().data or []
                 return btc_pos, kr_open, us_open
             btc_pos, kr_open, us_open = await asyncio.to_thread(_sync_summary)
             result["btc"] = {"positions": len(btc_pos), "invested_krw": sum(float(p.get("entry_krw", 0)) for p in btc_pos)}
@@ -610,11 +621,9 @@ async def api_btc_filters():
         kimchi = await asyncio.to_thread(get_kimchi_premium)
 
         # 2. 펀딩비 (rate는 이미 % 단위로 반환됨)
-        from common.market_data import (
-            get_btc_funding_rate,
-            get_btc_long_short_ratio,
-            get_btc_open_interest,
-        )
+        from common.market_data import (get_btc_funding_rate,
+                                        get_btc_long_short_ratio,
+                                        get_btc_open_interest)
         fr = await asyncio.to_thread(get_btc_funding_rate)
         ls = await asyncio.to_thread(get_btc_long_short_ratio)
         oi = await asyncio.to_thread(get_btc_open_interest)
@@ -625,8 +634,8 @@ async def api_btc_filters():
         today = datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat()
         today_count = 0
         today_pnl_pct = 0.0
-        if supabase:
-            pos_res = supabase.table("btc_position").select(
+        if _get_sb():
+            pos_res = _get_sb().table("btc_position").select(
                 "entry_krw,pnl,pnl_pct,status,entry_time"
             ).gte("entry_time", today).execute()
             rows = pos_res.data or []
@@ -664,13 +673,13 @@ async def api_btc_filters():
 
 @router.get("/api/stats")
 async def get_stats():
-    if not supabase:
+    if not _get_sb():
         return _empty_stats()
     try:
         def _sync_stats():
-            trades = supabase.table("btc_trades").select("*").order("timestamp", desc=True).limit(200).execute().data or []
-            closed = supabase.table("btc_position").select("*").eq("status", "CLOSED").execute().data or []
-            pos_res = supabase.table("btc_position").select("*").eq("status", "OPEN").order("entry_time", desc=True).limit(1).execute()
+            trades = _get_sb().table("btc_trades").select("*").order("timestamp", desc=True).limit(200).execute().data or []
+            closed = _get_sb().table("btc_position").select("*").eq("status", "CLOSED").execute().data or []
+            pos_res = _get_sb().table("btc_position").select("*").eq("status", "OPEN").order("entry_time", desc=True).limit(1).execute()
             return trades, closed, pos_res.data
         trades, closed, pos_data = await asyncio.to_thread(_sync_stats)
 
@@ -735,11 +744,11 @@ async def get_trades(
     hours: int = Query(default=None, ge=1, le=168)  # 1시간~7일
 ):
     """거래 내역 조회 (필터링 지원)"""
-    if not supabase:
+    if not _get_sb():
         return []
     try:
         def _sync_trades():
-            query = supabase.table("btc_trades").select("*")
+            query = _get_sb().table("btc_trades").select("*")
             if action:
                 query = query.eq("action", action)
             if hours:
@@ -835,7 +844,7 @@ async def get_system():
         # tail + grep: 리스트 방식으로 파이프 없이 처리
         try:
             log_lines = BTC_LOG.read_text(encoding="utf-8", errors="ignore").splitlines()
-            cron_lines = [l for l in log_lines[-200:] if "매매 사이클 시작" in l]
+            cron_lines = [line for line in log_lines[-200:] if "매매 사이클 시작" in line]
         except Exception:
             cron_lines = []
         last_cron = cron_lines[-1][:50] if cron_lines else "기록 없음"
@@ -980,9 +989,9 @@ async def get_brain():
 async def get_agent_decisions(limit: int = 20):
     """최근 에이전트 팀 결정 이력 반환."""
     try:
-        if supabase:
+        if _get_sb():
             rows = await asyncio.to_thread(
-                lambda: supabase.table("agent_decisions").select("*").order("created_at", desc=True).limit(limit).execute()
+                lambda: _get_sb().table("agent_decisions").select("*").order("created_at", desc=True).limit(limit).execute()
             )
             if rows.data:
                 return {"decisions": rows.data}
@@ -1030,7 +1039,7 @@ async def get_decision_log(limit: int = 20):
     """BTC 매매 판단 로그 (AI reason + 지표 스냅샷)."""
     try:
         rows = await asyncio.to_thread(
-            lambda: supabase.table("btc_trades")
+            lambda: _get_sb().table("btc_trades")
             .select("created_at, action, confidence, reason, composite_score, fear_greed, rsi")
             .order("created_at", desc=True)
             .limit(limit)
@@ -1070,9 +1079,9 @@ def _compute_risk_portfolio_sync() -> dict:
         log.error(f"risk/portfolio btc value: {e}")
 
     try:
-        if supabase:
+        if _get_sb():
             kr_rows = (
-                supabase.table("trade_executions")
+                _get_sb().table("trade_executions")
                 .select("price,quantity")
                 .eq("result", "OPEN")
                 .execute()
@@ -1086,9 +1095,9 @@ def _compute_risk_portfolio_sync() -> dict:
         log.error(f"risk/portfolio kr value: {e}")
 
     try:
-        if supabase:
+        if _get_sb():
             us_rows = (
-                supabase.table("us_trade_executions")
+                _get_sb().table("us_trade_executions")
                 .select("price,quantity")
                 .eq("result", "OPEN")
                 .execute()
@@ -1110,9 +1119,9 @@ def _compute_risk_portfolio_sync() -> dict:
     # ── 3. MDD from closed BTC positions (equity curve) ──
     mdd = 0.0
     try:
-        if supabase:
+        if _get_sb():
             closed = (
-                supabase.table("btc_position")
+                _get_sb().table("btc_position")
                 .select("entry_krw,pnl,exit_time")
                 .in_("status", ["CLOSED", "closed"])
                 .order("exit_time", desc=False)

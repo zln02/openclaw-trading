@@ -1,24 +1,34 @@
 """Korean stock-related API endpoints."""
-import json, time as _time, asyncio
+import asyncio
+import json
+import sys as _sys
+import time as _time
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
-from collections import defaultdict
-from fastapi import APIRouter, Query
-from fastapi.responses import HTMLResponse
 
-import sys as _sys
+from fastapi import APIRouter, Query
+
 _sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from common.supabase_client import get_supabase
-from common.config import (
-    WORKSPACE, STRATEGY_JSON,
-    STOCK_TRADING_LOG, STOCK_CHECK_LOG, STOCK_PREMARKET_LOG, STOCK_COLLECTOR_LOG,
-)
+from common.config import (STOCK_CHECK_LOG, STOCK_COLLECTOR_LOG,
+                           STOCK_PREMARKET_LOG, STOCK_TRADING_LOG,
+                           STRATEGY_JSON, WORKSPACE)
 from common.logger import get_logger
+from common.supabase_client import get_supabase
 
 log = get_logger("stock_api")
 
-supabase = get_supabase()
+_supabase = None
+
+
+def _get_sb():
+    global _supabase
+    if _supabase is None:
+        _supabase = get_supabase()
+    return _supabase
+
+
 router = APIRouter()
 
 _kiwoom_client = None
@@ -53,15 +63,16 @@ def is_market_open_now() -> bool:
 _name_cache: dict = {}
 _name_cache_ts: float = 0.0
 
+
 def _stock_name(code: str) -> str:
     """종목 코드 → 종목명 (5분 캐시, N+1 쿼리 방지)."""
     global _name_cache, _name_cache_ts
-    if not supabase:
+    if not _get_sb():
         return ""
     # 5분마다 캐시 갱신
     if _time.time() - _name_cache_ts > 300 or not _name_cache:
         try:
-            rows = supabase.table("top50_stocks").select("stock_code, stock_name").execute().data or []
+            rows = _get_sb().table("top50_stocks").select("stock_code, stock_name").execute().data or []
             _name_cache = {r["stock_code"]: r.get("stock_name", "") for r in rows}
             _name_cache_ts = _time.time()
         except Exception:
@@ -80,6 +91,7 @@ def _stock_name(code: str) -> str:
 # ----- Market summary (TradingView: unified) -----
 _market_summary_cache = {"data": None, "ts": 0}
 MARKET_SUMMARY_TTL = 60
+
 
 def _fetch_market_summary_dict():
     import yfinance as yf
@@ -112,6 +124,7 @@ def _fetch_market_summary_dict():
             result[key] = {"price": 0, "change": 0, "change_pct": 0}
     return result
 
+
 @router.get("/api/stocks/market-summary")
 async def get_market_summary():
     now = _time.time()
@@ -126,8 +139,6 @@ async def get_market_summary():
         return {k: {"price": 0, "change": 0, "change_pct": 0} for k in ["kospi", "kosdaq", "sp500", "nasdaq", "nikkei", "usdkrw", "btc"]}
 
 
-
-
 # ── Overview cache ──────────────────────────────────────
 _overview_cache = {"data": [], "ts": 0}
 
@@ -138,18 +149,18 @@ async def get_stocks_overview():
     if _overview_cache["data"] and now - _overview_cache["ts"] < 10:
         return _overview_cache["data"]
 
-    if not supabase:
+    if not _get_sb():
         return []
     try:
         stocks = await asyncio.to_thread(
-            lambda: supabase.table("top50_stocks").select("*").execute().data or []
+            lambda: _get_sb().table("top50_stocks").select("*").execute().data or []
         )
         codes = [s["stock_code"] for s in stocks]
         if not codes:
             return []
 
         recent_ohlcv = await asyncio.to_thread(
-            lambda: supabase.table("daily_ohlcv")
+            lambda: _get_sb().table("daily_ohlcv")
             .select("stock_code,date,close_price,volume")
             .in_("stock_code", codes)
             .order("date", desc=True)
@@ -218,10 +229,10 @@ async def get_stock_live_price(code: str):
         except Exception:
             pass
     # 키움 실패/429 시 DB 일봉 최신가 폴백
-    if supabase:
+    if _get_sb():
         try:
             row = (
-                supabase.table("daily_ohlcv")
+                _get_sb().table("daily_ohlcv")
                 .select("close_price")
                 .eq("stock_code", db_code)
                 .order("date", desc=True)
@@ -305,13 +316,13 @@ async def get_stock_realtime_alt_data(symbol: str):
 @router.get("/api/stocks/chart/{code}")
 async def get_stock_chart(code: str, interval: str = Query("1d")):
     db_code = code.lstrip("A") if code.startswith("A") else code
-    if not supabase:
+    if not _get_sb():
         return {"candles": [], "name": "", "code": code}
     try:
         if interval in ("5m", "10m", "1h"):
             db_interval = "5m" if interval == "10m" else interval
             raw = await asyncio.to_thread(
-                lambda: supabase.table("intraday_ohlcv").select("*")
+                lambda: _get_sb().table("intraday_ohlcv").select("*")
                 .eq("stock_code", db_code).eq("time_interval", db_interval)
                 .order("datetime", desc=True).limit(200).execute().data or []
             )
@@ -334,7 +345,7 @@ async def get_stock_chart(code: str, interval: str = Query("1d")):
             return {"candles": candles, "name": _stock_name(code), "code": code}
 
         raw = await asyncio.to_thread(
-            lambda: supabase.table("daily_ohlcv").select("*")
+            lambda: _get_sb().table("daily_ohlcv").select("*")
             .eq("stock_code", db_code).order("date", desc=True).limit(60).execute().data or []
         )
         rows = sorted(raw, key=lambda r: r["date"])
@@ -402,11 +413,11 @@ async def get_stock_chart(code: str, interval: str = Query("1d")):
 @router.get("/api/stocks/indicators/{code}")
 async def get_stock_indicators(code: str):
     db_code = code.lstrip("A") if code.startswith("A") else code
-    if not supabase:
+    if not _get_sb():
         return {"error": "Supabase 미연결"}
     try:
         rows = await asyncio.to_thread(
-            lambda: supabase.table("daily_ohlcv")
+            lambda: _get_sb().table("daily_ohlcv")
             .select("close_price,volume,date").eq("stock_code", db_code)
             .order("date", desc=False).limit(30).execute().data or []
         )
@@ -472,10 +483,10 @@ async def get_stocks_portfolio():
 
         positions = []
         market_open = is_market_open_now()
-        if supabase:
+        if _get_sb():
             try:
                 rows = await asyncio.to_thread(
-                    lambda: supabase.table("trade_executions").select("*")
+                    lambda: _get_sb().table("trade_executions").select("*")
                     .eq("result", "OPEN").execute().data or []
                 )
                 by_code = defaultdict(list)
@@ -492,7 +503,7 @@ async def get_stocks_portfolio():
                         try:
                             _c = code
                             last_row = await asyncio.to_thread(
-                                lambda: supabase.table("daily_ohlcv").select("close_price")
+                                lambda: _get_sb().table("daily_ohlcv").select("close_price")
                                 .eq("stock_code", _c).order("date", desc=True).limit(1).execute().data
                             )
                             if last_row:
@@ -648,7 +659,7 @@ async def get_stocks_logs(source: str = Query("all")):
                 raw = path.read_text(encoding="utf-8", errors="ignore").splitlines()
                 for line in raw[-30:]:
                     all_lines.append(f"[{tag}] {line}")
-            all_lines.sort(key=lambda l: l[l.find("[20"):l.find("]", l.find("[20"))] if "[20" in l else "")
+            all_lines.sort(key=lambda entry: entry[entry.find("[20"):entry.find("]", entry.find("[20"))] if "[20" in entry else "")
             return {"lines": all_lines[-80:]}
         else:
             path = sources.get(source, sources["trading"])
@@ -676,14 +687,14 @@ async def get_kr_composite():
             "avg_pnl": None,
         }
 
-        if not supabase:
+        if not _get_sb():
             return composite
 
         # 최근 7일 SELL(체결) 거래 기반 성과 계산
         cutoff = (datetime.now(ZoneInfo("Asia/Seoul")) - timedelta(days=7)).isoformat()
         try:
             rows = await asyncio.to_thread(
-                lambda: supabase.table("trade_executions")
+                lambda: _get_sb().table("trade_executions")
                 .select("price,entry_price")
                 .eq("trade_type", "SELL")
                 .eq("result", "CLOSED")
@@ -721,7 +732,7 @@ async def get_kr_composite():
         try:
             today_iso = datetime.now().date().isoformat()
             today_rows = await asyncio.to_thread(
-                lambda: supabase.table("trade_executions")
+                lambda: _get_sb().table("trade_executions")
                 .select("price,entry_price,quantity")
                 .eq("trade_type", "SELL")
                 .eq("result", "CLOSED")
@@ -754,7 +765,7 @@ async def get_kr_composite():
         # daily_ohlcv 에서 KOSPI/KOSDAQ proxy (005930=삼성, 000660=SK하이닉스)
         try:
             ohlcv = await asyncio.to_thread(
-                lambda: supabase.table("daily_ohlcv")
+                lambda: _get_sb().table("daily_ohlcv")
                 .select("stock_code,date,close_price")
                 .in_("stock_code", ["005930", "000660"])
                 .order("date", desc=True)
@@ -788,15 +799,15 @@ async def get_kr_composite():
 async def get_kr_portfolio():
     """KR 포트폴리오 정보"""
     try:
-        if not supabase:
+        if not _get_sb():
             return {"open_positions": [], "closed_positions": [], "summary": {}}
 
         def _sync_kr_portfolio():
-            open_rows = supabase.table("trade_executions") \
+            open_rows = _get_sb().table("trade_executions") \
                 .select("trade_id,stock_code,stock_name,quantity,price,entry_price,created_at,reason,strategy") \
                 .eq("trade_type", "BUY").eq("result", "OPEN") \
                 .order("created_at", desc=True).limit(50).execute().data or []
-            closed_rows = supabase.table("trade_executions") \
+            closed_rows = _get_sb().table("trade_executions") \
                 .select("trade_id,stock_code,stock_name,quantity,price,entry_price,created_at,reason") \
                 .eq("trade_type", "SELL").eq("result", "CLOSED") \
                 .order("created_at", desc=True).limit(30).execute().data or []
@@ -804,7 +815,7 @@ async def get_kr_portfolio():
             latest_prices: dict = {}
             if codes:
                 try:
-                    price_rows = supabase.table("daily_ohlcv") \
+                    price_rows = _get_sb().table("daily_ohlcv") \
                         .select("stock_code,close_price,date").in_("stock_code", codes) \
                         .order("date", desc=True).limit(len(codes) * 3).execute().data or []
                     for row in price_rows:
@@ -925,16 +936,16 @@ async def get_kr_system():
 async def get_kr_top():
     """KR TOP 종목 — daily_ohlcv 기반 모멘텀 스코어"""
     try:
-        if not supabase:
+        if not _get_sb():
             return []
 
         def _sync_kr_top():
-            stock_rows = supabase.table("top50_stocks") \
+            stock_rows = _get_sb().table("top50_stocks") \
                 .select("stock_code,stock_name,industry,market_cap").limit(50).execute().data or []
             stocks_map = {r["stock_code"]: r for r in stock_rows}
             if not stocks_map:
                 return stocks_map, []
-            ohlcv_rows = supabase.table("daily_ohlcv") \
+            ohlcv_rows = _get_sb().table("daily_ohlcv") \
                 .select("stock_code,date,close_price,volume") \
                 .in_("stock_code", list(stocks_map.keys())) \
                 .order("date", desc=True).limit(len(stocks_map) * 25).execute().data or []
@@ -954,8 +965,8 @@ async def get_kr_top():
             if len(closes) < 2:
                 continue
             cur = closes[0]
-            ret_5d = round((cur - closes[min(5, len(closes)-1)]) / closes[min(5, len(closes)-1)] * 100, 2) if len(closes) > 5 and closes[5] > 0 else 0.0
-            ret_20d = round((cur - closes[min(20, len(closes)-1)]) / closes[min(20, len(closes)-1)] * 100, 2) if len(closes) > 20 and closes[20] > 0 else 0.0
+            ret_5d = round((cur - closes[min(5, len(closes) - 1)]) / closes[min(5, len(closes) - 1)] * 100, 2) if len(closes) > 5 and closes[5] > 0 else 0.0
+            ret_20d = round((cur - closes[min(20, len(closes) - 1)]) / closes[min(20, len(closes) - 1)] * 100, 2) if len(closes) > 20 and closes[20] > 0 else 0.0
             # 모멘텀 스코어: ret_5d × 0.6 + ret_20d × 0.4 (범위 −10~+10 → 0~100)
             raw_score = ret_5d * 0.6 + ret_20d * 0.4
             score = min(100, max(0, int(50 + raw_score * 3)))
@@ -985,11 +996,11 @@ async def get_kr_trades(
 ):
     """KR 거래 내역 (필터링 지원)"""
     try:
-        if not supabase:
+        if not _get_sb():
             return []
 
         def _sync_kr_trades():
-            query = supabase.table("trade_executions").select(
+            query = _get_sb().table("trade_executions").select(
                 "trade_id,trade_type,stock_code,stock_name,quantity,price,entry_price,"
                 "created_at,result,reason,strategy"
             )
@@ -1025,11 +1036,11 @@ async def get_kr_positions():
 @router.get("/api/stocks/trades")
 async def get_stocks_trades():
     try:
-        if not supabase:
+        if not _get_sb():
             return []
         today = datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat()
         data = await asyncio.to_thread(
-            lambda: supabase.table("trade_executions").select("*")
+            lambda: _get_sb().table("trade_executions").select("*")
             .order("trade_id", desc=True).limit(20).execute().data or []
         )
         if data and isinstance(data[0], dict) and "created_at" in data[0]:
@@ -1037,7 +1048,7 @@ async def get_stocks_trades():
         return data
     except Exception as e:
         try:
-            res = supabase.table("trade_executions").select("*").order("trade_id", desc=True).limit(20).execute()
+            res = _get_sb().table("trade_executions").select("*").order("trade_id", desc=True).limit(20).execute()
             return res.data or []
         except Exception:
             pass

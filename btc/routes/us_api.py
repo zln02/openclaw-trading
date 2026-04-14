@@ -1,20 +1,30 @@
 """US stock-related API endpoints."""
-import time as _time
 import asyncio
+import sys as _sys
+import time as _time
 from datetime import datetime, timedelta
 from pathlib import Path
-from fastapi import APIRouter, Query
-from fastapi.responses import HTMLResponse, JSONResponse
 
-import sys as _sys
+from fastapi import APIRouter, Query
+from fastapi.responses import JSONResponse
+
 _sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from common.supabase_client import get_supabase
 from common.config import US_TRADING_LOG
 from common.logger import get_logger
+from common.supabase_client import get_supabase
 
 log = get_logger("us_api")
 
-supabase = get_supabase()
+_supabase = None
+
+
+def _get_sb():
+    global _supabase
+    if _supabase is None:
+        _supabase = get_supabase()
+    return _supabase
+
+
 router = APIRouter()
 
 _fx_cache = {"ts": 0, "rate": 0}
@@ -66,19 +76,19 @@ async def get_us_composite():
             "trend": "NEUTRAL",
             "sentiment": 54
         }
-        
+
         # 실제 데이터가 있다면 업데이트
-        if supabase:
+        if _get_sb():
             try:
                 res = await asyncio.to_thread(
-                    lambda: supabase.table("us_momentum_signals").select("*").order("created_at", desc=True).limit(50).execute()
+                    lambda: _get_sb().table("us_momentum_signals").select("*").order("created_at", desc=True).limit(50).execute()
                 )
                 if res.data:
                     avg_score = sum(item.get("score", 50) for item in res.data) / len(res.data)
                     composite["total"] = int(avg_score)
             except Exception:
                 pass
-        
+
         return composite
     except Exception as e:
         log.error(f"US composite error: {e}")
@@ -89,13 +99,13 @@ async def get_us_composite():
 async def get_us_portfolio():
     """US 포트폴리오 정보"""
     try:
-        if not supabase:
+        if not _get_sb():
             return {"open_positions": [], "closed_positions": [], "summary": {}}
-        
+
         # US 포지션/내역 조회 + 현재가 배치 조회 (모두 to_thread)
         def _sync_portfolio():
-            open_pos = supabase.table("us_trade_executions").select("*").eq("result", "OPEN").execute().data or []
-            closed_pos = supabase.table("us_trade_executions").select("*").eq("result", "CLOSED").order("created_at", desc=True).limit(100).execute().data or []
+            open_pos = _get_sb().table("us_trade_executions").select("*").eq("result", "OPEN").execute().data or []
+            closed_pos = _get_sb().table("us_trade_executions").select("*").eq("result", "CLOSED").order("created_at", desc=True).limit(100).execute().data or []
             syms = list({p.get("symbol", "") for p in open_pos if p.get("symbol")})
             prices = _batch_fetch_prices(syms)
             return open_pos, closed_pos, prices
@@ -115,9 +125,9 @@ async def get_us_portfolio():
             p["pnl_pct"] = round((cur / entry - 1) * 100, 2) if entry else 0
             p["pnl_usd"] = round((cur - entry) * qty, 2)
             total_current += cur * qty
-        
+
         total_pnl_pct = round((total_current / total_invested - 1) * 100, 2) if total_invested > 0 else 0
-        
+
         summary = {
             "usd_balance": None,
             "open_count": len(open_positions),
@@ -128,7 +138,7 @@ async def get_us_portfolio():
             "unrealized_pnl_pct": total_pnl_pct,
             "realized_pnl": sum(p.get("pnl_usd", 0) for p in closed_positions)
         }
-        
+
         return {
             "open_positions": open_positions,
             "closed_positions": closed_positions,
@@ -143,8 +153,9 @@ async def get_us_portfolio():
 async def get_us_system():
     """US 시스템 상태"""
     try:
-        import psutil
         import os
+
+        import psutil
         alpaca_ok = bool(os.environ.get("ALPACA_API_KEY") and os.environ.get("ALPACA_SECRET_KEY"))
         mem = psutil.virtual_memory()
         disk = psutil.disk_usage('/')
@@ -172,11 +183,11 @@ async def get_us_trades(
 ):
     """US 거래 내역 (필터링 지원)"""
     try:
-        if not supabase:
+        if not _get_sb():
             return []
 
         def _sync_trades():
-            query = supabase.table("us_trade_executions").select("*")
+            query = _get_sb().table("us_trade_executions").select("*")
             if result:
                 query = query.eq("result", result)
             if hours:
@@ -197,10 +208,10 @@ async def api_us_top():
 @router.get("/api/us/positions")
 async def api_us_positions():
     try:
-        if not supabase:
+        if not _get_sb():
             return {"positions": [], "summary": {}}
         positions = await asyncio.to_thread(
-            lambda: supabase.table("us_trade_executions").select("*").eq("result", "OPEN").execute().data or []
+            lambda: _get_sb().table("us_trade_executions").select("*").eq("result", "OPEN").execute().data or []
         )
         symbols = [p.get("symbol", "") for p in positions if p.get("symbol")]
         batch_prices = await asyncio.to_thread(lambda: _batch_fetch_prices(symbols))
@@ -277,7 +288,6 @@ async def api_us_market():
 
 
 @router.get("/api/us/realtime/news")
-
 async def api_us_realtime_news(
     symbol: str = Query("BTC"),
     limit: int = Query(10, ge=1, le=50),
@@ -363,11 +373,11 @@ async def api_us_fx():
 
 # ── helpers ─────────────────────────────────────────────
 def _fetch_us_signals() -> dict:
-    if not supabase:
+    if not _get_sb():
         return {"run_date": None, "items": []}
     try:
         res = (
-            supabase.table("us_momentum_signals")
+            _get_sb().table("us_momentum_signals")
             .select("*")
             .order("run_date", desc=True)
             .order("score", desc=True)

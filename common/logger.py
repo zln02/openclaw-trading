@@ -57,6 +57,7 @@ _SENSITIVE_RE = re.compile(
     r"(sk-proj-|sk-ant-api|Bearer |eyJhbG)[A-Za-z0-9_/+=\-]{8,}",
 )
 
+
 def _redact(msg: str) -> str:
     """민감 정보(API 키 등) 마스킹."""
     return _SENSITIVE_RE.sub(lambda m: m.group()[:8] + "***REDACTED***", msg)
@@ -68,10 +69,10 @@ class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         record.message = record.getMessage()
         payload: dict = {
-            "ts":     self.formatTime(record, "%Y-%m-%dT%H:%M:%S"),
-            "level":  record.levelname,
+            "ts": self.formatTime(record, "%Y-%m-%dT%H:%M:%S"),
+            "level": record.levelname,
             "logger": record.name,
-            "event":  _redact(record.message),
+            "event": _redact(record.message),
         }
         # log.trade("BTC 매수", market="btc", action="buy", price=142000000)
         # → extra 필드로 JSON에 포함
@@ -170,10 +171,12 @@ class AgentLogger:
     warning = warn
 
     def error(self, msg: str, *args, **kw):
-        self._log.error(self._fmt(msg % args if args else msg, "ERROR", **kw), extra=kw)
+        exc = kw.pop("exc_info", False)
+        self._log.error(self._fmt(msg % args if args else msg, "ERROR", **kw), extra=kw, exc_info=exc)
 
     def critical(self, msg: str, *args, **kw):
-        self._log.critical(self._fmt(msg % args if args else msg, "CRITICAL", **kw), extra=kw)
+        exc = kw.pop("exc_info", False)
+        self._log.critical(self._fmt(msg % args if args else msg, "CRITICAL", **kw), extra=kw, exc_info=exc)
 
     @classmethod
     def _fmt(cls, msg: str, level: str, **kw) -> str:
