@@ -23,7 +23,6 @@ COPY --chown=openclaw:openclaw stocks/ stocks/
 COPY --chown=openclaw:openclaw agents/ agents/
 COPY --chown=openclaw:openclaw quant/ quant/
 COPY --chown=openclaw:openclaw execution/ execution/
-COPY --chown=openclaw:openclaw memory/ memory/
 COPY --chown=openclaw:openclaw scripts/ scripts/
 
 # 환경변수
