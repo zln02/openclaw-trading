@@ -20,6 +20,7 @@ skills/**/.env
 **/kiwoom_token.json
 .last_daily_alert_sent
 secretary/.env
+.docker-secrets/
 
 # PEM, key, certificate files
 *.pem

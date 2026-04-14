@@ -1,7 +1,7 @@
 """Supabase 클라이언트 싱글턴 + 자동 재연결."""
 import os
 import time
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 from common.logger import get_logger
 
@@ -23,8 +23,24 @@ def _create_client():
     if not url or not key:
         return None
 
-    from supabase import create_client
-    return create_client(url, key)
+    if not key.startswith("eyJ"):
+        _log.warning(
+            "SUPABASE_SECRET_KEY 형식 오류 — service_role JWT 아님 (eyJ로 시작해야 함). "
+            "Supabase 비활성화 후 계속 실행.",
+            key_prefix=key[:6] if key else "",
+            key_len=len(key),
+        )
+        return None
+
+    try:
+        from supabase import create_client
+        return create_client(url, key)
+    except Exception as exc:
+        _log.error(
+            "Supabase 클라이언트 초기화 실패 — 비활성화 후 계속 실행.",
+            error=str(exc)[:200],
+        )
+        return None
 
 
 def get_supabase():

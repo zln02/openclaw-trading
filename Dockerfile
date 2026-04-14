@@ -19,7 +19,6 @@ USER openclaw
 COPY --chown=openclaw:openclaw common/ common/
 COPY --chown=openclaw:openclaw api/ api/
 COPY --chown=openclaw:openclaw btc/ btc/
-COPY --chown=openclaw:openclaw dashboard/ dashboard/
 COPY --chown=openclaw:openclaw stocks/ stocks/
 COPY --chown=openclaw:openclaw agents/ agents/
 COPY --chown=openclaw:openclaw quant/ quant/
