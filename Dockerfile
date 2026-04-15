@@ -24,6 +24,7 @@ COPY --chown=openclaw:openclaw agents/ agents/
 COPY --chown=openclaw:openclaw quant/ quant/
 COPY --chown=openclaw:openclaw execution/ execution/
 COPY --chown=openclaw:openclaw scripts/ scripts/
+COPY --chown=openclaw:openclaw dashboard/dist/ dashboard/dist/
 
 # 환경변수
 ENV PYTHONPATH=/app
