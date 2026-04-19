@@ -409,7 +409,8 @@ def format_trades(rows: list[dict]) -> str:
         return "기록 없음"
     lines = []
     for row in rows[:5]:
-        action = str(row.get("trade_type") or row.get("action") or "HOLD").upper()
+        # trade_executions 스키마 기준: trade_type (BUY/SELL). action 컬럼은 agent_decisions 전용.
+        action = str(row.get("trade_type") or "HOLD").upper()
         lines.append(
             f"- {row.get('stock_name') or row.get('stock_code') or '-'} "
             f"{action} {int(row.get('quantity') or 0)}주 @ {row.get('price') or 0}"
