@@ -2,25 +2,14 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 
 from common.config import BRAIN_PATH
 from common.supabase_client import get_supabase
-
-
-def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
-
-
-def _safe_float(value: Any, default: float = 0.0) -> float:
-    try:
-        if value is None:
-            return default
-        return float(value)
-    except Exception:
-        return default
+from common.utils import safe_float as _safe_float
+from common.utils import utc_now as _utc_now
 
 
 def _parse_dt(value: Any) -> Optional[datetime]:

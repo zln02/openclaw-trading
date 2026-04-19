@@ -9,7 +9,8 @@ from common.logger import get_logger
 from common.retry import requests_with_retry, retry, retry_call
 from common.supabase_client import get_supabase
 from common.telegram import send_telegram
-from common.utils import atomic_write_json, parse_json_from_text, safe_float
+from common.utils import (atomic_write_json, parse_json_from_text, safe_float,
+                          utc_now)
 
 __all__ = [
     "load_env",
@@ -24,6 +25,7 @@ __all__ = [
     "set_cached",
     "clear_cache",
     "safe_float",
+    "utc_now",
     "parse_json_from_text",
     "atomic_write_json",
 ]

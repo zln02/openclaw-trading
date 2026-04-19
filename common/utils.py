@@ -7,6 +7,11 @@ from datetime import date, datetime, timezone
 from typing import Any, Optional
 
 
+def utc_now() -> datetime:
+    """현재 UTC 시각 반환 (timezone-aware)."""
+    return datetime.now(timezone.utc)
+
+
 def safe_float(value: Any, default: float = 0.0) -> float:
     """값을 float으로 안전하게 변환. 변환 실패 시 default 반환."""
     try:
@@ -25,7 +30,7 @@ def parse_json_from_text(raw: str) -> dict:
     s = text.find("{")
     e = text.rfind("}")
     if s >= 0 and e > s:
-        return json.loads(text[s : e + 1])
+        return json.loads(text[s : e + 1])  # noqa: E203
     raise ValueError("JSON object not found")
 
 

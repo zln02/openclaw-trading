@@ -1,29 +1,14 @@
 from __future__ import annotations
 
 import json
-import sys
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from pathlib import Path
-from typing import Any
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from common.config import BRAIN_PATH
 from common.equity_loader import load_all_positions
+from common.utils import safe_float as _safe_float
+from common.utils import utc_now as _utc_now
 from quant.risk.var_model import VaRModel, fetch_return_matrix
-
-
-def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
-
-
-def _safe_float(value: Any, default: float = 0.0) -> float:
-    try:
-        if value is None:
-            return default
-        return float(value)
-    except Exception:
-        return default
 
 
 def _equity_snapshot_path(market: str) -> Path:
