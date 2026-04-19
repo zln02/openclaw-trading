@@ -231,7 +231,7 @@ def run_self_healing(quiet: bool = False) -> dict[str, Any]:
                 "재인증이 필요합니다.\n\n"
                 "<b>재인증 방법:</b>\n"
                 "터미널에서 실행:\n"
-                "<code>GOG_KEYRING_PASSWORD=openclaw-gog-secret "
+                "<code>GOG_KEYRING_PASSWORD=$YOUR_KEYRING_PW "
                 "~/.openclaw/workspace/gog-docker auth login "
                 "--account jei53507@gmail.com</code>\n\n"
                 "브라우저에서 Google 로그인 완료 후 자동으로 복구됩니다."
