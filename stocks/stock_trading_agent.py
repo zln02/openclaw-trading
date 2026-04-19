@@ -10,30 +10,28 @@ v3 변경사항:
 - [IMPROVE] 복합 스코어에 재무 품질 15점 추가
 """
 
-import os
 import json
-import time
+import os
 import sys
-import requests
-from datetime import datetime, timezone, timedelta
+import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional, TypedDict
 
+import requests
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from common.config import (BRAIN_PATH, ML_BLEND_CONFIG, STOCK_TRADING_LOG,
+                           WORKSPACE_DIR)
 from common.env_loader import load_env
-from common.telegram import send_telegram as _tg_send
-from common.supabase_client import _reset_client, get_supabase
+from common.equity_loader import (append_equity_snapshot,
+                                  get_effective_market_weight,
+                                  load_drawdown_state, load_equity_curve,
+                                  load_recent_trades, save_drawdown_state)
 from common.logger import get_logger
 from common.retry import retry, retry_call
-from common.config import BRAIN_PATH, ML_BLEND_CONFIG, STOCK_TRADING_LOG, WORKSPACE_DIR
-from common.equity_loader import (
-    append_equity_snapshot,
-    get_effective_market_weight,
-    load_drawdown_state,
-    load_equity_curve,
-    load_recent_trades,
-    save_drawdown_state,
-)
+from common.supabase_client import _reset_client, get_supabase
+from common.telegram import send_telegram as _tg_send
 from execution.smart_router import SmartRouter
 from quant.risk.drawdown_guard import DrawdownGuard, DrawdownGuardState
 from quant.risk.position_sizer import KellyPositionSizer
@@ -342,49 +340,43 @@ def get_stock_news(stock_name: str) -> str:
 
 
 def get_investor_trend_krx(stock_code: str) -> dict:
-    """KRX 투자자별 매매동향 (당일 기준)"""
+    """
+    투자자별 매매동향 — Kiwoom ka10007 실패 시 fallback.
+
+    기존 `data.krx.co.kr` 직접 POST는 User-Agent 검증 강화로 400 반환 →
+    pykrx 라이브러리로 교체(2026-04-19). pykrx도 KRX_ID/KRX_PW 환경변수를
+    요구할 수 있으며, 실패 시 빈 dict 반환 후 수급 없이 진행 (치명적 경로 아님).
+    """
     try:
-        url = 'http://data.krx.co.kr/comm/bldAttendant/getJsonData.cmd'
-        today = datetime.now(timezone.utc).strftime('%Y%m%d')
-        payload = {
-            'bld': 'dbms/MDC/STAT/standard/MDCSTAT02203',
-            'locale': 'ko_KR',
-            'isuCd': stock_code,
-            'strtDd': today,
-            'endDd': today,
-            'share': '1',
-            'csvxls_isNo': '',
-        }
-        headers = {
-            'User-Agent': 'Mozilla/5.0',
-            'Referer': 'http://data.krx.co.kr/',
-        }
-        res = requests.post(url, data=payload, headers=headers, timeout=10)
-        res.raise_for_status()
-        text = (res.text or "").strip()
-        if not text or not text.startswith("{"):
+        from pykrx import stock as _pykrx_stock
+    except ImportError:
+        log('pykrx 미설치 — 수급 fallback 불가 (requirements.txt 확인)', 'WARN')
+        return {}
+    code = str(stock_code or '').lstrip('A').strip()
+    if not code:
+        return {}
+    try:
+        today = datetime.now(KST).date()
+        start = (today - timedelta(days=14)).strftime('%Y%m%d')
+        end = today.strftime('%Y%m%d')
+        df = _pykrx_stock.get_market_trading_volume_by_date(start, end, code)
+        if df is None or df.empty:
             return {}
-        try:
-            data = res.json()
-        except json.JSONDecodeError:
-            return {}
-        items = data.get('output', [])
-        if not items:
-            return {}
-        row = items[0]
-        def _parse(v: str) -> int:
+        row = df.iloc[-1]
+
+        def _to_int(val) -> int:
             try:
-                return int(str(v).replace(',', ''))
-            except Exception as e:
-                log(f"_parse failed: {e}", 'WARN')
+                return int(float(val or 0))
+            except (ValueError, TypeError):
                 return 0
+
         return {
-            'foreign_net': _parse(row.get('FRGN_NET_BUY_QTY', '0')),
-            'inst_net': _parse(row.get('ORGN_NET_BUY_QTY', '0')),
-            'individual_net': _parse(row.get('INDV_NET_BUY_QTY', '0')),
+            'foreign_net': _to_int(row.get('외국인합계', 0)),
+            'inst_net': _to_int(row.get('기관합계', 0)),
+            'individual_net': _to_int(row.get('개인', 0)),
         }
     except Exception as e:
-        log(f'수급(투자자별 매매동향) 조회 실패 {stock_code}: {e}', 'WARN')
+        log(f'수급(pykrx) 조회 실패 {code}: {e}', 'DEBUG')
         return {}
 
 
@@ -1524,7 +1516,7 @@ def execute_buy(
         _WORKSPACE_PATH = str(Path(__file__).resolve().parents[1])
         if _WORKSPACE_PATH not in _sys.path:
             _sys.path.insert(0, _WORKSPACE_PATH)
-        from quant.factors.registry import calc_all, FactorContext
+        from quant.factors.registry import FactorContext, calc_all
         _fctx = FactorContext()
         _today_iso = datetime.now(timezone.utc).date().isoformat()
         _all_factors = calc_all(_today_iso, symbol=code, market='kr', context=_fctx)
