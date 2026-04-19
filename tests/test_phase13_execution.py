@@ -6,7 +6,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from execution.slippage_tracker import ExecutionFill, SlippageTracker, compute_slippage_metrics
+from execution.slippage_tracker import (ExecutionFill, SlippageTracker,
+                                        compute_slippage_metrics)
 from execution.smart_router import RouterConfig, SmartRouter
 from execution.twap import TWAPOrder, build_twap_schedule
 from execution.vwap import VWAPOrder, build_vwap_schedule

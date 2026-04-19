@@ -9,7 +9,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from common.config import BTC_LOG, DASHBOARD_PORT, DASHBOARD_LOG, LOG_DIR, STOCK_TRADING_LOG, US_TRADING_LOG
+from common.config import (BTC_LOG, DASHBOARD_LOG, DASHBOARD_PORT, LOG_DIR,
+                           STOCK_TRADING_LOG, US_TRADING_LOG)
 from common.logger import get_logger
 from common.supabase_client import get_supabase, run_query_with_retry
 from common.telegram import send_telegram

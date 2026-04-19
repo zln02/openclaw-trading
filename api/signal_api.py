@@ -15,8 +15,8 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from agents.regime_classifier import RegimeClassifier
 from common.api_utils import api_success
 from common.config import BRAIN_PATH, STRATEGY_JSON
-from common.equity_loader import load_market_allocation, load_target_weights
 from common.env_loader import load_env
+from common.equity_loader import load_market_allocation, load_target_weights
 from common.logger import get_logger
 from common.supabase_client import get_supabase
 

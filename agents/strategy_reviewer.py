@@ -14,19 +14,16 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from common.config import (
-    BRAIN_PATH,
-    DAILY_DEFENSE_WIN_RATE_THRESHOLD,
-    DEFENSE_INVEST_RATIO_MULT,
-    STRATEGY_JSON,
-)
+from common.config import (BRAIN_PATH, DAILY_DEFENSE_WIN_RATE_THRESHOLD,
+                           DEFENSE_INVEST_RATIO_MULT, STRATEGY_JSON)
 from common.env_loader import load_env
+from common.llm_client import call_haiku
 from common.logger import get_logger
 from common.market_data import get_market_regime
 from common.supabase_client import get_supabase
 from common.telegram import Priority, send_telegram
-from common.llm_client import call_haiku
-from common.utils import parse_json_from_text as _json_parse, safe_float as _safe_float
+from common.utils import parse_json_from_text as _json_parse
+from common.utils import safe_float as _safe_float
 
 load_env()
 log = get_logger("strategy_reviewer")

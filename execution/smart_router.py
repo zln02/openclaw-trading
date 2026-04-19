@@ -12,11 +12,9 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Callable, List, Optional
 
-from common.data.orderbook import (
-    fetch_binance_orderbook,
-    fetch_kr_orderbook_snapshot,
-    fetch_upbit_orderbook,
-)
+from common.data.orderbook import (fetch_binance_orderbook,
+                                   fetch_kr_orderbook_snapshot,
+                                   fetch_upbit_orderbook)
 from common.data.realtime_price import get_price_snapshot
 from common.env_loader import load_env
 from common.logger import get_logger

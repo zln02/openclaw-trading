@@ -18,7 +18,8 @@ from typing import Callable, Dict, Iterable, List, Optional
 import requests
 
 from common.cache import get_cached, set_cached
-from common.data import fetch_binance_orderbook, fetch_upbit_orderbook, get_alternative_data
+from common.data import (fetch_binance_orderbook, fetch_upbit_orderbook,
+                         get_alternative_data)
 from common.env_loader import load_env
 from common.logger import get_logger
 from common.retry import retry_call

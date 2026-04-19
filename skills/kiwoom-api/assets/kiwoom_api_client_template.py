@@ -13,11 +13,11 @@
     KIWOOM_ACCOUNT_NO=5012345678  # 계좌번호 (모의투자: 50으로 시작)
 """
 
-import os
 import json
+import os
 import time
 from pathlib import Path
-from typing import Dict, Optional, List
+from typing import Dict, List, Optional
 
 try:
     from dotenv import load_dotenv

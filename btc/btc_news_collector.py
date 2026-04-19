@@ -1,6 +1,7 @@
 # btc_news_collector.py
-import requests
 import os
+
+import requests
 
 
 def get_news_summary() -> str:

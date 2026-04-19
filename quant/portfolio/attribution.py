@@ -339,7 +339,8 @@ class WeeklyAttributionRunner:
     ) -> bool:
         """avg_contrib < threshold인 팩터를 weights.json에서 다운웨이팅."""
         try:
-            from common.config import ATTRIBUTION_DOWNWEIGHT_THRESHOLD, ATTRIBUTION_DECAY_FACTOR
+            from common.config import (ATTRIBUTION_DECAY_FACTOR,
+                                       ATTRIBUTION_DOWNWEIGHT_THRESHOLD)
             if threshold_avg is None:
                 threshold_avg = ATTRIBUTION_DOWNWEIGHT_THRESHOLD
             if decay is None:

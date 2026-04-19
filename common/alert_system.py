@@ -11,14 +11,14 @@ import os
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Any, Dict, List, Optional
 
 # 프로젝트 경로 설정
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from common.env_loader import load_env
-from common.supabase_client import get_supabase
 from common.logger import get_logger
+from common.supabase_client import get_supabase
 from common.telegram import Priority, send_telegram
 
 load_env()
@@ -48,7 +48,7 @@ def _mark_daily_summary_sent() -> None:
 
 class AlertSystem:
     """OpenClaw 알림 시스템"""
-    
+
     def __init__(self):
         self.supabase = get_supabase()
         self.alert_thresholds = {
@@ -57,7 +57,7 @@ class AlertSystem:
             "profit_target": 10.0,    # 10% 수익 목표
             "position_size_limit": 100000000,  # 1억 포지션 제한
         }
-        
+
     def _safe_float(self, value) -> float:
         """안전한 float 변환 (NoneType 방지)"""
         if value is None:
@@ -66,26 +66,26 @@ class AlertSystem:
             return float(value)
         except (ValueError, TypeError):
             return 0.0
-        
+
     def check_portfolio_alerts(self) -> List[Dict[str, Any]]:
         """포트폴리오 알림 체크"""
         alerts = []
-        
+
         try:
             # 현재 포지션 조회
             positions = self._get_current_positions()
-            
+
             for pos in positions:
                 market = pos.get("market", "")
                 symbol = pos.get("symbol", "")
                 current_price = self._safe_float(pos.get("current_price", 0))
                 entry_price = self._safe_float(pos.get("entry_price", 0))
                 quantity = self._safe_float(pos.get("quantity", 0))
-                
+
                 if entry_price > 0 and current_price > 0:
                     pnl_pct = ((current_price - entry_price) / entry_price) * 100
                     position_value = current_price * quantity
-                    
+
                     # 손실 경고 체크
                     if pnl_pct <= self.alert_thresholds["loss_critical"]:
                         alerts.append({
@@ -101,7 +101,7 @@ class AlertSystem:
                             "severity": "warning",
                             "data": pos
                         })
-                    
+
                     # 수익 목표 달성 체크
                     if pnl_pct >= self.alert_thresholds["profit_target"]:
                         alerts.append({
@@ -110,7 +110,7 @@ class AlertSystem:
                             "severity": "info",
                             "data": pos
                         })
-                    
+
                     # 포지션 크기 제한 체크
                     if position_value >= self.alert_thresholds["position_size_limit"]:
                         alerts.append({
@@ -119,16 +119,16 @@ class AlertSystem:
                             "severity": "warning",
                             "data": pos
                         })
-                        
+
         except Exception as e:
             log.error(f"포트폴리오 알림 체크 실패: {e}")
-            
+
         return alerts
-    
+
     def _get_current_positions(self) -> List[Dict[str, Any]]:
         """현재 포지션 조회"""
         positions = []
-        
+
         try:
             if self.supabase:
                 # BTC 포지션
@@ -141,7 +141,7 @@ class AlertSystem:
                         "current_price": self._safe_float(pos.get("current_price", pos.get("entry_price", 0))),
                         "quantity": self._safe_float(pos.get("quantity", 0)),
                     })
-                
+
                 # KR 포지션
                 kr_res = self.supabase.table("trade_executions").select("*").eq("result", "OPEN").execute()
                 for pos in (kr_res.data or []):
@@ -152,7 +152,7 @@ class AlertSystem:
                         "current_price": self._safe_float(pos.get("current_price", pos.get("entry_price", 0))),
                         "quantity": self._safe_float(pos.get("quantity", 0)),
                     })
-                
+
                 # US 포지션
                 us_res = self.supabase.table("us_trade_executions").select("*").eq("result", "OPEN").execute()
                 for pos in (us_res.data or []):
@@ -163,20 +163,20 @@ class AlertSystem:
                         "current_price": self._safe_float(pos.get("current_price", pos.get("price", 0))),
                         "quantity": self._safe_float(pos.get("quantity", 0)),
                     })
-                    
+
         except Exception as e:
             log.error(f"포지션 조회 실패: {e}")
-            
+
         return positions
-    
+
     def check_daily_summary_alerts(self) -> List[Dict[str, Any]]:
         """일일 요약 알림 체크"""
         alerts = []
-        
+
         try:
             # 오늘 거래 통계
             today_stats = self._get_today_statistics()
-            
+
             # 일일 요약 메시지 생성
             if today_stats["total_trades"] > 0:
                 summary_msg = (
@@ -187,19 +187,19 @@ class AlertSystem:
                     f"• 승률: {today_stats['win_rate']:.1f}%\n"
                     f"• 총 손익: {today_stats['total_pnl']:+,.0f}원"
                 )
-                
+
                 alerts.append({
                     "type": "DAILY_SUMMARY",
                     "message": summary_msg,
                     "severity": "info",
                     "data": today_stats
                 })
-                
+
         except Exception as e:
             log.error(f"일일 요약 알림 체크 실패: {e}")
-            
+
         return alerts
-    
+
     def _get_today_statistics(self) -> Dict[str, Any]:
         """오늘 통계 조회"""
         stats = {
@@ -209,11 +209,11 @@ class AlertSystem:
             "win_rate": 0,
             "total_pnl": 0
         }
-        
+
         try:
             if self.supabase:
                 today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-                
+
                 # BTC 거래
                 btc_res = self.supabase.table("btc_trades").select("*").gte("timestamp", today_start).execute()
                 for trade in (btc_res.data or []):
@@ -224,7 +224,7 @@ class AlertSystem:
                         stats["profitable_trades"] += 1
                     elif pnl < 0:
                         stats["losing_trades"] += 1
-                
+
                 # KR 거래
                 kr_res = self.supabase.table("trade_executions").select("*").gte("created_at", today_start).execute()
                 for trade in (kr_res.data or []):
@@ -233,14 +233,14 @@ class AlertSystem:
                         exit_price = float(trade.get("price", 0))
                         quantity = int(trade.get("quantity", 0))
                         pnl = (exit_price - entry_price) * quantity
-                        
+
                         stats["total_trades"] += 1
                         stats["total_pnl"] += pnl
                         if pnl > 0:
                             stats["profitable_trades"] += 1
                         elif pnl < 0:
                             stats["losing_trades"] += 1
-                
+
                 # US 거래
                 us_res = self.supabase.table("us_trade_executions").select("*").gte("created_at", today_start).execute()
                 for trade in (us_res.data or []):
@@ -249,31 +249,31 @@ class AlertSystem:
                         exit_price = float(trade.get("exit_price", 0))
                         quantity = float(trade.get("quantity", 0))
                         pnl = (exit_price - entry_price) * quantity
-                        
+
                         stats["total_trades"] += 1
                         stats["total_pnl"] += pnl
                         if pnl > 0:
                             stats["profitable_trades"] += 1
                         elif pnl < 0:
                             stats["losing_trades"] += 1
-                
+
                 # 승률 계산
                 if stats["total_trades"] > 0:
                     stats["win_rate"] = (stats["profitable_trades"] / stats["total_trades"]) * 100
-                    
+
         except Exception as e:
             log.error(f"통계 조회 실패: {e}")
-            
+
         return stats
-    
+
     def check_system_alerts(self) -> List[Dict[str, Any]]:
         """시스템 알림 체크"""
         alerts = []
-        
+
         try:
             # API 연결 상태 체크
             api_status = self._check_api_status()
-            
+
             if not api_status["supabase"]:
                 alerts.append({
                     "type": "SYSTEM_ERROR",
@@ -281,7 +281,7 @@ class AlertSystem:
                     "severity": "critical",
                     "data": {"component": "supabase"}
                 })
-            
+
             if not api_status["telegram"]:
                 alerts.append({
                     "type": "SYSTEM_ERROR",
@@ -289,25 +289,25 @@ class AlertSystem:
                     "severity": "warning",
                     "data": {"component": "telegram"}
                 })
-                
+
         except Exception as e:
             log.error(f"시스템 알림 체크 실패: {e}")
-            
+
         return alerts
-    
+
     def _check_api_status(self) -> Dict[str, bool]:
         """API 상태 체크"""
         status = {
             "supabase": False,
             "telegram": False
         }
-        
+
         try:
             # Supabase 연결 체크
             if self.supabase:
                 self.supabase.table("btc_trades").select("id", count="exact").limit(1).execute()
                 status["supabase"] = True
-            
+
             # Telegram 연결 체크 (getMe: 즉시 응답, getUpdates는 long-polling이라 타임아웃 발생)
             import requests as _req
             token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -317,26 +317,26 @@ class AlertSystem:
                     timeout=10,
                 )
                 status["telegram"] = r.ok
-            
+
         except Exception as e:
             log.error(f"API 상태 체크 실패: {e}")
-            
+
         return status
-    
+
     def send_alerts(self, alerts: List[Dict[str, Any]]) -> bool:
         """알림 전송"""
         if not alerts:
             return True
-        
+
         try:
             # 심각도별로 그룹화
             critical_alerts = [a for a in alerts if a["severity"] == "critical"]
             warning_alerts = [a for a in alerts if a["severity"] == "warning"]
             info_alerts = [a for a in alerts if a["severity"] == "info"]
-            
+
             # 심각도 순으로 전송
             all_alerts = critical_alerts + warning_alerts + info_alerts
-            
+
             for alert in all_alerts:
                 message = alert["message"]
                 # info 심각도는 일일 리포트 버퍼에만 저장 (개별 발송 안 함)
@@ -351,34 +351,34 @@ class AlertSystem:
                 if prio != Priority.INFO:
                     import time
                     time.sleep(1)
-            
+
             log.info(f"알림 {len(alerts)}건 전송 완료")
             return True
-            
+
         except Exception as e:
             log.error(f"알림 전송 실패: {e}")
             return False
-    
+
     def run_alert_check(self) -> bool:
         """전체 알림 체크 실행"""
         try:
             log.info("알림 시스템 체크 시작...")
-            
+
             all_alerts = []
-            
+
             # 포트폴리오 알림 체크
             portfolio_alerts = self.check_portfolio_alerts()
             all_alerts.extend(portfolio_alerts)
-            
+
             # 일일 요약 알림 체크 (하루 1회만 발송)
             daily_alerts = self.check_daily_summary_alerts()
             if daily_alerts and not _already_sent_daily_summary_today():
                 all_alerts.extend(daily_alerts)
-            
+
             # 시스템 알림 체크
             system_alerts = self.check_system_alerts()
             all_alerts.extend(system_alerts)
-            
+
             # 알림 전송
             success = self.send_alerts(all_alerts)
             if daily_alerts and success:
@@ -386,7 +386,7 @@ class AlertSystem:
 
             log.info(f"알림 체크 완료: {len(all_alerts)}건 발견, 전송 {'성공' if success else '실패'}")
             return success
-            
+
         except Exception as e:
             log.error(f"알림 체크 실패: {e}")
             return False
@@ -396,7 +396,7 @@ def main():
     """메인 실행 함수"""
     alert_system = AlertSystem()
     success = alert_system.run_alert_check()
-    
+
     if success:
         print("✅ 알림 시스템 체크 완료")
         sys.exit(0)

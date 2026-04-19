@@ -11,11 +11,11 @@
 - 키움/주식 매매는 이 봇에서 직접 호출하지 않는다. (추후 안전한 연계 설계 후 확장)
 """
 
-import os
 import json
+import os
 import time
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 
 import requests
 
@@ -23,10 +23,11 @@ try:
     from kiwoom_client import KiwoomClient
 except Exception:
     from stocks.kiwoom_client import KiwoomClient
-from supabase import create_client
+
 from common.config import WORKSPACE
 from common.env_loader import load_env
 from common.logger import get_logger
+from supabase import create_client
 
 log = get_logger(__name__)
 

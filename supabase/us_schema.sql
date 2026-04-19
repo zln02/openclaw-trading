@@ -40,4 +40,3 @@ create index if not exists idx_us_trade_executions_result
 
 create index if not exists idx_us_trade_executions_symbol
   on public.us_trade_executions (symbol, created_at desc);
-

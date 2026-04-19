@@ -7,14 +7,14 @@
 ## Conversation Summary
 
 user: System: [2026-03-30 08:00:00 GMT+9] 아침 브리핑을 실행해줘. 아래 순서대로 정보를 모아서 하나의 깔끔한 메시지로 보내줘:
-System: 
+System:
 System: 📅 오늘 일정: gog calendar list로 오늘 일정 확인. 없으면 "일정 없음"
 System: 📧 이메일: gog gmail list is:unread로 읽지 않은 메일 확인. 중요한 것만 요약
 System: 📰 AI/기술 뉴스: 웹검색으로 오늘의 AI/기술 뉴스 중요한 3개 헤드라인과 한 줄 요약
 System: 📈 주식: 코스피, 나스닥, SK하이닉스(000660.KS), 삼성전자(005930.KS) 현재가/등락률 웹검색
 System: 🌤 날씨: 광주 오늘 날씨 웹검색
 System: 📝 할일: brain/ 폴더에서 오늘 할일 태그된 메모 확인
-System: 
+System:
 System: 포맷은 이모지 + 핵심만 짧게. 전체 10줄 이내로.
 
 A scheduled reminder has been triggered. The reminder content is:

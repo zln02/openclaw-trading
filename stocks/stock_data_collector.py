@@ -19,18 +19,19 @@
     python3 stock_data_collector.py all          # 전체
 """
 
-import os
 import json
-import time
+import os
 import sys
-import requests
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import requests
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from common.config import STOCK_COLLECTOR_LOG
 from common.env_loader import load_env
 from common.logger import get_logger
-from common.config import STOCK_COLLECTOR_LOG
 
 load_env()
 _log = get_logger("stock_collector", STOCK_COLLECTOR_LOG)
@@ -364,9 +365,9 @@ def get_dart_corp_code(stock_code: str) -> str:
     if not DART_KEY:
         return ''
     try:
-        import zipfile
         import io
         import xml.etree.ElementTree as ET
+        import zipfile
 
         cache_path = Path('/tmp/dart_corp_codes.json')
         if cache_path.exists():

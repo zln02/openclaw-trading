@@ -1,6 +1,7 @@
 """common/metrics.py 유닛 테스트."""
 import pytest
-from common.metrics import calc_trade_pnl, calc_win_rate, calc_sharpe
+
+from common.metrics import calc_sharpe, calc_trade_pnl, calc_win_rate
 
 
 class TestCalcTradePnl:

@@ -8,15 +8,10 @@ from datetime import datetime
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from agents.regime_classifier import RegimeClassifier
+from api.signal_api import (_kr_top_picks, _load_long_short_plan,
+                            _us_top_picks, load_market_allocation,
+                            require_public_api_key)
 from common.logger import get_logger
-
-from api.signal_api import (
-    _kr_top_picks,
-    _load_long_short_plan,
-    _us_top_picks,
-    load_market_allocation,
-    require_public_api_key,
-)
 
 log = get_logger("public_ws_stream")
 router = APIRouter(prefix="/api/v1", tags=["public-ws"])

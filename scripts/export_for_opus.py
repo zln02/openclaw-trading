@@ -5,14 +5,16 @@ Supabase에서 Opus 컨설팅용 데이터 추출
 """
 
 import os
-from datetime import datetime, timedelta
-
 import sys
+from datetime import datetime, timedelta
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from common.env_loader import load_env
+
 load_env()
 from common.supabase_client import get_supabase
+
 supabase = get_supabase()
 
 

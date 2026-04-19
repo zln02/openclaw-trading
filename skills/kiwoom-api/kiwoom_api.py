@@ -77,14 +77,14 @@ def _load_stock_mapping() -> Dict[str, str]:
     """watchlist.md에서 종목명→종목코드 매핑 로드."""
     mapping = {}
     watchlist_path = BRAIN_DIR / "watchlist.md"
-    
+
     if not watchlist_path.exists():
         return mapping
-    
+
     try:
         with watchlist_path.open("r", encoding="utf-8") as f:
             lines = f.readlines()
-        
+
         in_table = False
         for line in lines:
             line = line.strip()
@@ -100,28 +100,28 @@ def _load_stock_mapping() -> Dict[str, str]:
             if in_table and (line.startswith("##") or not line):
                 if in_table and line.startswith("##"):
                     break
-    
+
     except Exception:
         pass
-    
+
     return mapping
 
 
 def normalize_stock_code(stock_input: str) -> str:
     """종목명 또는 종목코드를 받아서 6자리 종목코드로 변환."""
     stock_input = stock_input.strip()
-    
+
     # 이미 6자리 숫자면 그대로 반환
     if stock_input.isdigit() and len(stock_input) == 6:
         return stock_input
-    
+
     # 매핑 테이블에서 찾기
     mapping = _load_stock_mapping()
     code = mapping.get(stock_input)
-    
+
     if code:
         return code
-    
+
     # 매핑 없으면 원본 반환 (API가 알아서 처리하거나 에러 발생)
     return stock_input
 
@@ -332,23 +332,23 @@ def get_account_evaluation() -> Dict[str, Any]:
 
 def buy_order(stock_code: str, quantity: int, price: Optional[int] = None, order_type: str = "0") -> Dict[str, Any]:
     """매수주문 (kt10000).
-    
+
     Args:
         stock_code: 종목코드 (6자리) 또는 종목명
         quantity: 주문 수량
         price: 주문 가격 (None이면 시장가, order_type="3"으로 처리)
         order_type: 주문 유형 ("0"=보통, "3"=시장가)
-    
+
     Returns:
         주문 결과 딕셔너리
     """
     normalized_code = normalize_stock_code(stock_code)
-    
+
     # 가격이 없으면 시장가로 처리
     if price is None:
         order_type = "3"
         price = 0
-    
+
     body = {
         "dmst_stex_tp": "KRX",
         "stk_cd": normalized_code,
@@ -356,29 +356,29 @@ def buy_order(stock_code: str, quantity: int, price: Optional[int] = None, order
         "ord_uv": str(price),
         "ord_tp": order_type,
     }
-    
+
     return _call_kiwoom_api(api_id="kt10000", endpoint="/api/dostk/ordr", body=body, is_trading=True)
 
 
 def sell_order(stock_code: str, quantity: int, price: Optional[int] = None, order_type: str = "0") -> Dict[str, Any]:
     """매도주문 (kt10001).
-    
+
     Args:
         stock_code: 종목코드 (6자리) 또는 종목명
         quantity: 주문 수량
         price: 주문 가격 (None이면 시장가, order_type="3"으로 처리)
         order_type: 주문 유형 ("0"=보통, "3"=시장가)
-    
+
     Returns:
         주문 결과 딕셔너리
     """
     normalized_code = normalize_stock_code(stock_code)
-    
+
     # 가격이 없으면 시장가로 처리
     if price is None:
         order_type = "3"
         price = 0
-    
+
     body = {
         "dmst_stex_tp": "KRX",
         "stk_cd": normalized_code,
@@ -386,7 +386,7 @@ def sell_order(stock_code: str, quantity: int, price: Optional[int] = None, orde
         "ord_uv": str(price),
         "ord_tp": order_type,
     }
-    
+
     return _call_kiwoom_api(api_id="kt10001", endpoint="/api/dostk/ordr", body=body, is_trading=True)
 
 
@@ -445,4 +445,3 @@ if __name__ == "__main__":
     else:
         print(f"알 수 없는 명령: {cmd}")
         sys.exit(1)
-

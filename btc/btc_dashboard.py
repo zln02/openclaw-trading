@@ -15,16 +15,17 @@ import sys
 import time
 from collections import defaultdict
 from pathlib import Path
-from fastapi import FastAPI, Depends, HTTPException, Request, status
+
+import uvicorn
+from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response, FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
-import uvicorn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from common.env_loader import load_env
 from common.config import DASHBOARD_PORT
+from common.env_loader import load_env
 
 load_env()
 
@@ -41,7 +42,8 @@ except ImportError:
 
 _PROM_CLIENT_AVAILABLE = False
 try:
-    from prometheus_client import generate_latest as _prom_generate_latest, CONTENT_TYPE_LATEST as _PROM_CONTENT_TYPE
+    from prometheus_client import CONTENT_TYPE_LATEST as _PROM_CONTENT_TYPE
+    from prometheus_client import generate_latest as _prom_generate_latest
     _PROM_CLIENT_AVAILABLE = True
 except ImportError:
     pass
@@ -130,13 +132,13 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type", "Accept", "X-API-Key"],
 )
 
+from api.push_notifier import router as public_push_router
+from api.signal_api import router as public_signal_router
+from api.webhook_manager import router as public_webhook_router
+from api.ws_stream import router as public_ws_router
 from btc.routes.btc_api import router as btc_router
 from btc.routes.stock_api import router as stock_router
 from btc.routes.us_api import router as us_router
-from api.signal_api import router as public_signal_router
-from api.ws_stream import router as public_ws_router
-from api.webhook_manager import router as public_webhook_router
-from api.push_notifier import router as public_push_router
 
 app.include_router(btc_router,   dependencies=[Depends(_require_auth)])
 app.include_router(stock_router, dependencies=[Depends(_require_auth)])
