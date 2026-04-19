@@ -1,11 +1,12 @@
 """기술적 지표 계산 — ta 라이브러리 기반 통합 모듈."""
 from __future__ import annotations
 
+from typing import Any, Dict
+
 import pandas as pd
-from ta.trend import EMAIndicator, MACD
 from ta.momentum import RSIIndicator
+from ta.trend import MACD, EMAIndicator
 from ta.volatility import BollingerBands
-from typing import Any, Dict, Optional
 
 
 def calc_rsi(closes: pd.Series, period: int = 14) -> float:
