@@ -71,6 +71,7 @@ docker compose up -d
 # 4. Local Dev
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+pre-commit install           # 커밋 훅 활성화 (detect-private-key, flake8, isort, 대용량 파일 차단)
 python btc/btc_dashboard.py  # Dashboard at :8080
 ```
 

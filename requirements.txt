@@ -55,3 +55,4 @@ numpy>=1.24.0
 # 개발/테스트 의존성
 pytest>=7.0.0
 pytest-cov>=4.0.0
+pre-commit>=4.0.0
