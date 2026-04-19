@@ -1,3 +1,4 @@
+"""리스크 스냅샷 빌더 — VaR·드로다운·포지션을 brain/risk/latest_snapshot.json에 저장."""
 from __future__ import annotations
 
 import json

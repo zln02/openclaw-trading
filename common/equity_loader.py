@@ -1,3 +1,4 @@
+"""자산(equity) 곡선 로더 — Supabase 거래 내역 → 일별 equity 시계열 변환."""
 from __future__ import annotations
 
 import json
