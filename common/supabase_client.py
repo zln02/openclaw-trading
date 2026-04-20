@@ -19,17 +19,10 @@ def _create_client():
         pass
 
     url = os.environ.get("SUPABASE_URL", "")
-    key = os.environ.get("SUPABASE_SECRET_KEY", "")
+    # Supabase 새 secret key 포맷(sb_secret_…) 및 구 JWT(eyJ…) 양쪽 지원.
+    # SUPABASE_SECRET_KEY를 우선, 없으면 SUPABASE_KEY로 폴백.
+    key = os.environ.get("SUPABASE_SECRET_KEY", "") or os.environ.get("SUPABASE_KEY", "")
     if not url or not key:
-        return None
-
-    if not key.startswith("eyJ"):
-        _log.warning(
-            "SUPABASE_SECRET_KEY 형식 오류 — service_role JWT 아님 (eyJ로 시작해야 함). "
-            "Supabase 비활성화 후 계속 실행.",
-            key_prefix=key[:6] if key else "",
-            key_len=len(key),
-        )
         return None
 
     try:
