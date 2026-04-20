@@ -11,12 +11,11 @@ from typing import Any
 import requests
 from fastapi import APIRouter, Body, Depends, HTTPException
 
+from api.signal_api import require_public_api_key
 from common.api_utils import api_success
 from common.config import BRAIN_PATH
 from common.logger import get_logger
 from common.supabase_client import get_supabase
-
-from api.signal_api import require_public_api_key
 
 router = APIRouter(prefix="/api/v1", tags=["public-webhooks"])
 log = get_logger("webhook_manager")

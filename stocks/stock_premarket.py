@@ -14,25 +14,27 @@
     python3 stock_premarket.py
 """
 
-import os
 import json
+import os
 import sys
-import requests
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import requests
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from common.env_loader import load_env
-from common.logger import get_logger
 from common.config import STOCK_PREMARKET_LOG
+from common.env_loader import load_env
 from common.llm_client import call_haiku, is_quota_exceeded
+from common.logger import get_logger
 
 load_env()
 _log = get_logger("stock_premarket", STOCK_PREMARKET_LOG)
 
 sys.path.insert(0, str(Path(__file__).parent))
 from kiwoom_client import KiwoomClient
+
 from supabase import create_client
 
 TG_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')

@@ -16,9 +16,9 @@ Usage:
 """
 from __future__ import annotations
 
-import time
 import functools
 import threading
+import time
 from typing import Any, Callable, Optional
 
 _lock = threading.Lock()

@@ -14,15 +14,11 @@ from ta.volatility import BollingerBands
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from common.config import BRAIN_PATH
-from stocks.ml_model import (
-    _build_catboost_model,
-    _build_lgbm_model,
-    _build_model,
-    _fit_model,
-)
 from us_momentum_backtest import US_UNIVERSE
 
+from common.config import BRAIN_PATH
+from stocks.ml_model import (_build_catboost_model, _build_lgbm_model,
+                             _build_model, _fit_model)
 
 MODEL_DIR = BRAIN_PATH / "ml" / "us"
 XGB_PATH = MODEL_DIR / "xgb_model.ubj"

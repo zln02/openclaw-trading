@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from itertools import product
 from typing import Any, Dict, List, Optional, Tuple
 
-from common.config import BRAIN_PATH, ALPHA_PARAM_SPACE
+from common.config import ALPHA_PARAM_SPACE, BRAIN_PATH
 from common.env_loader import load_env
 from common.logger import get_logger
 from common.supabase_client import get_supabase

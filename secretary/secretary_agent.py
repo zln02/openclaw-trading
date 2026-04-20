@@ -2,8 +2,8 @@
 AI 비서 에이전트: Gmail/Notion/자율학습 등 도구를 TOOLS 리스트로 등록.
 .env에서 NOTION_TOKEN, NOTION_PAGE_ID, BRAVE_API_KEY, TELEGRAM_* 등 로드.
 """
-import os
 import json
+import os
 from pathlib import Path
 from typing import Any, Callable
 
@@ -14,10 +14,11 @@ try:
 except ImportError:
     pass
 
+from core.agency_memory import apply_pending_to_learned, search_learned
 # Gmail 연동 (gog 또는 동일 스타일)은 외부 CLI/API 호출로 가정.
 # Notion 스킬은 로컬 함수로 등록.
-from core.notion_skill import create_notion_note, update_notion_todo, query_notion_database
-from core.agency_memory import search_learned, apply_pending_to_learned
+from core.notion_skill import (create_notion_note, query_notion_database,
+                               update_notion_todo)
 
 
 def create_notion_note_tool(title: str, content: str = "", parent_page_id: str = "") -> dict[str, Any]:

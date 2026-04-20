@@ -21,11 +21,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from common.config import (
-    BRAIN_PATH,
-    SIGNAL_IC_IR_MIN,
-    WORKSPACE,
-)
+from common.config import BRAIN_PATH, SIGNAL_IC_IR_MIN, WORKSPACE
 from common.env_loader import load_env
 from common.logger import get_logger
 from common.metrics import calc_sharpe, calc_trade_pnl, calc_win_rate

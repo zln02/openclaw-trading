@@ -49,23 +49,23 @@ send_tg() {
         echo "❌ Telegram 설정 없음: BOT_TOKEN=${BOT_TOKEN:+설정됨}, CHAT_ID=${CHAT_ID:+설정됨}"
         return
     fi
-    
+
     # 중복 알림 방지: 같은 메시지는 10분에 한번만
     local msg_hash=$(echo "$msg" | md5sum | cut -d' ' -f1)
     local cache_file="/tmp/health_alert_cache_$msg_hash"
     local current_time=$(date +%s)
-    
+
     if [ -f "$cache_file" ]; then
         local last_sent=$(cat "$cache_file" 2>/dev/null || echo "0")
         local time_diff=$((current_time - last_sent))
-        
+
         # 10분(600초) 이내에 같은 알림을 보냈으면 건너뛰기
         if [ "$time_diff" -lt 600 ]; then
             echo "⏰ 중복 알림 건너뛰기 (남은 시간: $((600 - time_diff))초)"
             return
         fi
     fi
-    
+
     # 알림 전송 및 캐시 기록
     if curl -fsS -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
         --data-urlencode "chat_id=${CHAT_ID}" \
@@ -95,9 +95,9 @@ check_agent_health() {
     local log_path="$2"
     local process_name="$3"
     local cron_only="${4:-}"
-    
+
     echo "🔍 ${agent_name} 에이전트 체크 중..." >&2
-    
+
     # 1. 프로세스 실행 확인 (크론 모드면 스킵 — US/KR은 주기 실행이라 대부분 프로세스 없음)
     if [ "$cron_only" != "cron" ]; then
         if ! pgrep -f "$process_name" > /dev/null; then
@@ -105,18 +105,18 @@ check_agent_health() {
             return
         fi
     fi
-    
+
     # 2. 로그 파일 확인
     if [ ! -f "$log_path" ]; then
         echo "NO_LOG"
         return
     fi
-    
+
     # 3. 마지막 실행 시간 확인
     local last_mod diff
     last_mod=$(stat -c %Y "$log_path" 2>/dev/null || echo 0)
     diff=$(( (NOW - last_mod) / 60 ))
-    
+
     if [ "$diff" -gt "$STALE_MINUTES" ]; then
         echo "${diff}"
     else
@@ -182,9 +182,9 @@ fi
 if [ "$DAY" -le 5 ] && [ "$TIME" -ge 900 ] && [ "$TIME" -le 1530 ]; then
     KR_LOG="$LOG_DIR/stock_trading.log"
     KR_RESULT=$(check_agent_health "KR" "$KR_LOG" "stock_trading_agent.py" "cron")
-    
+
     echo "KR 상태: $KR_RESULT"
-    
+
     KR_HINT="%0A%0A💬 제이한테 <b>'KR 왜 그런지 보고 해결해'</b> 라고 해봐!"
     if [ "$KR_RESULT" = "NO_PROCESS" ]; then
         send_tg "🚨 <b>[헬스체크] KR 주식 에이전트 미실행</b>%0A장중인데 프로세스를 찾을 수 없습니다.$KR_HINT"
@@ -214,9 +214,9 @@ fi
 if [ "$US_ACTIVE" -eq 1 ]; then
     US_LOG="$LOG_DIR/us_trading.log"
     US_RESULT=$(check_agent_health "US" "$US_LOG" "us_stock_trading_agent.py" "cron")
-    
+
     echo "US 상태: $US_RESULT"
-    
+
     US_HINT="%0A%0A💬 제이한테 <b>'US 왜 그런지 보고 해결해'</b> 라고 해봐!"
     if [ "$US_RESULT" = "NO_PROCESS" ]; then
         send_tg "🚨 <b>[헬스체크] US 주식 에이전트 미실행</b>%0A장중인데 프로세스를 찾을 수 없습니다.$US_HINT"

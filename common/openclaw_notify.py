@@ -6,8 +6,8 @@ OpenClaw Gateway 알림 모듈.
 
 import json
 import os
-import urllib.request
 import urllib.error
+import urllib.request
 from typing import Optional
 
 from common.logger import get_logger
@@ -80,7 +80,8 @@ def notify_openclaw(
 def _fallback_telegram(event: str, message: str, urgent: bool) -> bool:
     """Gateway 불가 시 텔레그램 직접 발송 fallback."""
     try:
-        from common.telegram import send_telegram  # audit fix: send_telegram_message → send_telegram
+        from common.telegram import \
+            send_telegram  # audit fix: send_telegram_message → send_telegram
 
         prefix = "🚨" if urgent else "📢"
         text = f"{prefix} [{event}] {message}"

@@ -15,12 +15,13 @@ XGBoost 분류 모델:
 
 import json
 import os
-import sys
 import pickle
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
+
 from common.env_loader import load_env
 
 load_env()
@@ -900,9 +901,9 @@ def walk_forward_validate(X: np.ndarray, y: np.ndarray, n_splits: int = 8) -> di
         }
     """
     try:
-        from xgboost import XGBClassifier
+        from sklearn.metrics import precision_score, roc_auc_score
         from sklearn.model_selection import TimeSeriesSplit
-        from sklearn.metrics import roc_auc_score, precision_score
+        from xgboost import XGBClassifier
     except ImportError as e:
         print(f'의존성 부족: {e}')
         return {}
@@ -1028,10 +1029,8 @@ def load_performance_metrics(horizon_key: str = '3d') -> dict:
 def train_model(horizon_key: str = '3d'):
     """앙상블 스태킹 학습. LightGBM/CatBoost 없으면 XGBoost 폴백."""
     from sklearn.linear_model import LogisticRegression
-    from sklearn.metrics import (
-        classification_report, accuracy_score,
-        roc_auc_score, average_precision_score,
-    )
+    from sklearn.metrics import (accuracy_score, average_precision_score,
+                                 classification_report, roc_auc_score)
     from sklearn.model_selection import TimeSeriesSplit
 
     cfg = HORIZON_CONFIGS[horizon_key]

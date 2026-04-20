@@ -13,8 +13,8 @@ import sys
 from datetime import datetime
 
 import pandas as pd
-import requests
 import pyupbit
+import requests
 from ta.momentum import RSIIndicator
 from ta.volatility import BollingerBands
 

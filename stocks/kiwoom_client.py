@@ -18,12 +18,12 @@
     KIWOOM_ACCOUNT_NO=5012345678
 """
 
-import os
 import json
+import os
 import time
-from pathlib import Path
-from typing import Dict, Optional, List
 from datetime import datetime
+from pathlib import Path
+from typing import Dict, List, Optional
 
 try:
     from dotenv import load_dotenv
@@ -60,6 +60,7 @@ except Exception:
 
 # 자격증명 헬퍼는 logger와 독립적으로 import (실패 시 즉시 노출)
 import sys as _sys2
+
 _ws2 = str(Path(__file__).resolve().parents[1])
 if _ws2 not in _sys2.path:
     _sys2.path.insert(0, _ws2)

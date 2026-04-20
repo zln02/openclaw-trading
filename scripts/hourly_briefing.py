@@ -16,8 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from common.env_loader import load_env
 from common.logger import get_logger
-from common.telegram import Priority, _INFO_BUFFER_FILE, send_telegram
-
+from common.telegram import _INFO_BUFFER_FILE, Priority, send_telegram
 
 load_env()
 log = get_logger("hourly_briefing")
@@ -144,4 +143,3 @@ def run() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(run())
-

@@ -7,12 +7,8 @@ from __future__ import annotations
 
 import pytest
 
-from common.kiwoom_env import (
-    KiwoomCredentials,
-    get_kiwoom_credentials,
-    resolve_use_mock,
-)
-
+from common.kiwoom_env import (KiwoomCredentials, get_kiwoom_credentials,
+                               resolve_use_mock)
 
 _KIWOOM_VARS = (
     "TRADING_ENV",

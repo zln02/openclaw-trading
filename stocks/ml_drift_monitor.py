@@ -13,10 +13,11 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from ml_model import (FEATURE_NAMES, extract_features, load_training_data,
+                      supabase)
+
 from common.config import BRAIN_PATH
 from common.telegram import Priority, send_telegram
-from ml_model import FEATURE_NAMES, extract_features, load_training_data, supabase
-
 
 DRIFT_REPORT_PATH = BRAIN_PATH / "ml" / "drift_report.json"
 

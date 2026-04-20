@@ -26,6 +26,7 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
+
 from common.env_loader import load_env
 
 load_env()
@@ -35,8 +36,9 @@ _STOCKS_DIR = str(Path(__file__).parent)
 if _STOCKS_DIR not in sys.path:
     sys.path.insert(0, _STOCKS_DIR)
 
-from supabase import create_client  # noqa: E402
 from ml_model import _load_model, extract_features  # noqa: E402
+
+from supabase import create_client  # noqa: E402
 
 SUPABASE_URL = os.environ.get('SUPABASE_URL', '')
 SUPABASE_KEY = os.environ.get('SUPABASE_SECRET_KEY', '')

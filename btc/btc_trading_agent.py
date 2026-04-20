@@ -6,36 +6,36 @@ BTC 자동매매 에이전트 v6 — Top-tier Quant
       동적 가중치 복합스코어, 적응형 트레일링, 부분익절
 """
 
-import os, json, sys, requests
+import json
+import os
+import sys
 from datetime import datetime, timezone
-from zoneinfo import ZoneInfo  # v6.2 B2: KST 시간대 통일
 from pathlib import Path
+from zoneinfo import ZoneInfo  # v6.2 B2: KST 시간대 통일
+
+import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from common.config import (BTC_AI_CACHE_TTL, BTC_DAILY_CACHE_TTL,
+                           BTC_DB_RETRY_COUNT, BTC_DB_RETRY_SLEEP,
+                           BTC_EXECUTION_SLIPPAGE, BTC_FG_API_TIMEOUT, BTC_LOG,
+                           BTC_MARKET_COUNT, BTC_MARKET_INTERVAL)
 from common.env_loader import load_env
-from common.telegram import send_telegram as _tg_send, Priority as _TgPriority
-from common.supabase_client import get_supabase
+from common.equity_loader import (append_equity_snapshot,
+                                  get_effective_market_weight,
+                                  load_equity_curve, load_recent_trades,
+                                  save_drawdown_state)
 from common.logger import get_logger
 from common.retry import retry, retry_call
-from common.config import (
-    BTC_LOG,
-    BTC_MARKET_INTERVAL, BTC_MARKET_COUNT,
-    BTC_FG_API_TIMEOUT, BTC_DAILY_CACHE_TTL, BTC_AI_CACHE_TTL,
-    BTC_EXECUTION_SLIPPAGE, BTC_DB_RETRY_SLEEP, BTC_DB_RETRY_COUNT,
-)
-from common.utils import generate_order_id, check_order_idempotency
-from common.equity_loader import (
-    append_equity_snapshot,
-    get_effective_market_weight,
-    load_equity_curve,
-    load_recent_trades,
-    save_drawdown_state,
-)
+from common.supabase_client import get_supabase
+from common.telegram import Priority as _TgPriority
+from common.telegram import send_telegram as _tg_send
+from common.utils import check_order_idempotency, generate_order_id
+from execution.smart_router import SmartRouter
 from quant.risk.drawdown_guard import DrawdownGuard
 from quant.risk.drawdown_state_store import DrawdownStateStore
 from quant.risk.position_sizer import KellyPositionSizer
-from execution.smart_router import SmartRouter
 
 try:
     from common.sheets_logger import append_trade as _sheets_append
@@ -51,8 +51,10 @@ load_env()
 log = get_logger("btc_agent", BTC_LOG)
 
 import pyupbit
+from btc_news_collector import get_news_result as _get_news_result
+from btc_news_collector import get_news_summary
+
 from common.llm_client import call_haiku, is_quota_exceeded
-from btc_news_collector import get_news_summary, get_news_result as _get_news_result
 
 
 def _parse_entry_time(value) -> datetime | None:
@@ -298,9 +300,9 @@ def _latest_market_price() -> float:
 
 # ── 기술적 지표 ───────────────────────────────────
 def calculate_indicators(df) -> dict:
-    from ta.trend import EMAIndicator, MACD
     from ta.momentum import RSIIndicator
-    from ta.volatility import BollingerBands, AverageTrueRange
+    from ta.trend import MACD, EMAIndicator
+    from ta.volatility import AverageTrueRange, BollingerBands
 
     close   = df["close"]
     rsi_w   = int(_l5_params.get("rsi_window", 14))
@@ -388,8 +390,8 @@ def get_fear_greed() -> dict:
 def get_hourly_trend() -> dict:
     try:
         df    = pyupbit.get_ohlcv("KRW-BTC", interval="minute60", count=50)
-        from ta.trend import EMAIndicator
         from ta.momentum import RSIIndicator
+        from ta.trend import EMAIndicator
         close = df["close"]
         ema20 = EMAIndicator(close, window=20).ema_indicator().iloc[-1]
         ema50 = EMAIndicator(close, window=50).ema_indicator().iloc[-1]
@@ -1439,7 +1441,8 @@ def execute_trade(
                 log.debug(f"Sheets 매수 기록 실패: {e}")
         # audit fix: Prometheus 메트릭 연동
         try:
-            from common.prometheus_metrics import record_trade, set_signal_score
+            from common.prometheus_metrics import (record_trade,
+                                                   set_signal_score)
             record_trade("BTC", "buy")
             set_signal_score("BTC", "composite", float((comp or {}).get("total", 0) if isinstance(comp, dict) else 0))
         except Exception as e:
@@ -1663,11 +1666,10 @@ def run_trading_cycle() -> dict:
     kimchi     = get_kimchi_premium()
 
     # ── 온체인 데이터 (v6 신규) ──
-    from common.market_data import (
-        get_btc_funding_rate, get_btc_open_interest,
-        get_btc_long_short_ratio, get_btc_whale_activity,
-        get_market_regime,
-    )
+    from common.market_data import (get_btc_funding_rate,
+                                    get_btc_long_short_ratio,
+                                    get_btc_open_interest,
+                                    get_btc_whale_activity, get_market_regime)
     funding  = get_btc_funding_rate()
     oi       = get_btc_open_interest()
     ls_ratio = get_btc_long_short_ratio()
@@ -1676,7 +1678,8 @@ def run_trading_cycle() -> dict:
     # ── 고래 시그널 분류 (기존 whale 데이터 재사용, 추가 API 호출 없음) ──
     whale_signal: dict = {}
     try:
-        from btc.signals.whale_tracker import classify_whale_activity as _classify_whale
+        from btc.signals.whale_tracker import \
+            classify_whale_activity as _classify_whale
         _unc = float((whale or {}).get("unconfirmed_tx") or 0)
         if _unc > 0:
             _bl = max(_unc * 0.010, 1.0)
@@ -1958,7 +1961,8 @@ def run_trading_cycle() -> dict:
 
     # audit fix: Prometheus 메트릭 연동
     try:
-        from common.prometheus_metrics import record_agent_cycle, set_signal_score
+        from common.prometheus_metrics import (record_agent_cycle,
+                                               set_signal_score)
         record_agent_cycle("BTC", "success")
         set_signal_score("BTC", "composite", float((comp or {}).get("total", 0) if isinstance(comp, dict) else 0))
     except Exception as e:

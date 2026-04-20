@@ -25,7 +25,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from common.config import BRAIN_PATH, SIGNAL_IC_MIN, SIGNAL_IC_IR_MIN, SIGNAL_IC_MIN_SAMPLES
+from common.config import (BRAIN_PATH, SIGNAL_IC_IR_MIN, SIGNAL_IC_MIN,
+                           SIGNAL_IC_MIN_SAMPLES)
 from common.env_loader import load_env
 from common.logger import get_logger
 from common.supabase_client import get_supabase

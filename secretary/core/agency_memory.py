@@ -8,6 +8,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Optional
 
+
 # DB 경로: secretary 프로젝트 루트 또는 환경변수
 def _db_path() -> Path:
     p = os.getenv("AGENCY_MEMORY_DB")

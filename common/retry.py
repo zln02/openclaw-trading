@@ -1,8 +1,8 @@
 """Retry utility with exponential backoff for HTTP and API calls."""
 from __future__ import annotations
 
-import time
 import functools
+import time
 from typing import Any, Callable, Optional, Tuple, Type
 
 import requests

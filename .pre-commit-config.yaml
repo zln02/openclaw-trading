@@ -4,6 +4,7 @@ repos:
     hooks:
       - id: flake8
         args: ['--max-line-length=120', '--ignore=E501,W503,E402']
+        stages: [manual]  # CI 전용. 기존 코드 부채 별도 피처로 해결 전까지 자동훅 제외.
 
   - repo: https://github.com/pycqa/isort
     rev: 5.13.2

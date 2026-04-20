@@ -6,7 +6,8 @@ import unittest
 from stocks.signals.dart_realtime import classify_disclosure
 from stocks.signals.flow_kr import classify_investor_flow
 from stocks.signals.orderbook_kr import analyze_orderbook_snapshot
-from stocks.strategies.sector_rotation import SectorRotationModel, rank_sector_strength
+from stocks.strategies.sector_rotation import (SectorRotationModel,
+                                               rank_sector_strength)
 
 
 class KROrderbookTests(unittest.TestCase):

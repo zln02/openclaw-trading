@@ -417,7 +417,8 @@ class RegimeClassifier:
         # 교차 검증 (TimeSeriesSplit)
         cv_result = {}
         try:
-            from sklearn.model_selection import TimeSeriesSplit, cross_val_score
+            from sklearn.model_selection import (TimeSeriesSplit,
+                                                 cross_val_score)
             cv = TimeSeriesSplit(n_splits=3)
             scores = cross_val_score(model, X, y, cv=cv, scoring="accuracy")
             log.info(f"레짐 모델 CV 정확도: {scores.mean():.3f} ± {scores.std():.3f}")

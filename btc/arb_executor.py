@@ -8,12 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from common.config import (
-    BRAIN_PATH,
-    MAX_ARB_SLIPPAGE_BPS,
-    MAX_GAS_GWEI,
-    MIN_ARB_PROFIT_USD,
-)
+from common.config import (BRAIN_PATH, MAX_ARB_SLIPPAGE_BPS, MAX_GAS_GWEI,
+                           MIN_ARB_PROFIT_USD)
 from common.env_loader import load_env
 from common.logger import get_logger
 from common.supabase_client import get_supabase

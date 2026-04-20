@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 import time
-import requests
-from typing import Dict, Optional, Tuple
 from functools import lru_cache
+from typing import Dict, Optional, Tuple
 
-from common.cache import get_cached as _cached_get, set_cached as _set_cache_new
+import requests
+
+from common.cache import get_cached as _cached_get
+from common.cache import set_cached as _set_cache_new
 from common.retry import retry
 
 CACHE_TTL = 300  # 5분
@@ -529,8 +531,9 @@ def get_market_regime() -> dict:
 def check_earnings_proximity(symbol: str, days: int = 5) -> dict:
     """향후 N일 내 어닝 발표 여부. 발표 직전은 매수 위험."""
     try:
-        import yfinance as yf
         from datetime import datetime, timedelta
+
+        import yfinance as yf
 
         ticker = yf.Ticker(symbol)
         cal = ticker.calendar
