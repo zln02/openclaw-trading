@@ -63,7 +63,7 @@ workspace/
 export GOOGLE_SHEET_ID="1HXBiwg38i2LrgOgC3mjokH0sTk7qgq7Q8o4jdWOe58s"
 export GOOGLE_SHEET_TAB="시트1"
 export USE_GOG="true"
-export GOG_KEYRING_PASSWORD="openclaw-gog-secret"
+export GOG_KEYRING_PASSWORD="<your-keyring-password>"  # 본인이 설정한 실값 사용
 
 # 알림 설정
 export TELEGRAM_BOT_TOKEN="your_bot_token"
@@ -81,7 +81,7 @@ cp /var/lib/docker/rootfs/overlayfs/*/usr/local/bin/gog ./gog-docker
 chmod +x ./gog-docker
 
 # OAuth 인증
-export GOG_KEYRING_PASSWORD="openclaw-gog-secret"
+export GOG_KEYRING_PASSWORD="<your-keyring-password>"  # 본인이 설정한 실값 사용
 ./gog-docker auth add your-email@gmail.com --services sheets
 ```
 
