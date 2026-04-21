@@ -12,7 +12,7 @@
 
 Notes:
 
-- 이 파일은 워크스페이스 루트에 `IDENTITY.md`로 저장돼.
+- 이 파일은 `docs/architecture/IDENTITY.md`에 저장돼.
 - 아바타는 `avatars/openclaw.png` 같은 워크스페이스 상대 경로를 쓸 수 있어.
 
 - Name: Skill Installer 1775099226353
