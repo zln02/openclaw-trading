@@ -1,4 +1,5 @@
 const API_BASE = import.meta.env.VITE_API_URL || "";
+const INCLUDE_CREDENTIALS = import.meta.env.VITE_API_CREDENTIALS !== 'false';
 
 export const apiStatus = {
   lastSuccess: null,
@@ -11,7 +12,7 @@ async function fetchJSON(path) {
   const timer = setTimeout(() => controller.abort(), 15000);
   const start = performance.now();
   try {
-    const res = await fetch(`${API_BASE}${path}`, { signal: controller.signal, credentials: 'include' });
+    const res = await fetch(`${API_BASE}${path}`, { signal: controller.signal, credentials: INCLUDE_CREDENTIALS ? 'include' : 'omit' });
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
     const json = await res.json();
     apiStatus.lastSuccess = new Date();

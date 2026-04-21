@@ -15,6 +15,7 @@ import DeferredRender from "../components/ui/DeferredRender";
 import GlassCard from "../components/ui/GlassCard";
 import LoadingSkeleton from "../components/ui/LoadingSkeleton";
 import { EmptyState } from "../components/ui/PageState";
+import ErrorBoundary from "../components/ui/ErrorBoundary";
 import StatCard from "../components/ui/StatCard";
 import SvgDonutChart from "../components/ui/SvgDonutChart";
 import LightweightPriceChart from "../components/ui/LightweightPriceChart";
@@ -54,11 +55,11 @@ export default function KrStockPage() {
     tag: row.grade || "A",
   }));
   const [selectedSymbol, setSelectedSymbol] = useState(null);
-  const activeSymbol = selectedSymbol || watchRows[0]?.symbol || positions[0]?.stock_code || "KR EQUITY";
+  const activeSymbol = selectedSymbol || watchRows[0]?.symbol || positions[0]?.stock_code || null;
   const activeTop = (topStocks || []).find((row) => (row.stock_code || row.symbol) === activeSymbol) || topStocks?.[0];
   const activePosition = positions.find((row) => (row.stock_code || row.symbol) === activeSymbol) || positions[0];
   const { data: chartData, loading: chartLoading } = usePolling(
-    () => getStockChart(activeSymbol, "1d"),
+    () => activeSymbol ? getStockChart(activeSymbol, "1d") : Promise.resolve(null),
     60000,
     [activeSymbol],
   );
@@ -190,7 +191,9 @@ export default function KrStockPage() {
               {chartLoading ? (
                 <LoadingSkeleton height={300} />
               ) : (
-                <LightweightPriceChart data={chartSeries} />
+                <ErrorBoundary>
+                  <LightweightPriceChart data={chartSeries} />
+                </ErrorBoundary>
               )}
             </GlassCard>
           </DeferredRender>

@@ -8,6 +8,7 @@ import DeferredRender from "../components/ui/DeferredRender";
 import GlassCard from "../components/ui/GlassCard";
 import LoadingSkeleton from "../components/ui/LoadingSkeleton";
 import { EmptyState } from "../components/ui/PageState";
+import ErrorBoundary from "../components/ui/ErrorBoundary";
 import LightweightPriceChart from "../components/ui/LightweightPriceChart";
 import SvgRadarChart from "../components/ui/SvgRadarChart";
 
@@ -44,11 +45,11 @@ export default function UsStockPage() {
     tag: Number(row.volume_ratio || 0).toFixed(1) + "x",
   }));
   const [selectedSymbol, setSelectedSymbol] = useState(null);
-  const activeSymbol = selectedSymbol || watchRows[0]?.symbol || "US MOMENTUM";
+  const activeSymbol = selectedSymbol || watchRows[0]?.symbol || null;
   const activeRank = ranking.find((row) => row.symbol === activeSymbol) || ranking[0];
   const activePosition = openPositions.find((row) => (row.symbol || row.stock_code) === activeSymbol) || openPositions[0];
   const { data: chartData, loading: chartLoading } = usePolling(
-    () => getUsChart(activeSymbol, "3mo"),
+    () => activeSymbol ? getUsChart(activeSymbol, "3mo") : Promise.resolve(null),
     60000,
     [activeSymbol],
   );
@@ -160,7 +161,9 @@ export default function UsStockPage() {
               {chartLoading || marketLoading ? (
                 <LoadingSkeleton height={300} />
               ) : (
-                <LightweightPriceChart data={chartSeries} />
+                <ErrorBoundary>
+                  <LightweightPriceChart data={chartSeries} />
+                </ErrorBoundary>
               )}
             </GlassCard>
           </DeferredRender>
@@ -245,7 +248,9 @@ export default function UsStockPage() {
                   <h2>{t("Market Regime & Factor Weights")}</h2>
                   <span className="pill" style={{ fontSize: 10 }}>Static Reference</span>
                 </div>
-                <SvgRadarChart data={factorData} size={320} />
+                <ErrorBoundary>
+                  <SvgRadarChart data={factorData} size={320} />
+                </ErrorBoundary>
               </GlassCard>
             </DeferredRender>
 

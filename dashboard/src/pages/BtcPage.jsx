@@ -24,6 +24,7 @@ import GlassCard from "../components/ui/GlassCard";
 import LoadingSkeleton from "../components/ui/LoadingSkeleton";
 import LightweightPriceChart from "../components/ui/LightweightPriceChart";
 import { ErrorState, EmptyState } from "../components/ui/PageState";
+import ErrorBoundary from "../components/ui/ErrorBoundary";
 import StatCard from "../components/ui/StatCard";
 import StatusBadge from "../components/ui/StatusBadge";
 
@@ -84,7 +85,7 @@ export default function BtcPage() {
 
   const currentPosition = portfolio?.open_positions?.[0];
   const btcSummary = portfolio?.summary || {};
-  const scoreBars = sectionBarData(composite);
+  const scoreBars = useMemo(() => sectionBarData(composite), [composite]);
   const sentimentValue = Number(composite?.fg_value || 0);
 
   // 실행 피드: JSONL 우선, DB fallback
@@ -243,7 +244,11 @@ export default function BtcPage() {
                 </div>
               </div>
             </div>
-            {candlesLoading ? <LoadingSkeleton height={420} /> : <LightweightPriceChart data={candleSeries} />}
+            {candlesLoading ? <LoadingSkeleton height={420} /> : (
+              <ErrorBoundary>
+                <LightweightPriceChart data={candleSeries} />
+              </ErrorBoundary>
+            )}
           </GlassCard>
 
           <div className="split-2">

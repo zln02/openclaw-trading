@@ -1,21 +1,26 @@
 #!/usr/bin/env python3
 """
-텔레그램 제어 봇 (초기 버전)
+텔레그램 제어 봇 (KR 주식)
 
 기능:
-- /status  : 현재 계좌 요약 + 보유종목 요약 전송
-- /stop    : 자동매매 중지 플래그 파일 생성 (크론은 그대로, 에이전트 쪽에서 추후 플래그를 참고하도록 설계)
-- /sell_all: (안전 장치 설계 전) 현재는 안내 메시지/경고만 전송
+- /status   : 현재 계좌 요약 + 보유종목 요약 전송
+- /stop     : 자동매매 중지 플래그 파일 생성 (에이전트가 플래그 보고 사이클 스킵)
+- /resume   : 자동매매 재개
+- /sell_all : 전량 매도 — 2단계 확인 (CONFIRM_SELL_ALL) 후 kiwoom.place_order 호출
+- /regime   : 레짐 요약
+- /allocation / /var : 리스크 요약
 
-주의:
-- 키움/주식 매매는 이 봇에서 직접 호출하지 않는다. (추후 안전한 연계 설계 후 확장)
+안전장치:
+- /sell_all은 2단계 (확인 버튼) 필수. kiwoom_client.place_order(sell, qty, 0=시장가) 직접 호출.
+- Supabase 미연결 시 /sell_all 거부.
+- BTC 실거래 청산은 이 봇이 아닌 btc_trading_agent.py의 자체 로직 담당.
 """
 
-import os
 import json
+import os
 import time
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 
 import requests
 
@@ -23,10 +28,11 @@ try:
     from kiwoom_client import KiwoomClient
 except Exception:
     from stocks.kiwoom_client import KiwoomClient
-from supabase import create_client
+
 from common.config import WORKSPACE
 from common.env_loader import load_env
 from common.logger import get_logger
+from supabase import create_client
 
 log = get_logger(__name__)
 
@@ -460,7 +466,7 @@ def handle_command(cmd: str, chat_id: str):
             "/status - 계좌 및 보유종목 상태\n"
             "/stop - 자동매매 중지 플래그 설정\n"
             "/resume - 자동매매 중지 플래그 해제\n"
-            "/sell_all - (예정) 전량 매도\n"
+            "/sell_all - 전량 매도 (2단계 확인)\n"
             "/regime - 현재 시장 레짐\n"
             "/allocation - BTC/KR/US 배분\n"
             "/var - 포트폴리오 VaR/CVaR\n"

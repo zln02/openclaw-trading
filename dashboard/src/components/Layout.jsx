@@ -142,6 +142,7 @@ function LayoutInner() {
 
             <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
               <button
+                type="button"
                 onClick={toggle}
                 title={lang === "ko" ? "Switch to English" : "한국어로 전환"}
                 aria-label={lang === "ko" ? "Switch to English" : "한국어로 전환"}

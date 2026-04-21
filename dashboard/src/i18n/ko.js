@@ -135,6 +135,13 @@ const ko = {
   "환율 (USD/KRW)": "환율 (USD/KRW)",
   "오픈 포지션": "오픈 포지션",
 
+  // Connection Status
+  "연결됨": "연결됨",
+  "지연 중": "지연 중",
+  "연결 끊김": "연결 끊김",
+  "연결 상태": "연결 상태",
+  "Loading dashboard view…": "대시보드 로딩 중…",
+
   // Common
   "AGENT DESK": "에이전트 데스크",
   "BTC Price": "BTC 가격",

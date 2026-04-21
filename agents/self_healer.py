@@ -171,6 +171,61 @@ def restart_btc_equity_recorder() -> bool:
     return False
 
 
+# 시간당 재시작 횟수 제한 (단순 파일 기반 카운터)
+_RESTART_STATE = WORKSPACE / ".cache" / "self_healer_restarts.json"
+_RESTART_MAX_PER_HOUR = 3
+_SERVICE_MAP = {
+    "btc": "workspace-btc-agent-1",
+    "kr": "workspace-kr-agent-1",
+    "us": "workspace-us-agent-1",
+    "dashboard": "workspace-dashboard-1",
+    "telegram": "workspace-telegram-bot-1",
+}
+
+
+def _restart_count_in_last_hour(service: str) -> int:
+    import json as _json
+    try:
+        data = _json.loads(_RESTART_STATE.read_text()) if _RESTART_STATE.exists() else {}
+    except Exception:
+        return 0
+    cutoff = time.time() - 3600
+    return sum(1 for ts in data.get(service, []) if ts > cutoff)
+
+
+def _record_restart(service: str) -> None:
+    import json as _json
+    _RESTART_STATE.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        data = _json.loads(_RESTART_STATE.read_text()) if _RESTART_STATE.exists() else {}
+    except Exception:
+        data = {}
+    data.setdefault(service, []).append(time.time())
+    cutoff = time.time() - 7200
+    data[service] = [ts for ts in data[service] if ts > cutoff]
+    _RESTART_STATE.write_text(_json.dumps(data))
+
+
+def restart_container(service: str) -> tuple[bool, str]:
+    """Docker 컨테이너 재시작 (시간당 {_RESTART_MAX_PER_HOUR}회 제한)."""
+    container = _SERVICE_MAP.get(service)
+    if not container:
+        return False, f"unknown service: {service}"
+    recent = _restart_count_in_last_hour(service)
+    if recent >= _RESTART_MAX_PER_HOUR:
+        return False, f"rate-limited ({recent}/{_RESTART_MAX_PER_HOUR} in last 1h)"
+    if DRY_RUN:
+        log.info(f"[DRY-RUN] would restart: {container}")
+        return True, "dry-run"
+    rc, out = _run(f"docker restart {container}", timeout=30)
+    if rc == 0:
+        _record_restart(service)
+        log.info(f"컨테이너 재시작 완료: {container}")
+        return True, out.strip()[:80]
+    log.warning(f"컨테이너 재시작 실패: {container} | {out[:100]}")
+    return False, out.strip()[:100]
+
+
 # ── 메인 진단 루프 ─────────────────────────────────────────────────────────
 def run_self_healing(quiet: bool = False) -> dict[str, Any]:
     report: dict[str, Any] = {
@@ -237,7 +292,7 @@ def run_self_healing(quiet: bool = False) -> dict[str, Any]:
                 "브라우저에서 Google 로그인 완료 후 자동으로 복구됩니다."
             )
 
-    # --- 5. drawdown 이상 알림 (오발 억제) --------------------------------
+    # --- 5. drawdown 이상 알림 + 자동 컨테이너 재시작 ---------------------
     health = load_health_status()
     agents = health.get("agents", {})
     for agent_name, status in agents.items():
@@ -246,6 +301,13 @@ def run_self_healing(quiet: bool = False) -> dict[str, Any]:
                 stale_min = int(status)
                 if stale_min > STALE_MINUTES:
                     _alert(f"{agent_name.upper()} 에이전트 {stale_min}분째 미실행")
+                    if agent_name in _SERVICE_MAP:
+                        _action(f"{agent_name.upper()} 컨테이너 재시작 시도")
+                        ok, info = restart_container(agent_name)
+                        if ok:
+                            _action(f"{agent_name.upper()} 재시작 성공: {info}")
+                        else:
+                            _alert(f"{agent_name.upper()} 재시작 실패: {info}")
             except (ValueError, TypeError):
                 pass
 
