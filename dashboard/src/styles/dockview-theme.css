@@ -1,0 +1,25 @@
+.dockview-theme-quant {
+  --dv-paneview-active-outline-color: var(--accent-btc);
+  --dv-tabs-and-actions-container-background-color: rgba(10, 10, 15, 0.92);
+  --dv-tabs-and-actions-container-font-size: 11px;
+  --dv-tabs-and-actions-container-height: 30px;
+  --dv-tab-active-background-color: rgba(255, 255, 255, 0.06);
+  --dv-tab-inactive-background-color: transparent;
+  --dv-tab-active-foreground-color: var(--text-primary);
+  --dv-tab-inactive-foreground-color: var(--text-secondary);
+  --dv-tab-divider-color: var(--border-subtle);
+  --dv-separator-border: var(--border-subtle);
+  --dv-paneview-header-border-color: var(--border-subtle);
+  --dv-group-view-background-color: var(--bg-primary);
+  --dv-floating-box-shadow: var(--shadow-panel);
+  --dv-drag-over-background-color: rgba(247, 147, 26, 0.12);
+  --dv-drag-over-border-color: var(--accent-btc);
+  --dv-icon-hover-background-color: rgba(255, 255, 255, 0.06);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+.dockview-theme-quant .dv-tab {
+  padding: 0 12px;
+  letter-spacing: 0.04em;
+}

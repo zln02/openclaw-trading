@@ -50,6 +50,9 @@ export default defineConfig(() => {
             if (id.includes("lightweight-charts")) {
               return "price-chart";
             }
+            if (id.includes("dockview")) {
+              return "dockview";
+            }
             if (id.includes("framer-motion")) {
               return "motion";
             }

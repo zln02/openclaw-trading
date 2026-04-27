@@ -8,6 +8,7 @@ const BtcPage = lazy(() => import("./pages/BtcPage"));
 const KrStockPage = lazy(() => import("./pages/KrStockPage"));
 const UsStockPage = lazy(() => import("./pages/UsStockPage"));
 const AgentsPage = lazy(() => import("./pages/AgentsPage"));
+const ProPage = lazy(() => import("./pages/ProPage"));
 
 function RouteSkeleton() {
   return (
@@ -54,6 +55,14 @@ export default function App() {
                 element={
                   <Suspense fallback={<RouteSkeleton />}>
                     <AgentsPage />
+                  </Suspense>
+                }
+              />
+              <Route
+                path="/pro"
+                element={
+                  <Suspense fallback={<RouteSkeleton />}>
+                    <ProPage />
                   </Suspense>
                 }
               />
