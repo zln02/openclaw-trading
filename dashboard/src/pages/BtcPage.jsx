@@ -12,6 +12,7 @@ import {
 import usePolling from "../hooks/usePolling";
 import { usePortfolio } from "../context/PortfolioContext";
 import { compactTime, krw, marketTone, num, pct } from "../lib/format";
+import { tradesToMarkers } from "../utils/chartAdapters";
 import Badge from "../components/ui/Badge";
 import Card from "../components/ui/Card";
 import LightweightPriceChart from "../components/ui/LightweightPriceChart";
@@ -171,6 +172,11 @@ const TIMEFRAMES = [
   { label: "연봉",  interval: "day",      count: 365, pollMs: 300000 },
 ];
 
+const CHART_OVERLAYS = [
+  { type: "sma", period: 20 },
+  { type: "sma", period: 60 },
+];
+
 // ─── page ────────────────────────────────────────────────────────────────────
 
 export default function BtcPage() {
@@ -222,6 +228,8 @@ export default function BtcPage() {
   const tradeRows      = trades?.trades || trades || [];
   const newsRows       = news?.items || news || [];
   const decisionRows   = decisionLog?.decisions || [];
+
+  const chartMarkers = useMemo(() => tradesToMarkers(tradeRows), [tradeRows]);
 
   const watchlist = [
     { symbol: "BTC", label: "BTCKRW", value: krw(lastPrice), delta: portfolioDelta, tag: "Live" },
@@ -372,7 +380,13 @@ export default function BtcPage() {
             ) : candlesError ? (
               <ErrorState message={`BTC 차트 데이터 로딩 실패: ${candlesError}`} />
             ) : (
-              <LightweightPriceChart title={`가격 / 거래량 (${tf.label})`} data={candleSeries} height={chartHeight} />
+              <LightweightPriceChart
+                title={`가격 / 거래량 (${tf.label}) · MA20·60 + 매매 마커`}
+                data={candleSeries}
+                height={chartHeight}
+                overlays={CHART_OVERLAYS}
+                markers={chartMarkers}
+              />
             )}
           </Card>
 

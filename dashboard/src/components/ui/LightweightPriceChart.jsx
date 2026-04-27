@@ -1,5 +1,20 @@
-import { AreaSeries, CandlestickSeries, HistogramSeries, LineSeries, createChart } from "lightweight-charts";
+import {
+  AreaSeries,
+  CandlestickSeries,
+  HistogramSeries,
+  LineSeries,
+  createChart,
+  createSeriesMarkers,
+} from "lightweight-charts";
 import { useEffect, useRef, useState } from "react";
+
+import { sma } from "../../utils/indicators";
+
+const OVERLAY_DEFAULT_COLORS = {
+  20: "rgba(94, 234, 212, 0.85)",
+  60: "rgba(247, 147, 26, 0.85)",
+  120: "rgba(167, 139, 250, 0.85)",
+};
 
 function toUnixTime(value, index, fallbackStep = 300) {
   if (typeof value === "number" && Number.isFinite(value)) {
@@ -38,6 +53,8 @@ export default function LightweightPriceChart({
   height = 420,
   showVolume = true,
   priceLine = true,
+  markers = null,
+  overlays = null,
 }) {
   const hostRef = useRef(null);
   const [chartError, setChartError] = useState(null);
@@ -57,6 +74,7 @@ export default function LightweightPriceChart({
       area: readColor("--accent-us", "#3b82f6"),
     };
     let chart;
+    let markersPrimitive = null;
 
     try {
       setChartError(null);
@@ -116,6 +134,28 @@ export default function LightweightPriceChart({
           });
         }
 
+        if (Array.isArray(overlays) && overlays.length > 0) {
+          for (const overlay of overlays) {
+            if (!overlay || overlay.type !== "sma") continue;
+            const period = Number(overlay.period);
+            if (!Number.isFinite(period) || period <= 0) continue;
+            const points = sma(normalized, period, "close");
+            if (points.length === 0) continue;
+            const lineSeries = chart.addSeries(LineSeries, {
+              color: overlay.color || OVERLAY_DEFAULT_COLORS[period] || "rgba(255,255,255,0.7)",
+              lineWidth: overlay.lineWidth || 1,
+              priceLineVisible: false,
+              lastValueVisible: false,
+              crosshairMarkerVisible: false,
+            });
+            lineSeries.setData(points);
+          }
+        }
+
+        if (Array.isArray(markers) && markers.length > 0) {
+          markersPrimitive = createSeriesMarkers(candleSeries, markers);
+        }
+
         if (showVolume) {
           const volumeSeries = chart.addSeries(HistogramSeries, {
             priceFormat: { type: "volume" },
@@ -163,9 +203,14 @@ export default function LightweightPriceChart({
     }
 
     return () => {
+      try {
+        markersPrimitive?.detach?.();
+      } catch (_) {
+        // noop — chart.remove() will clean up if detach is unavailable
+      }
       chart?.remove();
     };
-  }, [data, height, priceLine, showVolume]);
+  }, [data, height, priceLine, showVolume, markers, overlays]);
 
   return (
     <div className="h-full min-h-[320px] overflow-hidden rounded-[var(--panel-radius-sm)] border border-white/5 bg-[rgba(7,9,14,0.86)]">
