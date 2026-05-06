@@ -18,31 +18,27 @@ v2 변경사항:
 import os
 import sys
 import time
-import requests
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional, List, Dict
+from typing import Dict, List, Optional
 
-import yfinance as yf
 import pandas as pd
+import requests
+import yfinance as yf
 from ta.momentum import RSIIndicator
 from ta.volatility import BollingerBands
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from common.config import US_TRADING_LOG
 from common.env_loader import load_env
-from common.telegram import send_telegram as _tg_send
-from common.supabase_client import _reset_client, get_supabase
+from common.equity_loader import (append_equity_snapshot,
+                                  get_effective_market_weight,
+                                  load_drawdown_state, load_equity_curve,
+                                  load_recent_trades, save_drawdown_state)
 from common.logger import get_logger
 from common.retry import retry, retry_call
-from common.config import US_TRADING_LOG
-from common.equity_loader import (
-    append_equity_snapshot,
-    get_effective_market_weight,
-    load_drawdown_state,
-    load_equity_curve,
-    load_recent_trades,
-    save_drawdown_state,
-)
+from common.supabase_client import _reset_client, get_supabase
+from common.telegram import send_telegram as _tg_send
 from quant.risk.drawdown_guard import DrawdownGuard, DrawdownGuardState
 from quant.risk.position_sizer import KellyPositionSizer
 
@@ -56,7 +52,7 @@ _log = get_logger("us_agent", US_TRADING_LOG)
 KST = timezone(timedelta(hours=9))
 
 sys.path.insert(0, str(Path(__file__).parent))
-from us_momentum_backtest import scan_today_top_us, US_UNIVERSE, MomentumScore
+from us_momentum_backtest import US_UNIVERSE, MomentumScore, scan_today_top_us
 
 supabase = get_supabase()
 
@@ -232,7 +228,7 @@ def send_telegram(msg: str):
 
 def is_us_market_open() -> bool:
     """미국장 대략 개장 여부 (한국 시간 기준 23:30~06:00, 서머타임 무시)."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(KST)
     h = now.hour
     return h >= 23 or h < 6
 
@@ -773,9 +769,10 @@ def execute_buy(symbol: str, score: float, indicators: dict, signal: Optional[di
         _WORKSPACE_ROOT = str(Path(__file__).resolve().parents[1])
         if _WORKSPACE_ROOT not in _sys.path:
             _sys.path.insert(0, _WORKSPACE_ROOT)
-        from quant.factors.registry import calc_all, FactorContext
         import json as _json
         from datetime import datetime as _dt
+
+        from quant.factors.registry import FactorContext, calc_all
         _fctx = FactorContext()
         _today_iso = _dt.now().date().isoformat()
         _all_factors = calc_all(_today_iso, symbol=symbol, market='us', context=_fctx)
