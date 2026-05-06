@@ -6,19 +6,26 @@ BTC 자동매매 에이전트 v6 — Top-tier Quant
       동적 가중치 복합스코어, 적응형 트레일링, 부분익절
 """
 
-import os, json, sys, requests, math, time
-from datetime import datetime, timezone, timedelta
+import json
+import math
+import os
+import sys
+import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+import requests
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from common.config import API_RETRY_CONFIG, BTC_LOG
 from common.env_loader import load_env
-from common.telegram import send_telegram as _tg_send, Priority as _TgPriority
-from common.supabase_client import _reset_client, get_supabase
 from common.logger import get_logger
 from common.retry import retry, retry_call
-from common.config import API_RETRY_CONFIG, BTC_LOG
+from common.supabase_client import _reset_client, get_supabase
+from common.telegram import Priority as _TgPriority
+from common.telegram import send_telegram as _tg_send
 
 try:
     from common.sheets_logger import append_trade as _sheets_append
@@ -26,7 +33,8 @@ except ImportError:
     _sheets_append = None
 
 try:
-    from common.circuit_breaker import check_trade_allowed_sync as _check_circuit_breaker
+    from common.circuit_breaker import \
+        check_trade_allowed_sync as _check_circuit_breaker
 except ImportError:
     _check_circuit_breaker = None
 
@@ -47,8 +55,9 @@ KST = timezone(timedelta(hours=9))
 _btc_regime_cache = {"regime": None, "multipliers": None, "ts": 0}
 
 import pyupbit
+from btc_news_collector import get_news_result as _get_news_result
+from btc_news_collector import get_news_summary
 from openai import OpenAI
-from btc_news_collector import get_news_summary, get_news_result as _get_news_result
 
 
 def _load_ic_weights() -> dict:
@@ -150,6 +159,7 @@ client  = OpenAI(api_key=OPENAI_KEY) if OPENAI_KEY else None
 # ── 프로세스 내 매수 잠금 (Race condition 방지) ──────
 # Supabase 쓰기 딜레이로 get_open_position()이 None 반환 시에도 중복매수 차단
 import threading as _threading
+
 _buy_lock = _threading.Lock()
 _LAST_BUY_FILE = Path(__file__).resolve().parents[1] / "brain" / "btc_last_buy.json"
 
@@ -165,7 +175,8 @@ def _read_last_buy_ts() -> float:
 
 def _write_last_buy_ts() -> None:
     """현재 UTC epoch을 파일에 저장"""
-    import json as _json, time as _t
+    import json as _json
+    import time as _t
     _LAST_BUY_FILE.parent.mkdir(parents=True, exist_ok=True)
     _LAST_BUY_FILE.write_text(_json.dumps({"ts": _t.time()}))
 if client is None:
@@ -343,9 +354,9 @@ def has_valid_market_data(df) -> bool:
 
 # ── 기술적 지표 ───────────────────────────────────
 def calculate_indicators(df) -> dict:
-    from ta.trend import EMAIndicator, MACD
     from ta.momentum import RSIIndicator
-    from ta.volatility import BollingerBands, AverageTrueRange
+    from ta.trend import MACD, EMAIndicator
+    from ta.volatility import AverageTrueRange, BollingerBands
 
     close   = df["close"]
     rsi_w   = int(_l5_params.get("rsi_window", 14))
@@ -488,8 +499,8 @@ def get_fear_greed() -> dict:
 def get_hourly_trend() -> dict:
     try:
         df    = pyupbit.get_ohlcv("KRW-BTC", interval="minute60", count=50)
-        from ta.trend import EMAIndicator
         from ta.momentum import RSIIndicator
+        from ta.trend import EMAIndicator
         close = df["close"]
         ema20 = EMAIndicator(close, window=20).ema_indicator().iloc[-1]
         ema50 = EMAIndicator(close, window=50).ema_indicator().iloc[-1]
@@ -1498,15 +1509,47 @@ def save_log(
             "composite_score":    (comp or {}).get("total") if isinstance(comp, dict) else None,
         }
 
+        # 팩터 스냅샷 수집 (Phase Level 4: 팩터 로깅)
+        if row.get("action") in ("BUY", "SELL"):
+            try:
+                import sys as _sys
+                _WORKSPACE_PATH = str(Path(__file__).resolve().parents[1])
+                if _WORKSPACE_PATH not in _sys.path:
+                    _sys.path.insert(0, _WORKSPACE_PATH)
+                from quant.factors.registry import FactorContext, calc_all
+                _fctx = FactorContext()
+                _today_iso = datetime.now(timezone.utc).date().isoformat()
+                _all_factors = calc_all(_today_iso, symbol="BTC", market="btc", context=_fctx)
+                _top5 = dict(
+                    sorted(_all_factors.items(), key=lambda x: abs(x[1]), reverse=True)[:5]
+                )
+                row["factor_snapshot"] = json.dumps(_top5, ensure_ascii=False)
+                log.info(f"BTC 팩터 스냅샷 수집: {list(_top5.keys())}")
+            except Exception as _fe:
+                log.warning(f"BTC 팩터 스냅샷 건너뜀: {_fe}")
+
         try:
             supabase.table("btc_trades").insert(row).execute()
         except Exception:
-            # Fallback to minimal schema
-            minimal = {k: row[k] for k in [
-                "timestamp", "action", "price", "rsi", "macd",
-                "confidence", "reason", "indicator_snapshot", "order_raw",
-            ]}
-            supabase.table("btc_trades").insert(minimal).execute()
+            # Step 1: factor_snapshot 컬럼 미적용 환경 대응 — 키 제거 후 재시도
+            if "factor_snapshot" in row:
+                del row["factor_snapshot"]
+                try:
+                    supabase.table("btc_trades").insert(row).execute()
+                except Exception:
+                    # Step 2: Fallback to minimal schema
+                    minimal = {k: row[k] for k in [
+                        "timestamp", "action", "price", "rsi", "macd",
+                        "confidence", "reason", "indicator_snapshot", "order_raw",
+                    ]}
+                    supabase.table("btc_trades").insert(minimal).execute()
+            else:
+                # factor_snapshot 없는 경우 기존 minimal fallback
+                minimal = {k: row[k] for k in [
+                    "timestamp", "action", "price", "rsi", "macd",
+                    "confidence", "reason", "indicator_snapshot", "order_raw",
+                ]}
+                supabase.table("btc_trades").insert(minimal).execute()
         log.debug("Supabase 저장 완료", result_code=result_code, guard=guard)
     except Exception as e:
         log.error(f"Supabase 저장 실패: {e}")
@@ -1600,11 +1643,10 @@ def run_trading_cycle() -> dict:
         kimchi = 0.0
 
     # ── 온체인 데이터 (v6 신규) ──
-    from common.market_data import (
-        get_btc_funding_rate, get_btc_open_interest,
-        get_btc_long_short_ratio, get_btc_whale_activity,
-        get_market_regime,
-    )
+    from common.market_data import (get_btc_funding_rate,
+                                    get_btc_long_short_ratio,
+                                    get_btc_open_interest,
+                                    get_btc_whale_activity, get_market_regime)
     try:
         funding = get_btc_funding_rate()
     except Exception as e:
@@ -1621,7 +1663,8 @@ def run_trading_cycle() -> dict:
     # ── 고래 시그널 분류 (기존 whale 데이터 재사용, 추가 API 호출 없음) ──
     whale_signal: dict = {}
     try:
-        from btc.signals.whale_tracker import classify_whale_activity as _classify_whale
+        from btc.signals.whale_tracker import \
+            classify_whale_activity as _classify_whale
         _unc = float((whale or {}).get("unconfirmed_tx") or 0)
         if _unc > 0:
             _bl = max(_unc * 0.010, 1.0)
