@@ -6,23 +6,15 @@ import os
 import socket
 import time
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
-from common.config import BTC_LOG, DASHBOARD_PORT, DASHBOARD_LOG, LOG_DIR, STOCK_TRADING_LOG, US_TRADING_LOG
+from common.config import DASHBOARD_PORT
 from common.logger import get_logger
 from common.supabase_client import get_supabase, run_query_with_retry
 from common.telegram import send_telegram
 
 log = get_logger("health")
 _HEALTH_SNAPSHOT_TABLE_MISSING = False
-
-
-def _safe_mtime(path: Path) -> float:
-    try:
-        return path.stat().st_mtime
-    except OSError:
-        return 0.0
 
 
 async def check_upbit() -> dict[str, Any]:
@@ -76,27 +68,54 @@ async def check_dashboard() -> dict[str, Any]:
     return await asyncio.to_thread(_check)
 
 
+def _last_btc_trade_ts(supabase: Any) -> datetime | None:
+    """btc_trades 테이블의 마지막 timestamp (HOLD 포함, 매 사이클 기록)."""
+    res = (
+        supabase.table("btc_trades")
+        .select("timestamp")
+        .order("timestamp", desc=True)
+        .limit(1)
+        .execute()
+    )
+    rows = res.data or []
+    if not rows:
+        return None
+    raw = rows[0].get("timestamp")
+    if not raw:
+        return None
+    return datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+
+
 async def check_cron_freshness() -> dict[str, Any]:
+    """BTC 매매 사이클 신선도 검사.
+
+    신호원: supabase `btc_trades.timestamp` (매 사이클 HOLD 포함 기록).
+    BTC만 critical 신호로 사용. KR/US는 BUY/SELL만 기록되어 사이클 신호로 부적합 →
+    별 PR에서 heartbeat 테이블 도입 시 추가 검사.
+    """
+
     def _check() -> dict[str, Any]:
-        now = time.time()
-        cron_log_dir = LOG_DIR / "cron"
-        watched = [BTC_LOG, STOCK_TRADING_LOG, US_TRADING_LOG, DASHBOARD_LOG]
-        if cron_log_dir.is_dir():
-            watched += [
-                cron_log_dir / "btc_trading.log",
-                cron_log_dir / "stock_trading.log",
-                cron_log_dir / "us_trading.log",
-                cron_log_dir / "dashboard.log",
-            ]
-        mtimes = [_safe_mtime(p) for p in watched]
-        last_seen = max(mtimes) if mtimes else 0.0
-        if last_seen <= 0:
-            raise RuntimeError("에이전트 로그 파일을 찾을 수 없습니다 (cron 미실행 또는 로그 경로 오류)")
-        age = int(now - last_seen)
-        if age > 60 * 60 * 14:
-            hours = age // 3600
-            raise RuntimeError(f"에이전트 로그가 {hours}시간 동안 갱신되지 않았습니다 (cron 중단 의심)")
-        return {"age_seconds": age, "log_dir": str(LOG_DIR)}
+        supabase = get_supabase()
+        if supabase is None:
+            raise RuntimeError("Supabase 클라이언트 미초기화")
+
+        now_utc = datetime.now(timezone.utc)
+        last_ts = _last_btc_trade_ts(supabase)
+        if last_ts is None:
+            raise RuntimeError("btc_trades 테이블에 데이터가 없습니다 (BTC 에이전트 미실행)")
+
+        age_min = (now_utc - last_ts).total_seconds() / 60
+        if age_min > 30:
+            raise RuntimeError(
+                f"BTC 사이클 정체 — btc_trades {round(age_min)}분간 갱신 안됨 (cron/사이클 정지 의심)"
+            )
+
+        return {
+            "btc": {"age_minutes": round(age_min)},
+            "kr": {"signal": "not_tracked", "note": "trade_executions BUY/SELL only"},
+            "us": {"signal": "not_tracked", "note": "us_trade_executions BUY/SELL only"},
+            "source": "supabase.btc_trades",
+        }
 
     return await asyncio.to_thread(_check)
 
