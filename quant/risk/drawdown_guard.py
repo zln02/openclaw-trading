@@ -7,7 +7,7 @@ Rules:
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from typing import List, Optional, Sequence
 
@@ -51,6 +51,9 @@ class DrawdownGuardConfig:
 class DrawdownGuardState:
     cooldown_until: Optional[str] = None
     last_action: str = "NONE"
+    # brain/risk/drawdown_state.json 이 triggered_rules 키 포함 → unpacking 호환용 필드.
+    # evaluate() 결과의 triggered_rules 와 별도 (state 는 마지막 적용 룰만 last_action 으로 추적).
+    triggered_rules: List[str] = field(default_factory=list)
 
 
 class DrawdownGuard:

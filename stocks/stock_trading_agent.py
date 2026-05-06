@@ -1503,7 +1503,6 @@ def execute_buy(
         'ml_confidence': signal.get('ml_confidence', 0.0),
         'ml_features_json': json.dumps(signal.get('ml_features', {})) if signal.get('ml_features') else None,
         'composite_score': signal.get('confidence', 0.0),
-        'source': signal.get('source', 'AI'),
         'drift_status': signal.get('drift_status', ''),
         'drift_penalty': signal.get('drift_penalty', 0.0),
         'rsi': indicators.get('rsi', 0.0),
@@ -1674,7 +1673,6 @@ def execute_sell(stock: dict, signal: dict, indicators: dict, reason_prefix: str
             'result': 'CLOSED',
             'pnl_pct': pnl_pct,
             'composite_score': signal.get('confidence', 0.0) if isinstance(signal, dict) else 0.0,
-            'source': signal.get('source', 'SELL') if isinstance(signal, dict) else 'SELL',
             'drift_status': signal.get('drift_status', '') if isinstance(signal, dict) else '',
             'drift_penalty': signal.get('drift_penalty', 0.0) if isinstance(signal, dict) else 0.0,
         }
