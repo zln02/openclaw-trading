@@ -244,8 +244,80 @@ class WeeklyAttributionRunner:
                 pnl = calc_trade_pnl(r, market="kr")
                 if pnl is None:
                     continue
-            result.append({"pnl_pct": pnl, "factors": snap})
+            result.append({"pnl_pct": pnl, "factors": snap, "market": "kr"})
         return result
+
+    def _load_btc_trades(self, lookback_days: int = 7) -> List[Dict[str, Any]]:
+        """btc_trades 의 BUY→SELL FIFO 페어 매칭 → factors/pnl 매핑.
+
+        attribution_runner 가 KR trade_executions 만 보던 것을 BTC 로 확장.
+        BTC 는 indicator_snapshot (JSON str) 컬럼에 신호 저장, PnL 은 자체 계산.
+        """
+        if not self.supabase:
+            return []
+
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(days=lookback_days)
+        ).isoformat()
+
+        try:
+            rows = (
+                self.supabase.table("btc_trades")
+                .select("id,timestamp,action,price,indicator_snapshot")
+                .in_("action", ["BUY", "SELL"])
+                .gte("timestamp", cutoff)
+                .order("timestamp", desc=False)
+                .execute()
+                .data or []
+            )
+        except Exception as exc:
+            try:
+                from common.logger import get_logger
+                get_logger("attribution").warning("btc_trades 로드 실패", error=exc)
+            except Exception:
+                pass
+            return []
+
+        out: List[Dict[str, Any]] = []
+        open_buy_index: Optional[int] = None
+
+        for r in rows:
+            snap_raw = r.get("indicator_snapshot")
+            if not snap_raw:
+                continue
+            try:
+                snap = json.loads(snap_raw) if isinstance(snap_raw, str) else snap_raw
+            except Exception:
+                continue
+            if not isinstance(snap, dict):
+                continue
+
+            action = r.get("action")
+            if action == "BUY":
+                buy_price = _safe_float(r.get("price"))
+                if buy_price <= 0:
+                    continue  # 가격 0은 데이터 오류 — skip
+                # KR OPEN row 패턴 모방: BUY 시점에 미청산 trade 로 추가 (pnl=0)
+                out.append({
+                    "pnl_pct": 0.0,
+                    "factors": snap,
+                    "market": "btc",
+                    "_buy_price": buy_price,
+                })
+                open_buy_index = len(out) - 1
+            elif action == "SELL" and open_buy_index is not None:
+                sell_price = _safe_float(r.get("price"))
+                buy_price = out[open_buy_index].get("_buy_price", 0.0)
+                if buy_price > 0 and sell_price > 0:
+                    pnl_pct = (sell_price - buy_price) / buy_price * 100
+                    out[open_buy_index]["pnl_pct"] = round(pnl_pct, 4)
+                open_buy_index = None
+
+        # 임시 _buy_price 키 제거 (외부에 노출하지 않음)
+        for trade in out:
+            trade.pop("_buy_price", None)
+
+        return out
 
     # ── Attribution calculation ───────────────────────────────────────────
 
@@ -299,7 +371,8 @@ class WeeklyAttributionRunner:
     ) -> bool:
         """avg_contrib < threshold인 팩터를 weights.json에서 다운웨이팅."""
         try:
-            from common.config import ATTRIBUTION_DOWNWEIGHT_THRESHOLD, ATTRIBUTION_DECAY_FACTOR
+            from common.config import (ATTRIBUTION_DECAY_FACTOR,
+                                       ATTRIBUTION_DOWNWEIGHT_THRESHOLD)
             if threshold_avg is None:
                 threshold_avg = ATTRIBUTION_DOWNWEIGHT_THRESHOLD
             if decay is None:
@@ -393,10 +466,22 @@ class WeeklyAttributionRunner:
 
         log.info("attribution 분석 시작", lookback_days=lookback_days)
 
-        trades = self._load_closed_trades(lookback_days=lookback_days)
+        kr_trades = self._load_closed_trades(lookback_days=lookback_days)
+        btc_trades = self._load_btc_trades(lookback_days=lookback_days)
+        trades = kr_trades + btc_trades
+
+        market_distribution = {
+            "kr": len(kr_trades),
+            "btc": len(btc_trades),
+        }
+
         if not trades:
             log.warning("factor_snapshot 포함 trades 없음 — 데이터 축적 필요")
-            return {"status": "NO_DATA", "n_trades": 0}
+            return {
+                "status": "NO_DATA",
+                "n_trades": 0,
+                "market_distribution": market_distribution,
+            }
 
         factor_attrs = self._calc_factor_attribution(trades)
         n_trades = len(trades)
@@ -416,6 +501,7 @@ class WeeklyAttributionRunner:
             "total_pnl_avg": total_pnl_avg,
             "factor_attribution": factor_attrs,
             "weights_updated": weights_updated,
+            "market_distribution": market_distribution,
             "timestamp": _utc_now_iso(),
         }
 
