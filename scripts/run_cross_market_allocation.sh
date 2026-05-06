@@ -9,10 +9,14 @@ load_openclaw_env
 require_openclaw_workspace
 
 cd "$WORKSPACE"
-source .venv/bin/activate
+PYTHON_BIN="$WORKSPACE/.venv/bin/python3"
+if [ ! -x "$PYTHON_BIN" ]; then
+    echo "Python runtime not found: $PYTHON_BIN" >&2
+    exit 1
+fi
 
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] cross_market_manager 시작"
 
-python -m quant.portfolio.cross_market_manager "$@"
+"$PYTHON_BIN" -m quant.portfolio.cross_market_manager "$@"
 
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] cross_market_manager 완료"

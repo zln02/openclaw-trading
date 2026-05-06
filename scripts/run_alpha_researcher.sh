@@ -9,11 +9,15 @@ load_openclaw_env
 require_openclaw_workspace
 
 cd "$WORKSPACE"
-source .venv/bin/activate
+PYTHON_BIN="$WORKSPACE/.venv/bin/python3"
+if [ ! -x "$PYTHON_BIN" ]; then
+    echo "Python runtime not found: $PYTHON_BIN" >&2
+    exit 1
+fi
 
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] alpha_researcher 시작"
 
-python -m quant.alpha_researcher \
+"$PYTHON_BIN" -m quant.alpha_researcher \
     --market "${ALPHA_MARKET:-kr}" \
     "$@"
 

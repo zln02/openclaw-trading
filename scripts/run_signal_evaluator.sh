@@ -9,11 +9,15 @@ load_openclaw_env
 require_openclaw_workspace
 
 cd "$WORKSPACE"
-source .venv/bin/activate
+PYTHON_BIN="$WORKSPACE/.venv/bin/python3"
+if [ ! -x "$PYTHON_BIN" ]; then
+    echo "Python runtime not found: $PYTHON_BIN" >&2
+    exit 1
+fi
 
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] signal_evaluator 시작"
 
-python -m quant.signal_evaluator \
+"$PYTHON_BIN" -m quant.signal_evaluator \
     --lookback "${SIGNAL_LOOKBACK:-90}" \
     --window "${SIGNAL_WINDOW:-14}" \
     "$@"
