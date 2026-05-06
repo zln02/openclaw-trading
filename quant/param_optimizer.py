@@ -21,11 +21,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from common.config import (
-    BRAIN_PATH,
-    SIGNAL_IC_IR_MIN,
-    WORKSPACE,
-)
+from common.config import BRAIN_PATH, SIGNAL_IC_IR_MIN, WORKSPACE
 from common.env_loader import load_env
 from common.logger import get_logger
 from common.metrics import calc_sharpe, calc_trade_pnl, calc_win_rate
@@ -39,6 +35,13 @@ log = get_logger("param_optimizer")
 _WEIGHTS_PATH = BRAIN_PATH / "signal-ic" / "weights.json"
 _BEST_PARAMS_PATH = BRAIN_PATH / "alpha" / "best_params.json"
 _AGENT_PARAMS_PATH = BRAIN_PATH / "agent_params.json"
+_DECISION_LOG_PATH = BRAIN_PATH / "alpha" / "decision_log.jsonl"
+
+# 백테스트 게이트 임계값
+_GATE_SHARPE_MARGIN = 0.98   # new_sharpe ≥ baseline_sharpe × 이 값
+_GATE_MDD_MARGIN = 1.3       # |new_mdd| ≤ |baseline_mdd| × 이 값
+_GATE_MIN_TRADES = 3         # 거래 수 부족 시 SKIP
+_GATE_DEFAULT_DAYS = 30      # BTC 30일 백테스트
 
 # 자율 조정 임계값
 _WIN_RATE_LOW = 0.40      # 이 이하이면 방어 모드
@@ -207,6 +210,89 @@ def _save_agent_params(params: Dict[str, Any]) -> None:
     )
 
 
+def _log_decision(decision: dict) -> None:
+    """decision_log.jsonl 에 한 줄 append. I/O 실패 시 warning 후 계속."""
+    try:
+        _DECISION_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(_DECISION_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(decision, ensure_ascii=False) + "\n")
+    except Exception as exc:
+        log.warning("decision_log 기록 실패", error=exc)
+
+
+def _backtest_gate(
+    new_params: Dict[str, Any],
+    baseline_params: Dict[str, Any],
+    market: str = "btc",
+    days: int = 30,
+) -> Dict[str, Any]:
+    """백테스트 게이트: 신규 파라미터가 기준 대비 sharpe/MDD 기준 통과하는지 검증."""
+    try:
+        from backtest.backtest_engine import \
+            BacktestEngine  # 지연 import — circular 회피
+
+        baseline_engine = BacktestEngine(days=days, params=baseline_params)
+        new_engine = BacktestEngine(days=days, params=new_params)
+        bm = baseline_engine.run(save=False)["metrics"]
+        nm = new_engine.run(save=False)["metrics"]
+    except Exception as exc:
+        log.warning("백테스트 게이트 실행 실패 — 자동 적용", error=exc)
+        return {
+            "passed": True,
+            "skipped": True,
+            "reason": "백테스트 실행 실패 — 자동 적용",
+            "error": str(exc),
+        }
+
+    # SKIP 분기: 거래 수 부족
+    bm_trades = bm.get("n_trades", 0) if isinstance(bm, dict) else getattr(bm, "n_trades", 0)
+    nm_trades = nm.get("n_trades", 0) if isinstance(nm, dict) else getattr(nm, "n_trades", 0)
+    if min(bm_trades, nm_trades) < _GATE_MIN_TRADES:
+        return {
+            "passed": True,
+            "skipped": True,
+            "reason": "거래 부족",
+            "market": market,
+            "days": days,
+            "baseline_sharpe": _safe_float(bm.get("sharpe") if isinstance(bm, dict) else getattr(bm, "sharpe", None)),
+            "new_sharpe": _safe_float(nm.get("sharpe") if isinstance(nm, dict) else getattr(nm, "sharpe", None)),
+            "baseline_mdd": _safe_float(bm.get("mdd_pct") if isinstance(bm, dict) else getattr(bm, "mdd_pct", None)),
+            "new_mdd": _safe_float(nm.get("mdd_pct") if isinstance(nm, dict) else getattr(nm, "mdd_pct", None)),
+            "n_trades": min(bm_trades, nm_trades),
+        }
+
+    # 메트릭 추출
+    b_sharpe = _safe_float(bm.get("sharpe") if isinstance(bm, dict) else getattr(bm, "sharpe", None))
+    n_sharpe = _safe_float(nm.get("sharpe") if isinstance(nm, dict) else getattr(nm, "sharpe", None))
+    b_mdd = _safe_float(bm.get("mdd_pct") if isinstance(bm, dict) else getattr(bm, "mdd_pct", None))
+    n_mdd = _safe_float(nm.get("mdd_pct") if isinstance(nm, dict) else getattr(nm, "mdd_pct", None))
+
+    # PASS/FAIL 판정
+    sharpe_pass = n_sharpe >= b_sharpe * _GATE_SHARPE_MARGIN
+    mdd_pass = abs(n_mdd) <= abs(b_mdd) * _GATE_MDD_MARGIN
+    passed = sharpe_pass and mdd_pass
+
+    reasons = []
+    if not sharpe_pass:
+        reasons.append(f"Sharpe 회귀 ({b_sharpe:.2f}→{n_sharpe:.2f}, 기준={b_sharpe * _GATE_SHARPE_MARGIN:.2f})")
+    if not mdd_pass:
+        reasons.append(f"MDD 악화 ({b_mdd:.1f}%→{n_mdd:.1f}%, 기준={abs(b_mdd) * _GATE_MDD_MARGIN:.1f}%)")
+    reason = " / ".join(reasons) if reasons else ""
+
+    return {
+        "passed": passed,
+        "skipped": False,
+        "reason": reason,
+        "market": market,
+        "days": days,
+        "baseline_sharpe": b_sharpe,
+        "new_sharpe": n_sharpe,
+        "baseline_mdd": b_mdd,
+        "new_mdd": n_mdd,
+        "n_trades": min(bm_trades, nm_trades),
+    }
+
+
 def _apply_best_params(dry_run: bool = False) -> Optional[Dict[str, Any]]:
     """alpha_researcher의 best_params.json → agent_params.json에 반영."""
     if not _BEST_PARAMS_PATH.exists():
@@ -232,10 +318,32 @@ def _apply_best_params(dry_run: bool = False) -> Optional[Dict[str, Any]]:
     if not changes:
         return None
 
+    baseline_for_gate = dict(current)  # 게이트 baseline = 변경 전 current (이미 current에 new 값 반영됨)
+    # changes 적용 전 current 상태로 baseline 복원: changes에 old 값 있으므로 되돌림
+    for k, v in changes.items():
+        if isinstance(v, dict) and "old" in v:
+            baseline_for_gate[k] = v["old"]
+    new_for_gate = _validate_param_bounds({**baseline_for_gate, **{k: v["new"] for k, v in changes.items() if isinstance(v, dict) and "new" in v}})
+    gate = _backtest_gate(new_for_gate, baseline_for_gate, market="btc", days=_GATE_DEFAULT_DAYS)
+
+    decision_record = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "market": gate.get("market", "btc"),
+        "decision": "APPLIED" if gate["passed"] else "REJECTED",
+        "skipped": gate.get("skipped", False),
+        "metrics": {k: gate[k] for k in ["baseline_sharpe", "new_sharpe", "baseline_mdd", "new_mdd"] if k in gate},
+        "param_changes": changes,
+        "reason": gate.get("reason", ""),
+    }
+    _log_decision(decision_record)
+
+    if not gate["passed"]:
+        log.warning("백테스트 게이트 실패", reason=gate.get("reason", ""))
+        return {"changes": changes, "gate": gate, "applied": False}
+
     if not dry_run:
         _save_agent_params(current)
-
-    return changes
+    return {"changes": changes, "gate": gate, "applied": not dry_run}
 
 
 def _apply_performance_adjustments(
@@ -352,7 +460,15 @@ class ParamOptimizer:
         disabled_signals = _disable_low_ir_signals(dry_run=dry_run)
 
         # 2. best_params 적용
-        param_changes = _apply_best_params(dry_run=dry_run)
+        gate_result = _apply_best_params(dry_run=dry_run)
+        if gate_result is not None:
+            param_changes = gate_result["changes"]
+            gate_dict = gate_result["gate"]
+            applied = gate_result["applied"]
+        else:
+            param_changes = None
+            gate_dict = None
+            applied = False
 
         # 3. 성과 기반 자동 조정
         stats = _load_weekly_stats(self.supabase, lookback_days=lookback_days)
@@ -374,6 +490,8 @@ class ParamOptimizer:
             perf_changes=perf_changes,
             stats=stats,
             attribution_result=attribution_result,
+            gate=gate_dict,
+            applied=applied,
             dry_run=dry_run,
         )
 
@@ -385,6 +503,7 @@ class ParamOptimizer:
                 k: v for k, v in stats.items() if k != "pnls"
             },
             "attribution_status": attribution_result.get("status", "N/A"),
+            "gate": gate_dict,
             "dry_run": dry_run,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
@@ -396,7 +515,9 @@ class ParamOptimizer:
         perf_changes: Dict,
         stats: Dict,
         attribution_result: Dict,
-        dry_run: bool,
+        gate: Optional[Dict[str, Any]] = None,
+        applied: bool = False,
+        dry_run: bool = False,
     ) -> None:
         lines = [
             f"⚙️ <b>주간 파라미터 자동 업데이트</b>{'[DRY-RUN]' if dry_run else ''}",
@@ -422,6 +543,26 @@ class ParamOptimizer:
             lines.append("\n🎯 알파 파라미터 업데이트:")
             for k, v in param_changes.items():
                 lines.append(f"  {k}: {v['old']} → {v['new']}")
+
+        # 백테스트 게이트 결과
+        if gate is not None:
+            if gate.get("skipped"):
+                lines.append(
+                    f"⏭ 게이트 스킵: {gate.get('reason', '거래 부족')} — 자동 적용"
+                )
+            elif gate["passed"]:
+                b_s = gate.get("baseline_sharpe", 0.0)
+                n_s = gate.get("new_sharpe", 0.0)
+                pct = ((n_s - b_s) / abs(b_s) * 100) if b_s else 0.0
+                b_m = gate.get("baseline_mdd", 0.0)
+                n_m = gate.get("new_mdd", 0.0)
+                lines.append(
+                    f"✅ 백테스트 게이트 통과: Sharpe {b_s:.2f}→{n_s:.2f} ({pct:+.1f}%) | MDD {b_m:.1f}%→{n_m:.1f}%"
+                )
+            else:
+                lines.append(
+                    f"❌ 백테스트 게이트 실패 — {gate.get('reason', '메트릭 회귀')}, 적용 보류"
+                )
 
         # 성과 기반 조정
         if perf_changes:

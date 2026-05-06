@@ -21,9 +21,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import matplotlib
+
 matplotlib.use("Agg")  # 서버 환경 — 디스플레이 없음
-import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
@@ -258,14 +259,28 @@ def load_ohlcv(days: int) -> pd.DataFrame:
 
 # ── 시그널 데이터프레임 구성 ───────────────────────────────────────────────────
 
-def build_signal_df(df: pd.DataFrame, fg_map: Dict[str, int]) -> pd.DataFrame:
-    """기술 지표 + F&G + 복합스코어 계산."""
+def build_signal_df(
+    df: pd.DataFrame,
+    fg_map: Dict[str, int],
+    params: Optional[Dict[str, Any]] = None,
+) -> pd.DataFrame:
+    """기술 지표 + F&G + 복합스코어 계산.
+
+    Args:
+        df: OHLCV DataFrame
+        fg_map: 날짜 → F&G 값 dict
+        params: 파라미터 오버라이드 dict (None 이면 기본값 사용).
+                지원 키: rsi_window(14), bb_window(20), momentum_lookback(7)
+    """
+    if params is None:
+        params = {}
     df = df.copy()
-    df["rsi"] = _rsi(df["close"])
-    df["bb_pct"] = _bb_pct(df["close"])
+    df["rsi"] = _rsi(df["close"], period=params.get("rsi_window", 14))
+    df["bb_pct"] = _bb_pct(df["close"], period=params.get("bb_window", 20))
     df["trend"] = _trend(df["close"])
     df["vol_ratio"] = _vol_ratio(df["volume"])
-    df["ret_7d"] = _ret_7d(df["close"])
+    _mom_period = params.get("momentum_lookback", 7)
+    df["ret_7d"] = df["close"].pct_change(_mom_period) * 100
 
     # F&G 매핑 (없는 날짜는 50=중립)
     dates = df.index.strftime("%Y-%m-%d")
@@ -630,10 +645,12 @@ class BacktestEngine:
         days: int = 365,
         initial_capital: float = 10_000_000.0,
         output_dir: Optional[Path] = None,
+        params: Optional[Dict[str, Any]] = None,
     ):
         self.days = days
         self.initial_capital = initial_capital
         self.output_dir = output_dir or _DEFAULT_RESULTS_DIR
+        self.params = params  # None 이면 build_signal_df 기본값 사용
 
     def run(self, save: bool = True) -> Dict[str, Any]:
         log.info(f"백테스트 시작 — 기간: {self.days}일, 초기자본: ₩{self.initial_capital:,.0f}")
@@ -643,7 +660,7 @@ class BacktestEngine:
         fg_map = _fetch_fg_historical(limit=self.days + 50)
 
         # ── 2. 신호 계산 ──
-        df = build_signal_df(df, fg_map)
+        df = build_signal_df(df, fg_map, params=self.params)
 
         # 지표 초기화 기간(50일) 제거
         df = df.iloc[50:].copy()
